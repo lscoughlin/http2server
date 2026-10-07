@@ -5,12 +5,12 @@ copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, test, fpcunit
 notes:
   - This unit registers the test cases of the HTTP/2 server suite.
-  - The suite holds no case until the server units exist.
+  - Each test unit registers its own cases in its initialization section.
 ---
 }
 /// fpcunit registration unit for the HTTP/2 server test suite
 // - the console runner calls RegisterTests once, before the suite runs
-// - the suite is empty until the server units exist; an empty suite passes
+// - a test unit joins the suite by its presence in the uses clause below
 unit Http2Server.TestRunner;
 
 {$mode delphi}{$H+}
@@ -26,7 +26,15 @@ implementation
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils, fpcunit, testregistry;
+  SysUtils, fpcunit, testregistry,
+  // each unit registers its test cases in its initialization section
+  Http2Server.Errors.Test,
+  Http2Server.Frames.Test,
+  Http2Server.Hpack.Test,
+  Http2Server.HpackProps.Test,
+  Http2Server.FlowControl.Test,
+  Http2Server.Headers.Test,
+  Http2Server.Limits.Test;
 
 const
   /// name of the top-level suite in the runner report
