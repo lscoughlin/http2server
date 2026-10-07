@@ -5,8 +5,11 @@ copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, alpn, tls, test
 notes:
   - Tests for the ALPN protocol decision rule of Http2Server.Alpn.
-  - The decision rule is a pure function, so the tests need no TLS
+  - The decision rule is a pure function, so most tests need no TLS
     handshake and no network.
+  - The callback tests drive the OpenSSL callback directly, because the
+    pointer it reports into the client list is where the wire format is
+    easiest to get wrong.
   - The wire format under test is the vector of 8-bit length-prefixed byte
     strings that the OpenSSL manual page SSL_CTX_set_alpn_select_cb(3ssl)
     describes.
@@ -49,9 +52,31 @@ type
     procedure TestRefusesAnEmptyList;
     /// the chosen name matches the entry inside the list
     procedure TestChosenNameMatchesTheEntry;
+    /// the callback reports a pointer at the name octets, not the length
+    procedure TestCallbackPointsAtTheNameOctets;
+    /// the callback reports the length of the chosen name
+    procedure TestCallbackReportsTheNameLength;
+    /// the callback refuses a list with no acceptable protocol
+    procedure TestCallbackRefusesAnUnacceptableList;
+    /// the callback survives a nil protocol list
+    procedure TestCallbackRefusesANilList;
   end;
 
 implementation
+
+const
+  SSL_TLSEXT_ERR_OK = 0;
+  SSL_TLSEXT_ERR_ALERT_FATAL = 2;
+
+type
+  /// the policy record the callback reads from its argument
+  TAlpnTestPolicy = record
+    AllowHttp11: Boolean;
+  end;
+
+var
+  /// a policy that permits the http/1.1 fallback
+  FallbackPolicy: TAlpnTestPolicy;
 
 /// encode a protocol list in the wire format
 function ProtoList(const ANames: array of string): TBytes;
@@ -80,7 +105,7 @@ procedure TAlpnSelectTest.TestSelectsH2Alone;
 begin
   AssertEquals('h2 alone is chosen', 'h2',
     Http2AlpnSelectProtocol(ProtoList(['h2']), False));
-  AssertTrue('offset is past the length octet',
+  AssertTrue('offset points past the length octet',
     Http2AlpnSelectOffset(ProtoList(['h2']), False) = 1);
 end;
 
@@ -91,7 +116,7 @@ begin
   List := ProtoList(['http/1.0', 'h2', 'http/1.1']);
   AssertEquals('h2 in the middle wins', 'h2',
     Http2AlpnSelectProtocol(List, False));
-  AssertEquals('offset points at the h2 entry', 10,
+  AssertEquals('the offset is the position of the first name octet', 10,
     Http2AlpnSelectOffset(List, False));
 end;
 
@@ -105,7 +130,7 @@ procedure TAlpnSelectTest.TestRefusesHttp11WhenTheFallbackIsOff;
 begin
   AssertEquals('http/1.1 is refused with the fallback off', '',
     Http2AlpnSelectProtocol(ProtoList(['http/1.1']), False));
-  AssertEquals('the offset is -1', -1,
+  AssertEquals('the offset of a refused list is -1', -1,
     Http2AlpnSelectOffset(ProtoList(['http/1.1']), False));
 end;
 
@@ -117,7 +142,7 @@ end;
 
 procedure TAlpnSelectTest.TestRefusesAListWithNoAcceptableProtocol;
 begin
-  AssertEquals('spdy/3 is refused', '',
+  AssertEquals('spdy/3 is refused even with the fallback on', '',
     Http2AlpnSelectProtocol(ProtoList(['spdy/3', 'http/1.0']), True));
 end;
 
@@ -162,11 +187,81 @@ begin
   List := ProtoList(['spdy/3', 'h2']);
   AssertEquals('the name is taken from the list itself', 'h2',
     Http2AlpnSelectProtocol(List, False));
-  AssertEquals('its offset is the length octet position plus one', 8,
+  AssertEquals('the offset is the position of the first name octet', 8,
     Http2AlpnSelectOffset(List, False));
 end;
 
+procedure TAlpnSelectTest.TestCallbackPointsAtTheNameOctets;
+var
+  List: TBytes;
+  Out_: PByte;
+  OutLen: Byte;
+  Res: Integer;
+begin
+  List := ProtoList(['spdy/3', 'h2']);
+  Out_ := nil;
+  OutLen := 0;
+  Res := Http2AlpnSelectCallback(nil, @Out_, @OutLen, @List[0], Length(List), nil);
+  AssertEquals('the callback accepts the list', SSL_TLSEXT_ERR_OK, Res);
+  AssertEquals('the reported length is the name length', 2, OutLen);
+  AssertEquals('the reported pointer starts at the first name octet',
+    Ord('h'), Out_^);
+  AssertEquals('the next octet follows it', Ord('2'), (Out_ + 1)^);
+end;
+
+procedure TAlpnSelectTest.TestCallbackReportsTheNameLength;
+var
+  List: TBytes;
+  Out_: PByte;
+  OutLen: Byte;
+begin
+  List := ProtoList(['http/1.0', 'http/1.1']);
+  Out_ := nil;
+  OutLen := 0;
+  AssertEquals('the h2-only policy refuses the list',
+    SSL_TLSEXT_ERR_ALERT_FATAL,
+    Http2AlpnSelectCallback(nil, @Out_, @OutLen, @List[0], Length(List), nil));
+  Out_ := nil;
+  OutLen := 0;
+  AssertEquals('the fallback policy accepts http/1.1',
+    SSL_TLSEXT_ERR_OK,
+    Http2AlpnSelectCallback(nil, @Out_, @OutLen, @List[0], Length(List),
+      @FallbackPolicy));
+  AssertEquals('the reported length is the full name', 8, OutLen);
+  AssertEquals('the reported pointer starts at the first name octet',
+    Ord('h'), Out_^);
+end;
+
+procedure TAlpnSelectTest.TestCallbackRefusesAnUnacceptableList;
+var
+  List: TBytes;
+  Out_: PByte;
+  OutLen: Byte;
+begin
+  List := ProtoList(['spdy/3']);
+  Out_ := nil;
+  OutLen := 0;
+  AssertEquals('spdy/3 is refused with a fatal alert',
+    SSL_TLSEXT_ERR_ALERT_FATAL,
+    Http2AlpnSelectCallback(nil, @Out_, @OutLen, @List[0], Length(List), nil));
+  AssertTrue('no protocol is reported', Out_ = nil);
+  AssertEquals('the reported length is zero', 0, OutLen);
+end;
+
+procedure TAlpnSelectTest.TestCallbackRefusesANilList;
+var
+  Out_: PByte;
+  OutLen: Byte;
+begin
+  Out_ := nil;
+  OutLen := 0;
+  AssertEquals('a nil list is refused with a fatal alert',
+    SSL_TLSEXT_ERR_ALERT_FATAL,
+    Http2AlpnSelectCallback(nil, @Out_, @OutLen, nil, 0, nil));
+end;
+
 initialization
+  FallbackPolicy.AllowHttp11 := True;
   RegisterTest(TAlpnSelectTest);
 
 end.

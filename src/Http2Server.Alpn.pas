@@ -35,6 +35,13 @@ type
   TSslCtxSetAlpnSelectCb = procedure(ctx: PSSL_CTX; cb: TAlpnSelectCb;
     arg: pointer); cdecl;
 
+/// the OpenSSL ALPN select callback that Http2AlpnAttachCtx installs
+// - exposed so a test drives the callback directly with a synthetic client
+// protocol list, which is where the pointer arithmetic into in_ lives
+// - arg points at a TAlpnServerPolicy, or is nil for the h2-only policy
+function Http2AlpnSelectCallback(ssl: PSSL; out_: PPByte; outlen: PByte;
+  in_: PByte; inlen: cardinal; arg: pointer): integer; cdecl;
+
 /// the ALPN protocol name that the last handshake selected on this SSL
 // - returns '' when no protocol was selected
 function Http2AlpnSelected(ssl: PSSL): RawUtf8;
@@ -149,7 +156,7 @@ begin
   Move(AClientList[offset], result[1], n);
 end;
 
-function AlpnSelectCallback(ssl: PSSL; out_: PPByte; outlen: PByte;
+function Http2AlpnSelectCallback(ssl: PSSL; out_: PPByte; outlen: PByte;
   in_: PByte; inlen: cardinal; arg: pointer): integer; cdecl;
 var
   client: TBytes;
@@ -172,8 +179,9 @@ begin
       (policy <> nil) and policy^.AllowHttp11);
     if offset < 0 then
       exit;
-    // the chosen entry lives inside in_, as the manual page permits
-    out_^ := in_ + (offset - 1);
+    // the chosen entry lives inside in_, as the manual page permits;
+    // offset is the first name octet, and the length octet sits before it
+    out_^ := in_ + offset;
     outlen^ := client[offset - 1];
     result := SSL_TLSEXT_ERR_OK;
   except
@@ -251,7 +259,7 @@ begin
   if not Http2AlpnBindingAvailable then
     exit;
   fPolicy.AllowHttp11 := allowHttp11;
-  fSetAlpnSelectCb(ctx, AlpnSelectCallback, @fPolicy);
+  fSetAlpnSelectCb(ctx, Http2AlpnSelectCallback, @fPolicy);
   result := true;
 end;
 
