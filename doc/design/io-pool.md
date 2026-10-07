@@ -180,6 +180,16 @@ it closes an idle connection with no open stream and no queued output. The
 close is `TAsyncConnections.ConnectionRemove` (`mormot.net.async.pas:3696`),
 because a write to an idle connection would itself need the write lock.
 
+## The poller of each platform
+
+mORMot2 uses `epoll` on Linux and forces the `poll` API on BSD and Darwin
+(`mormot.net.sock.posix.inc:36-38`, read 2026-10-07). `poll` costs time in
+proportion to the number of sockets in the set, because the kernel scans the
+whole set on every call, while `epoll` reports only the ready descriptors. The
+relative cost of the two pollers under load is the subject of the load-testing
+work, and this document records no measurement, because this host is macOS
+aarch64 and the comparison needs a Linux host as well.
+
 ## Open verification
 
 The pure TLS decisions and the h2c loopback run in the normal suite
