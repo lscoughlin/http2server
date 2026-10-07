@@ -31,7 +31,7 @@ unit Http2Server.Seam;
 interface
 
 uses
-  SysUtils, Http2Server.Hpack;
+  SysUtils, Http2Server.Errors, Http2Server.Hpack;
 
 type
   /// the outcome of one IStreamWaiter.Wait call
@@ -153,6 +153,49 @@ type
       const AResponse: IServerResponse);
   end;
 
+/// mark the calling thread as running IO-side code
+// - the IO callbacks of the async unit enter this mark before they touch the
+//   connection core, so a handler that an IO thread runs fails at once
+procedure Http2IoThreadEnter;
+
+/// clear the IO-side mark of the calling thread
+procedure Http2IoThreadLeave;
+
+/// TRUE while the calling thread runs IO-side code
+function Http2IsIoThread: Boolean;
+
+/// raise when the calling thread runs IO-side code
+// - handler code calls this at entry.  A handler on an IO thread would hold
+//   the connection lock and would stall the whole pool, so the rule is
+//   checked in a debug build and it raises in every build
+procedure Http2AssertHandlerThread(const AWhere: string);
+
 implementation
+
+threadvar
+  /// how many IO-side calls the current thread holds; zero on a handler thread
+  IoDepth: Integer;
+
+procedure Http2IoThreadEnter;
+begin
+  Inc(IoDepth);
+end;
+
+procedure Http2IoThreadLeave;
+begin
+  if IoDepth > 0 then
+    Dec(IoDepth);
+end;
+
+function Http2IsIoThread: Boolean;
+begin
+  result := IoDepth > 0;
+end;
+
+procedure Http2AssertHandlerThread(const AWhere: string);
+begin
+  if IoDepth > 0 then
+    raise EHttpError.Create('handler code ran on an IO thread at ' + AWhere);
+end;
 
 end.

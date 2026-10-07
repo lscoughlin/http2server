@@ -57,11 +57,18 @@ type
   /// inbound bytes.  The connection sums the pending credit of a stream and
   /// emits one WINDOW_UPDATE, so the wait interface of a handler carries no
   /// flow-control knowledge.
+  ///
+  /// TServerStream calls OutputPending when a handler write has added bytes
+  /// to the outbound buffer.  The connection then asks its write waker to
+  /// signal the IO thread, so output that appears while no client byte is in
+  /// flight still reaches the socket.
   IStreamHost = interface
     ['{7E1F0C11-0006-4A11-9C72-000000000506}']
     /// the handler consumed AIncrement inbound bytes of AStreamId
     procedure WindowUpdatePending(const AStreamId: LongWord;
       const AIncrement: LongWord);
+    /// a handler added outbound bytes to AStreamId
+    procedure OutputPending(const AStreamId: LongWord);
   end;
 
   /// The bounded buffers and the wait state of one stream.
@@ -727,6 +734,9 @@ begin
   finally
     UnlockStream;
   end;
+  // the handler queued output, so the IO side must wake to drain it
+  if Assigned(FHost) then
+    FHost.OutputPending(FStreamId);
   Result := True;
 end;
 

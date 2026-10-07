@@ -26,7 +26,7 @@ uses
   SysUtils, Classes, SyncObjs, Generics.Collections,
   Http2Server.Errors, Http2Server.Frames, Http2Server.Hpack,
   Http2Server.FlowControl, Http2Server.Limits, Http2Server.Seam,
-  Http2Server.Stream, Http2Server.Headers;
+  Http2Server.Stream, Http2Server.Headers, Http2Server.Output;
 
 type
   /// the per-connection values the core needs
@@ -60,6 +60,23 @@ type
     procedure LimitTripped(const AKind: TLimitKind);
   end;
 
+  TServerConnectionCore = class;
+
+  /// The IStreamHost adapter of one core.
+  ///
+  /// A stream calls OutputPending when a handler wrote, and the adapter asks
+  /// the core to wake the IO thread.  The adapter holds the core without an
+  /// interface reference, so no reference cycle forms.
+  TCoreStreamHost = class(TInterfacedObject, IStreamHost)
+  private
+    FCore: TServerConnectionCore;   // weak reference; the core owns this
+  public
+    constructor Create(const ACore: TServerConnectionCore);
+    procedure WindowUpdatePending(const AStreamId: LongWord;
+      const AIncrement: LongWord);
+    procedure OutputPending(const AStreamId: LongWord);
+  end;
+
   /// the server connection state machine
   TServerConnectionCore = class(TInterfacedObject)
   private
@@ -67,6 +84,11 @@ type
     FEvents: IConnectionEvents;
     FLimits: TConnectionLimits;
     FFlow: TFlowControl;
+    FOut: TOutputDrain;
+    /// the IStreamHost adapter the core hands to every stream
+    // - the core cannot be its own host interface: an interface reference to
+    //   self inside a TInterfacedObject invites a refcount double-destroy
+    FHost: IStreamHost;
     FStreams: TObjectList<TServerStream>;
     /// closed streams; a handler may still hold a reference to one, so the
     /// object lives until the whole connection goes away
@@ -93,6 +115,15 @@ type
     FGoAwaySent: Boolean;
     FTripKind: TLimitKind;
     FConnUpdatePending: LongWord;
+    /// the waker that the IO side installs; nil until the server registers one
+    FWaker: IWriteWaker;
+    /// true while queued output waits for the IO thread
+    // - the flag makes the wake-up edge-triggered: one Signal runs per
+    //   transition from "no output" to "output"
+    FWakePending: Boolean;
+    /// guards FWakePending, because a handler thread sets it and an IO thread
+    //   clears it
+    FWakeLock: TCriticalSection;
     /// the lock the caller holds; every stream the core creates takes it too,
     /// so a handler buffer operation never races the IO thread
     FConnLock: TCriticalSection;
@@ -127,6 +158,8 @@ type
     procedure FlushPendingHeaders;
     procedure FlushStreamCredits;
     procedure FlushConnectionCredit;
+    /// move the bytes the drain produced into the connection output queue
+    procedure FlushDrainedOutput;
     procedure EmitHeaderRun(const AStream: TServerStream;
       const AHeaderBlock: TBytes);
     function EncodeResponseHeaders(const AStatus: Integer;
@@ -141,10 +174,22 @@ type
     procedure Feed(const AData: TBytes);
     /// take bytes for the socket; answers False when the queue is empty
     function TakeOutput(out AData: TBytes): Boolean;
+    /// TRUE while bytes wait for the socket
+    function HasOutput: Boolean;
     /// encode every pending response header block and queue the frames
     procedure Flush;
     /// the same work under the name the IO side uses before a write
     procedure FlushQueue;
+    /// register the waker that the IO side signals when output appears
+    procedure SetWriteWaker(const AWaker: IWriteWaker);
+    /// ask the IO side to wake, once per transition to "output"
+    // - a handler thread calls this from the stream host callback, never under
+    //   the connection lock, so the waker may take its own locks
+    procedure NotifyWantsWrite;
+    /// encode the pending headers and drain the stream buffers into frames
+    // - the IO side calls this after a handler wrote, so the frames reach the
+    //   output queue with no further input from the peer
+    procedure DrainPending;
 
     /// the stream that owns AStreamId, or nil
     function StreamById(const AStreamId: LongWord): TServerStream;
@@ -166,11 +211,35 @@ type
 
 implementation
 
+{ TCoreStreamHost }
+
+constructor TCoreStreamHost.Create(const ACore: TServerConnectionCore);
+begin
+  inherited Create;
+  FCore := ACore;
+end;
+
+procedure TCoreStreamHost.WindowUpdatePending(const AStreamId: LongWord;
+  const AIncrement: LongWord);
+begin
+  // the connection sums the consumed credit and emits one WINDOW_UPDATE; the
+  // sum happens under the connection lock inside FlushStreamCredits, which
+  // reads the stream counter directly, so no work is needed here
+end;
+
+procedure TCoreStreamHost.OutputPending(const AStreamId: LongWord);
+begin
+  if FCore <> nil then
+    FCore.NotifyWantsWrite;
+end;
+
 { TServerConnectionCore }
 
 constructor TServerConnectionCore.Create(const AOptions: TConnectionCoreOptions;
   const AEvents: IConnectionEvents; const ALimits: TConnectionLimits;
   const AClock: IMonotonicClock);
+var
+  OutOptions: TOutputDrainOptions;
 begin
   inherited Create;
   FOptions := AOptions;
@@ -179,6 +248,15 @@ begin
   FConnLock := TCriticalSection.Create;
   FFlow := TFlowControl.Create(FOptions.ConnectionWindow,
     FOptions.InitialStreamWindow);
+  // the drain turns the handler buffers into DATA frames; the core carries a
+  // nil waker because its own edge-triggered flag drives the IO wake-up
+  OutOptions.MaxFrameSize := FOptions.MaxFrameSize;
+  OutOptions.BytesPerTurn := 0;
+  FOut := TOutputDrain.Create(OutOptions, FFlow, nil);
+  FWakeLock := TCriticalSection.Create;
+  // the host adapter is a borrowed reference to this core, so it forms no
+  // reference cycle and its lifetime is the core lifetime
+  FHost := TCoreStreamHost.Create(Self);
   FStreams := TObjectList<TServerStream>.Create(True);
   FClosed := TObjectList<TServerStream>.Create(True);
   FById := TDictionary<LongWord, TServerStream>.Create;
@@ -226,6 +304,9 @@ end;
 
 destructor TServerConnectionCore.Destroy;
 begin
+  FHost := nil;
+  FWakeLock.Free;
+  FOut.Free;
   FById.Free;
   FStreams.Free;
   FClosed.Free;
@@ -328,11 +409,62 @@ begin
   end;
 end;
 
+function TServerConnectionCore.HasOutput: Boolean;
+begin
+  LockConn;
+  try
+    Result := FOutputCount > 0;
+  finally
+    UnlockConn;
+  end;
+end;
+
 procedure TServerConnectionCore.FlushLocked;
 begin
   FlushPendingHeaders;
+  // the handler buffers turn into DATA frames only here, under the lock
+  FOut.Drain(FStreams);
+  FlushDrainedOutput;
   FlushStreamCredits;
   FlushConnectionCredit;
+end;
+
+procedure TServerConnectionCore.FlushDrainedOutput;
+var
+  Data: TBytes;
+begin
+  if FOut.TakeOutput(Data) then
+    QueueBytes(Data);
+end;
+
+procedure TServerConnectionCore.DrainPending;
+begin
+  LockConn;
+  try
+    FlushLocked;
+  finally
+    UnlockConn;
+  end;
+end;
+
+procedure TServerConnectionCore.SetWriteWaker(const AWaker: IWriteWaker);
+begin
+  FWaker := AWaker;
+end;
+
+procedure TServerConnectionCore.NotifyWantsWrite;
+var
+  First: Boolean;
+begin
+  FWakeLock.Acquire;
+  try
+    First := not FWakePending;
+    FWakePending := True;
+  finally
+    FWakeLock.Release;
+  end;
+  if First and (FWaker <> nil) then
+    FWaker.Signal;
 end;
 
 function TServerConnectionCore.TakeOutput(out AData: TBytes): Boolean;
@@ -348,6 +480,13 @@ begin
     FOutputCount := 0;
   finally
     UnlockConn;
+  end;
+  // the IO thread holds the bytes now, so the next write may wake it again
+  FWakeLock.Acquire;
+  try
+    FWakePending := False;
+  finally
+    FWakeLock.Release;
   end;
 end;
 
@@ -474,7 +613,7 @@ end;
 
 function TServerConnectionCore.NewStream(const AStreamId: LongWord): TServerStream;
 begin
-  Result := TServerStream.Create(AStreamId, FConnLock, nil,
+  Result := TServerStream.Create(AStreamId, FConnLock, FHost,
     FOptions.InboundBufferLimit, FOptions.OutboundBufferLimit);
   Result.UpdateThreshold := FOptions.StreamUpdateThreshold;
   FStreams.Add(Result);
@@ -704,6 +843,8 @@ begin
   FPeerSettings := NewSettings;
   FDecoder.ApplySettings(FPeerSettings.HeaderTableSize);
   FEncoder.ApplySettings(FPeerSettings.HeaderTableSize);
+  // the drain obeys the smaller of the two frame sizes
+  FOut.ApplyPeerFrameSize(FPeerSettings.MaxFrameSize);
   // RFC 9113 section 6.9.2: a change reaches every stream that is open
   if Delta <> 0 then
     FFlow.ApplyInitialWindowDelta(Delta);

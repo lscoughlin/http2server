@@ -42,11 +42,14 @@ type
   private
     FUpdates: LongWord;
     FCalls: Integer;
+    FWrites: Integer;
   public
     procedure WindowUpdatePending(const AStreamId: LongWord;
       const AIncrement: LongWord);
+    procedure OutputPending(const AStreamId: LongWord);
     property Updates: LongWord read FUpdates;
     property Calls: Integer read FCalls;
+    property Writes: Integer read FWrites;
   end;
 
   /// a thread that parks in a stream read and records the outcome
@@ -154,6 +157,11 @@ procedure TRecordingHost.WindowUpdatePending(const AStreamId: LongWord;
 begin
   Inc(FCalls);
   Inc(FUpdates, AIncrement);
+end;
+
+procedure TRecordingHost.OutputPending(const AStreamId: LongWord);
+begin
+  Inc(FWrites);
 end;
 
 { TStreamReadProbe }

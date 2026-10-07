@@ -38,6 +38,7 @@ type
   public
     procedure WindowUpdatePending(const AStreamId: LongWord;
       const AIncrement: LongWord);
+    procedure OutputPending(const AStreamId: LongWord);
   end;
 
   /// the mode of the blocking handler
@@ -177,6 +178,11 @@ procedure TNullHost.WindowUpdatePending(const AStreamId: LongWord;
   const AIncrement: LongWord);
 begin
   // the credit is not part of these tests
+end;
+
+procedure TNullHost.OutputPending(const AStreamId: LongWord);
+begin
+  // the wake-up is not part of these tests
 end;
 
 { TBlockingHandler }
