@@ -132,10 +132,23 @@ type
   /// the whole set, so every later Charge returns False while the connection
   /// closes.  The observer of the server receives OnTrip once, with the kind
   /// that tripped.
+  /// the control bucket of one limit kind
+  // - the caller names the kind, because the five control kinds carry very
+  //   different legitimate rates.  A WINDOW_UPDATE accompanies every window
+  //   that a peer refills, while a CONTINUATION frame accompanies only a
+  //   header block that already exceeded the frame size.
+  TControlBucketOption = record
+    Kind: TLimitKind;
+    Options: TTokenBucketOptions;
+    class function Create(const AKind: TLimitKind;
+      const AOptions: TTokenBucketOptions): TControlBucketOption; static;
+  end;
+
   TConnectionLimits = class
   private
     FResetOptions: TTokenBucketOptions;
     FControlOptions: TTokenBucketOptions;
+    FControlByKind: array[TLimitKind] of TTokenBucketOptions;
     FBuckets: array[TLimitKind] of TTokenBucket;
     FTripped: Boolean;
     FOnTrip: TBucketTripEvent;
@@ -143,6 +156,15 @@ type
     constructor Create(const AClock: IMonotonicClock;
       const AResetOptions: TTokenBucketOptions;
       const AControlOptions: TTokenBucketOptions);
+    /// create the set with one control bucket per named kind
+    // - a kind that AControlBuckets does not name falls back to
+    //   AControlOptions, so a caller names only the kinds it distinguishes
+    constructor CreateByKind(const AClock: IMonotonicClock;
+      const AResetOptions: TTokenBucketOptions;
+      const AControlOptions: TTokenBucketOptions;
+      const AControlBuckets: array of TControlBucketOption); reintroduce;
+    /// the options in force for one control kind
+    function ControlOptionsOf(const AKind: TLimitKind): TTokenBucketOptions;
     destructor Destroy; override;
     /// take ACost tokens from the bucket of AKind.  False means the
     /// connection is closing.
@@ -198,6 +220,13 @@ begin
   Result.FRefillPerSecond := 0;
   Result.FCostBeforeDispatch := 0;
   Result.FCostAfterDispatch := 0;
+end;
+
+class function TControlBucketOption.Create(const AKind: TLimitKind;
+  const AOptions: TTokenBucketOptions): TControlBucketOption;
+begin
+  Result.Kind := AKind;
+  Result.Options := AOptions;
 end;
 
 function TTokenBucketOptions.WithCapacity(
@@ -287,17 +316,37 @@ end;
 constructor TConnectionLimits.Create(const AClock: IMonotonicClock;
   const AResetOptions: TTokenBucketOptions;
   const AControlOptions: TTokenBucketOptions);
+begin
+  CreateByKind(AClock, AResetOptions, AControlOptions, []);
+end;
+
+constructor TConnectionLimits.CreateByKind(const AClock: IMonotonicClock;
+  const AResetOptions: TTokenBucketOptions;
+  const AControlOptions: TTokenBucketOptions;
+  const AControlBuckets: array of TControlBucketOption);
 var
   Kind: TLimitKind;
+  Index: Integer;
 begin
   inherited Create;
   FResetOptions := AResetOptions;
   FControlOptions := AControlOptions;
   for Kind := Low(TLimitKind) to High(TLimitKind) do
     if Kind = lkReset then
-      FBuckets[Kind] := TTokenBucket.Create(AClock, AResetOptions)
+      FControlByKind[Kind] := AResetOptions
     else
-      FBuckets[Kind] := TTokenBucket.Create(AClock, AControlOptions);
+      FControlByKind[Kind] := AControlOptions;
+  for Index := 0 to Length(AControlBuckets) - 1 do
+    FControlByKind[AControlBuckets[Index].Kind] :=
+      AControlBuckets[Index].Options;
+  for Kind := Low(TLimitKind) to High(TLimitKind) do
+    FBuckets[Kind] := TTokenBucket.Create(AClock, FControlByKind[Kind]);
+end;
+
+function TConnectionLimits.ControlOptionsOf(
+  const AKind: TLimitKind): TTokenBucketOptions;
+begin
+  Result := FControlByKind[AKind];
 end;
 
 destructor TConnectionLimits.Destroy;

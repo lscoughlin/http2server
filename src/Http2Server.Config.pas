@@ -423,9 +423,15 @@ begin
   Result.FEmptyDataBucket := TTokenBucketOptions.Create
     .WithCapacity(100)
     .WithRefillPerSecond(10);
+  // a peer sends one WINDOW_UPDATE for each window that it refills, so a
+  // large body needs thousands of them: a measurement of a 100 MB body sent
+  // 6102 frames, and the steady rate was 2450 frames in one second
+  // (doc/verification/validation.md).  The capacity admits a whole burst of
+  // a few megabytes with no refill, and the refill rate sits above the
+  // measured rate with headroom
   Result.FWindowUpdateBucket := TTokenBucketOptions.Create
-    .WithCapacity(100)
-    .WithRefillPerSecond(10);
+    .WithCapacity(10000)
+    .WithRefillPerSecond(4000);
   Result.FContinuationBucket := TTokenBucketOptions.Create
     .WithCapacity(100)
     .WithRefillPerSecond(10);

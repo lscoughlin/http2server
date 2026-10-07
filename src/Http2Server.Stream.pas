@@ -730,7 +730,13 @@ function TServerStream.DoWrite(const ABuffer; const ACount: Integer): Boolean;
 begin
   LockStream;
   try
-    if (FOutboundLimit > 0) and (FOutboundCount + ACount > FOutboundLimit) then
+    // The limit is backpressure, not a hard cap.  A write is refused only
+    // when the buffer already holds bytes, so a single write always makes
+    // progress.  A caller that writes more than the whole limit then waits
+    // for the drain to empty the buffer, and the buffer never grows past the
+    // limit plus the one write that found it empty.
+    if (FOutboundLimit > 0) and (FOutboundCount > 0) and
+       (FOutboundCount + ACount > FOutboundLimit) then
       Exit(False);
     CompactOutbound;
     SetLength(FOutbound, FOutboundCount + ACount);

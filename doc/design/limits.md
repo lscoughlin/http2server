@@ -88,10 +88,26 @@ of one bucket runs on one thread at a time.
 ## The limit set
 
 `TConnectionLimits` holds the set of buckets of one connection
-(`src/Http2Server.Limits.pas:135`). The set holds the reset bucket and one
+(`src/Http2Server.Limits.pas:147`). The set holds the reset bucket and one
 bucket for each control frame kind. `TLimitKind` names the kinds:
 `lkReset`, `lkPing`, `lkSettings`, `lkEmptyData`, `lkWindowUpdate` and
 `lkContinuation` (`src/Http2Server.Limits.pas:122`).
+
+Each control kind carries its own bucket. `CreateByKind` names the options
+of a kind whose legitimate rate differs from the fallback
+(`src/Http2Server.Limits.pas:323`). `ControlOptionsOf` reads back the
+options in force for one kind. The caller of `CreateByKind` names only the
+kinds that it distinguishes, and every other kind keeps the fallback
+options.
+
+A shared bucket of one capacity does not serve these kinds. The legitimate
+rates are far apart. A peer sends one `WINDOW_UPDATE` frame for each window
+that it refills, so a large body needs thousands of them: a measurement of
+a 100 MB body sent 6102 such frames, at a steady rate of 2450 frames in
+one second (`doc/verification/validation.md`). A `CONTINUATION` frame,
+by contrast, follows only a header block that already passed the frame
+size. One shared bucket of the least capacity closes a healthy connection
+that streams a large body.
 
 `Charge(AKind, ACost)` sends a cost to the bucket of `AKind`
 (`src/Http2Server.Limits.pas:312`). The reset bucket has two costs, so
@@ -113,3 +129,22 @@ the reset bucket on each client `RST_STREAM` frame, and it charges the
 control bucket on each limited control frame. A `False` answer starts the
 close sequence. The observer receives the bucket trip, and then the
 `GOAWAY` sent event.
+
+## The default limits
+
+`THttp2ServerFactory.Create` sets the default of every bucket
+(`src/Http2Server.Config.pas:412`). The reset bucket holds 1000 tokens, with
+a refill of 100 tokens a second, a cost of one token before dispatch and
+five tokens after it (`src/Http2Server.Config.pas:412`).
+
+The `PING`, `SETTINGS`, `empty DATA` and `CONTINUATION` buckets each hold
+100 tokens, with a refill of 10 tokens a second
+(`src/Http2Server.Config.pas:417`). Each of these kinds is a flood signal
+with no legitimate high rate, so a small bucket is the correct default.
+
+The `WINDOW_UPDATE` bucket holds 10000 tokens, with a refill of 4000 tokens
+a second (`src/Http2Server.Config.pas:432`). The capacity admits a whole
+burst of a few megabytes, and the refill rate sits above the measured
+rate of 2450 frames a second with headroom. A small bucket of 100 tokens
+closed a healthy connection on a body of less than two megabytes: 107
+control frames arrived before the body ended.

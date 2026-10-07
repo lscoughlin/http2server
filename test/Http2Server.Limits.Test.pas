@@ -49,6 +49,7 @@ type
     procedure TestThousandCallsConsumeExactCapacity;
     procedure TestConnectionLimitsChargePerKind;
     procedure TestObserverTripsOnceWithKind;
+    procedure TestControlBucketsAreIndependentPerKind;
   end;
 
 implementation
@@ -311,6 +312,50 @@ begin
       Limits.ChargeReset(False));
     AssertTrue('a reset after dispatch fits',
       Limits.ChargeReset(True));
+  finally
+    Limits.Free;
+  end;
+end;
+
+procedure TTokenBucketTest.TestControlBucketsAreIndependentPerKind;
+var
+  Limits: TConnectionLimits;
+  ResetOptions: TTokenBucketOptions;
+  Fallback: TTokenBucketOptions;
+  Burst: TTokenBucketOptions;
+  I: Integer;
+begin
+  ResetOptions := TTokenBucketOptions.Create
+    .WithCapacity(10)
+    .WithRefillPerSecond(0);
+  // the fallback control bucket is small, as the default PING bucket is
+  Fallback := TTokenBucketOptions.Create
+    .WithCapacity(2)
+    .WithRefillPerSecond(0);
+  // the WINDOW_UPDATE bucket is large, as a large body needs many frames
+  Burst := TTokenBucketOptions.Create
+    .WithCapacity(50)
+    .WithRefillPerSecond(0);
+  Limits := TConnectionLimits.CreateByKind(FClock, ResetOptions, Fallback,
+    [TControlBucketOption.Create(lkWindowUpdate, Burst)]);
+  try
+    // a large burst of WINDOW_UPDATE frames runs to its own capacity, with
+    // no effect on the small PING bucket.  One shared bucket of the least
+    // capacity would have tripped on the third frame and closed a healthy
+    // connection that streamed a large body
+    AssertEquals('the WINDOW_UPDATE bucket holds the named options',
+      50, Limits.ControlOptionsOf(lkWindowUpdate).Capacity);
+    AssertEquals('an unnamed kind keeps the fallback capacity',
+      2, Limits.ControlOptionsOf(lkPing).Capacity);
+    for I := 1 to 50 do
+      AssertTrue('WINDOW_UPDATE charge ' + IntToStr(I),
+        Limits.Charge(lkWindowUpdate, 1));
+    AssertTrue('the small PING bucket is untouched',
+      Limits.Charge(lkPing, 1));
+    AssertTrue('the PING bucket still has its second token',
+      Limits.Charge(lkPing, 1));
+    AssertFalse('the PING bucket now trips on its own limit',
+      Limits.Charge(lkPing, 1));
   finally
     Limits.Free;
   end;

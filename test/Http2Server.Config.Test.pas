@@ -195,8 +195,10 @@ begin
   AssertEquals('the default SETTINGS capacity', 100, F.SettingsBucket.Capacity);
   AssertEquals('the default empty DATA capacity', 100,
     F.EmptyDataBucket.Capacity);
-  AssertEquals('the default WINDOW_UPDATE capacity', 100,
+  AssertEquals('the default WINDOW_UPDATE capacity', 10000,
     F.WindowUpdateBucket.Capacity);
+  AssertEquals('the default WINDOW_UPDATE refill', 4000,
+    Round(F.WindowUpdateBucket.RefillPerSecond));
   AssertEquals('the default CONTINUATION capacity', 100,
     F.ContinuationBucket.Capacity);
 end;

@@ -314,12 +314,21 @@ begin
       cardinal((FServer.Factory.HeaderTimeoutMs + 999) div 1000));
   FIdleSeconds := cardinal(FServer.Factory.IdleTimeoutMs div 1000);
   Options := FServer.CoreOptions;
-  // TConnectionLimits holds one reset bucket and one control bucket, while the
-  // factory offers a bucket per control kind.  The reset bucket is the bucket
-  // that the rapid-reset defence rests on, and the control bucket is the most
-  // conservative of the five
-  Limits := TConnectionLimits.Create(FServer.Factory.Clock,
-    FServer.Factory.ResetBucket, FServer.ControlBucket);
+  // every control kind carries its own bucket.  The kinds differ in their
+  // legitimate rate: a WINDOW_UPDATE accompanies each window a peer refills,
+  // so a large body needs thousands of them, while a CONTINUATION frame
+  // follows only a header block that already passed the frame size.  One
+  // shared bucket of the least capacity would trip on a legitimate large body
+  Limits := TConnectionLimits.CreateByKind(FServer.Factory.Clock,
+    FServer.Factory.ResetBucket, FServer.ControlBucket,
+    [TControlBucketOption.Create(lkPing, FServer.Factory.PingBucket),
+     TControlBucketOption.Create(lkSettings, FServer.Factory.SettingsBucket),
+     TControlBucketOption.Create(lkEmptyData,
+       FServer.Factory.EmptyDataBucket),
+     TControlBucketOption.Create(lkWindowUpdate,
+       FServer.Factory.WindowUpdateBucket),
+     TControlBucketOption.Create(lkContinuation,
+       FServer.Factory.ContinuationBucket)]);
   FEvents := THttp2ConnectionEvents.Create(FServer);
   FCore := TServerConnectionCore.Create(Options, FEvents, Limits,
     FServer.Factory.Clock);
@@ -423,7 +432,9 @@ begin
     FSendLock.Release;
   end;
   try
-    repeat
+    Again := True;
+    while Again do
+    begin
       FSendLock.Acquire;
       try
         FSendRequested := False;
@@ -445,14 +456,25 @@ begin
           fOwner.Write(Self, pointer(Data), Length(Data), cWriteTimeoutMs);
         result := True;
       end;
+      // The exit decision and the FInSend clear share one lock hold.  A
+      // handler that writes during the drain finds FInSend true and only
+      // records FSendRequested, so the clear must re-read that flag in the
+      // same hold that ends the loop.  A clear in a later hold would drop the
+      // record, and the handler would wait for a drain that never comes.
       FSendLock.Acquire;
       try
-        Again := FSendRequested;
+        if FSendRequested or FCore.HasOutput then
+          Again := True
+        else
+        begin
+          FInSend := False;
+          Again := False;
+        end;
       finally
         FSendLock.Release;
       end;
       // the loop repeats for a late wake-up or for output a handler just made
-    until (not Again) and (not FCore.HasOutput);
+    end;
   finally
     FSendLock.Acquire;
     try

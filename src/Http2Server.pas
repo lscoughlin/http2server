@@ -48,6 +48,7 @@ type
   TTlsServerOptions = Http2Server.Config.TTlsServerOptions;
   TQueueOptions = Http2Server.Config.TQueueOptions;
   TQueueRefusalMode = Http2Server.Config.TQueueRefusalMode;
+  TTokenBucketOptions = Http2Server.Limits.TTokenBucketOptions;
 
   /// the handler contract
   IHttp2Handler = Http2Server.Seam.IHttp2Handler;
