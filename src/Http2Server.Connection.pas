@@ -600,9 +600,14 @@ begin
   try
     Headers := FDecoder.Decode(Block);
   except
-    on E: EHttpError do
+    on E: EHttpProtocolError do
     begin
       // the dynamic table state is lost, so the connection cannot continue
+      FailConnection(E.Message, E.ErrorCode);
+      Exit;
+    end;
+    on E: EHttpError do
+    begin
       FailConnection(E.Message, ecCompressionError);
       Exit;
     end;

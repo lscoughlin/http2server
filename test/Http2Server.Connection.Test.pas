@@ -66,6 +66,7 @@ type
       ACount: Integer): TBytes;
     function RstPayload(const ACode: THttp2ErrorCode): TBytes;
     function AckSettingsOf(const AFrames: TArray<TFrame>): Boolean;
+    function GoAwayCodeOf(const AFrames: TArray<TFrame>): THttp2ErrorCode;
     function GoAwayPayload(const ALastStreamId: LongWord;
       const ACode: THttp2ErrorCode): TBytes;
     function Pack(const APreface: Boolean;
@@ -102,6 +103,7 @@ type
     procedure TestEndStreamOnHeadersClosesRemoteSide;
     procedure TestContinuationAssemblesTheHeaderBlock;
     procedure TestContinuationCapClosesTheConnection;
+    procedure TestHeaderListTooLargeClosesTheConnection;
     procedure TestContinuationWithoutHeadersIsRefused;
     procedure TestDataReachesTheStreamAndBothWindows;
     procedure TestDataOverrunIsAConnectionError;
@@ -401,6 +403,15 @@ begin
       Exit(True);
 end;
 
+function TConnectionCoreTest.GoAwayCodeOf(
+  const AFrames: TArray<TFrame>): THttp2ErrorCode;
+var
+  Id: LongWord;
+  Debug: TBytes;
+begin
+  ParseGoAway(AnyOf(AFrames, ftGoAway), Id, Result, Debug);
+end;
+
 function TConnectionCoreTest.FirstTypeOf(
   const AFrames: TArray<TFrame>): TFrameType;
 begin
@@ -484,7 +495,8 @@ begin
   Data[3] := Ord('X');
   FCore.Feed(Data);
   Frames := OutputFrames;
-  AnyOf(Frames, ftGoAway);
+  AssertEquals('a wrong preface is a protocol error', Ord(ecProtocolError),
+    Ord(GoAwayCodeOf(Frames)));
   AssertEquals('no stream was created', 0, FCore.OpenStreams);
   AssertTrue('the connection reports its close', FEvents.Closing > 0);
 end;
@@ -572,7 +584,8 @@ begin
   NewCore;
   FCore.Feed(Pack(True, [RequestFrame(2)]));
   Frames := OutputFrames;
-  AnyOf(Frames, ftGoAway);
+  AssertEquals('an even stream id is a protocol error', Ord(ecProtocolError),
+    Ord(GoAwayCodeOf(Frames)));
   AssertFalse('the connection reports no open stream', FCore.OpenStreams > 0);
 end;
 
@@ -583,7 +596,8 @@ begin
   NewCore;
   FCore.Feed(Pack(True, [RequestFrame(3, False), RequestFrame(1, False)]));
   Frames := OutputFrames;
-  AnyOf(Frames, ftGoAway);
+  AssertEquals('a stream id that does not increase is a protocol error',
+    Ord(ecProtocolError), Ord(GoAwayCodeOf(Frames)));
 end;
 
 procedure TConnectionCoreTest.TestOverConcurrentLimitIsRefused;
@@ -663,18 +677,41 @@ begin
   NewCore;
   Head := TFrame.Create(ftHeaders, [], 1,
     Slice(BlockOf([':method'], ['GET']), 0, 3));
-  SetLength(List, TestContinuationCap + 1);
+  // one more CONTINUATION than the cap allows
+  SetLength(List, TestContinuationCap + 2);
   List[0] := Head;
-  for I := 0 to TestContinuationCap - 1 do
+  for I := 0 to TestContinuationCap do
   begin
     Cont := TFrame.Create(ftContinuation, [], 1, BlockOf(['a'], ['b']));
-    if I = TestContinuationCap - 1 then
+    if I = TestContinuationCap then
       Cont.Header.Flags := [ffEndHeaders];
     List[I + 1] := Cont;
   end;
   FCore.Feed(Pack(True, List));
   Frames := OutputFrames;
-  AnyOf(Frames, ftGoAway);
+  AssertEquals('a CONTINUATION flood says ENHANCE_YOUR_CALM',
+    Ord(ecEnhanceYourCalm), Ord(GoAwayCodeOf(Frames)));
+  AssertEquals('the request never completed', 0, FEvents.Requests);
+end;
+
+procedure TConnectionCoreTest.TestHeaderListTooLargeClosesTheConnection;
+var
+  Override: TConnectionCoreOptions;
+  Frames: TArray<TFrame>;
+  Id: LongWord;
+  Code: THttp2ErrorCode;
+  Debug: TBytes;
+begin
+  Override := PlainOptions;
+  Override.MaxHeaderListSize := 40;
+  NewCore;
+  Release;
+  MakeCoreWith(Override, 10000);
+  FCore.Feed(Pack(True, [RequestFrame(1, True)]));
+  Frames := OutputFrames;
+  ParseGoAway(AnyOf(Frames, ftGoAway), Id, Code, Debug);
+  AssertEquals('a header list above the limit says ENHANCE_YOUR_CALM',
+    Ord(ecEnhanceYourCalm), Ord(Code));
   AssertEquals('the request never completed', 0, FEvents.Requests);
 end;
 
