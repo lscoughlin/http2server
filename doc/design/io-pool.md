@@ -103,7 +103,7 @@ It drains the core through `DrainPending`, takes the bytes with `TakeOutput`,
 and hands them to the mORMot2 write path. The drain runs under the connection
 core lock, which every stream also takes, so the HPACK encoder keeps one owner
 per connection. The core calls the drain itself at the end of every `Feed`
-(`src/Http2Server.Connection.pas:422-430`), so the response to one request
+(`src/Http2Server.Connection.pas:385`), so the response to one request
 leaves in the same IO turn as the request.
 
 ## The write wake-up
@@ -111,7 +111,7 @@ leaves in the same IO turn as the request.
 The write wake-up follows the mORMot2 pattern. A handler write reaches the
 stream host callback (`src/Http2Server.Stream.pas:745`), the core raises one
 edge-triggered flag per transition from "no output" to "output"
-(`src/Http2Server.Connection.pas:455-468`), and the waker drains the core and
+(`src/Http2Server.Connection.pas:444-457`), and the waker drains the core and
 calls the mORMot2 write path (`src/Http2Server.Async.pas:194-200`).
 
 An IO thread that blocks in `epoll_wait` on Linux or `poll` on macOS sleeps
@@ -131,7 +131,7 @@ covers the case where the write lock went to the IO thread
 (`src/Http2Server.Async.pas:374-379`).
 
 The stream host callback is the bridge between the two sides
-(`src/Http2Server.Connection.pas:230-233`). The host holds the core as a raw
+(`src/Http2Server.Connection.pas:223-227`). The host holds the core as a raw
 pointer and not as an interface, so the core and the host form no reference
 cycle.
 

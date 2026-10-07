@@ -58,9 +58,9 @@ connection raises no wake-up.
 
 ## Headers
 
-The HPACK encoder stays with the connection core
-(`src/Http2Server.Connection.pas`), so one encoder serves one connection and
-the encoder state follows wire order. `TServerConnectionCore.EmitHeaderRun`
+The HPACK encoder stays with the connection
+(`src/Http2Server.HpackConnection.pas`), so one encoder serves one connection
+and the encoder state follows wire order. `THpackConnection.BuildHeaderRun`
 splits an encoded block into one HEADERS frame and the CONTINUATION frames
 that follow it. No other frame can appear between the frames of one run,
 which the HPACK decoder of the peer requires.

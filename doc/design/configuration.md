@@ -64,7 +64,7 @@ protocol bounds instead: `MinAllowedFrameSize` and `MaxAllowedFrameSize`
 `MaxWindowSize` (`src/Http2Server.FlowControl.pas:28`). A connection reads the
 remaining values from a settings record that the factory fills, as the
 connection core states for `TConnectionCoreOptions`
-(`src/Http2Server.Connection.pas:31-35`).
+(`src/Http2Server.Connection.pas:36-40`).
 
 The test `TestDefaultsOnlyInCreate` reads the source of this unit and fails on
 a numeric literal of two digits or more outside a `Create` body

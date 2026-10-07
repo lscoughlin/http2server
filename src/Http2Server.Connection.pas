@@ -26,7 +26,8 @@ uses
   SysUtils, Classes, SyncObjs, Generics.Collections,
   Http2Server.Errors, Http2Server.Frames, Http2Server.Hpack,
   Http2Server.FlowControl, Http2Server.Limits, Http2Server.Seam,
-  Http2Server.Stream, Http2Server.Headers, Http2Server.Output;
+  Http2Server.Stream, Http2Server.Headers, Http2Server.Output,
+  Http2Server.HpackConnection;
 
 type
   /// the per-connection values the core needs
@@ -94,8 +95,8 @@ type
     /// object lives until the whole connection goes away
     FClosed: TObjectList<TServerStream>;
     FById: TDictionary<LongWord, TServerStream>;
-    FDecoder: THpackCodec;
-    FEncoder: THpackCodec;
+    /// the HPACK state of this connection
+    FHpack: THpackConnection;
     FSettings: TConnectionSettings;
     FPeerSettings: TConnectionSettings;
     FInput: TBytes;
@@ -104,12 +105,6 @@ type
     FPrefaceCount: Integer;
     FOutput: TBytes;
     FOutputCount: Integer;
-    FHeaderBlock: TBytes;
-    FHeaderCount: Integer;
-    FHeaderStreamId: LongWord;
-    FHeaderEndStream: Boolean;
-    FContinuations: LongWord;
-    FInHeaderBlock: Boolean;
     FLastStreamId: LongWord;
     FClosing: Boolean;
     FGoAwaySent: Boolean;
@@ -162,8 +157,6 @@ type
     procedure FlushDrainedOutput;
     procedure EmitHeaderRun(const AStream: TServerStream;
       const AHeaderBlock: TBytes);
-    function EncodeResponseHeaders(const AStatus: Integer;
-      const AHeaders: THeaderBlock): TBytes;
   public
     constructor Create(const AOptions: TConnectionCoreOptions;
       const AEvents: IConnectionEvents; const ALimits: TConnectionLimits;
@@ -260,11 +253,8 @@ begin
   FStreams := TObjectList<TServerStream>.Create(True);
   FClosed := TObjectList<TServerStream>.Create(True);
   FById := TDictionary<LongWord, TServerStream>.Create;
-  FDecoder := THpackCodec.Create;
-  FEncoder := THpackCodec.Create;
-  FDecoder.MaxHeaderListSize := FOptions.MaxHeaderListSize;
-  FDecoder.ApplySettings(FOptions.MaxHeaderTableSize);
-  FEncoder.ApplySettings(FOptions.MaxHeaderTableSize);
+  FHpack := THpackConnection.Create(FOptions.MaxHeaderListSize,
+    FOptions.MaxHeaderTableSize, FOptions.MaxFrameSize);
   FSettings := TConnectionSettings.Defaults;
   FSettings.MaxConcurrentStreams := FOptions.MaxConcurrentStreams;
   FSettings.MaxFrameSize := FOptions.MaxFrameSize;
@@ -311,8 +301,7 @@ begin
   FStreams.Free;
   FClosed.Free;
   FFlow.Free;
-  FEncoder.Free;
-  FDecoder.Free;
+  FHpack.Free;
   FConnLock.Free;
   inherited Destroy;
 end;
@@ -642,7 +631,7 @@ var
   Stream: TServerStream;
   Block: TBytes;
 begin
-  if FInHeaderBlock then
+  if FHpack.InBlock then
   begin
     FailConnection('a HEADERS frame interrupted a header block',
       ecProtocolError);
@@ -668,14 +657,7 @@ begin
     Stream := NewStream(AFrame.Header.StreamId);
   end;
   Block := ExtractHeaderBlock(AFrame);
-  FHeaderStreamId := AFrame.Header.StreamId;
-  FHeaderEndStream := AFrame.IsEndStream;
-  FHeaderCount := Length(Block);
-  SetLength(FHeaderBlock, FHeaderCount);
-  if FHeaderCount > 0 then
-    Move(Block[0], FHeaderBlock[0], FHeaderCount);
-  FContinuations := 0;
-  FInHeaderBlock := True;
+  FHpack.BeginBlock(AFrame.Header.StreamId, AFrame.IsEndStream, Block);
   if AFrame.IsEndHeaders then
     CompleteHeaderBlock;
 end;
@@ -684,20 +666,19 @@ procedure TServerConnectionCore.ProcessContinuation(const AFrame: TFrame);
 var
   Block: TBytes;
 begin
-  if not FInHeaderBlock then
+  if not FHpack.InBlock then
   begin
     FailConnection('a CONTINUATION frame arrived with no header block',
       ecProtocolError);
     Exit;
   end;
-  if AFrame.Header.StreamId <> FHeaderStreamId then
+  if AFrame.Header.StreamId <> FHpack.BlockStreamId then
   begin
     FailConnection('a CONTINUATION frame changed the stream',
       ecProtocolError);
     Exit;
   end;
-  Inc(FContinuations);
-  if FContinuations > FOptions.MaxContinuations then
+  if FHpack.ContinuationCount + 1 > FOptions.MaxContinuations then
   begin
     FailConnection('too many CONTINUATION frames for one header block',
       ecEnhanceYourCalm);
@@ -706,18 +687,15 @@ begin
   if FLimits <> nil then
     FLimits.Charge(lkContinuation, 1);
   Block := ExtractHeaderBlock(AFrame);
-  if FHeaderCount + Length(Block) > Integer(FOptions.MaxHeaderBlockBytes) then
+  // the count and the payload join the block only after the size check
+  if FHpack.BlockByteLength + Length(Block) >
+     Integer(FOptions.MaxHeaderBlockBytes) then
   begin
     FailConnection('the header block is larger than the server accepts',
       ecEnhanceYourCalm);
     Exit;
   end;
-  if Length(Block) > 0 then
-  begin
-    SetLength(FHeaderBlock, FHeaderCount + Length(Block));
-    Move(Block[0], FHeaderBlock[FHeaderCount], Length(Block));
-    Inc(FHeaderCount, Length(Block));
-  end;
+  FHpack.AddBlockPart(Block);
   if AFrame.IsEndHeaders then
     CompleteHeaderBlock;
 end;
@@ -728,16 +706,12 @@ var
   Block: TBytes;
   Headers: THeaderBlock;
 begin
-  FInHeaderBlock := False;
-  Stream := FindStream(FHeaderStreamId);
-  SetLength(Block, FHeaderCount);
-  if FHeaderCount > 0 then
-    Move(FHeaderBlock[0], Block[0], FHeaderCount);
-  FHeaderCount := 0;
+  Stream := FindStream(FHpack.BlockStreamId);
+  Block := FHpack.TakeBlock;
   if Stream = nil then
     Exit;
   try
-    Headers := FDecoder.Decode(Block);
+    Headers := FHpack.Decode(Block);
   except
     on E: EHttpProtocolError do
     begin
@@ -752,7 +726,7 @@ begin
     end;
   end;
   Stream.SetRemoteHeaders(Headers);
-  if FHeaderEndStream then
+  if FHpack.BlockEndStream then
     Stream.MarkRemoteEnded;
   if FEvents <> nil then
     FEvents.RequestReady(Stream);
@@ -764,7 +738,7 @@ var
   Payload: TBytes;
   N: LongWord;
 begin
-  if FInHeaderBlock then
+  if FHpack.InBlock then
   begin
     FailConnection('a DATA frame interrupted a header block',
       ecProtocolError);
@@ -841,8 +815,7 @@ begin
   Delta := Int64(NewSettings.InitialWindowSize) -
     Int64(FPeerSettings.InitialWindowSize);
   FPeerSettings := NewSettings;
-  FDecoder.ApplySettings(FPeerSettings.HeaderTableSize);
-  FEncoder.ApplySettings(FPeerSettings.HeaderTableSize);
+  FHpack.ApplyPeerTableSize(FPeerSettings.HeaderTableSize);
   // the drain obeys the smaller of the two frame sizes
   FOut.ApplyPeerFrameSize(FPeerSettings.MaxFrameSize);
   // RFC 9113 section 6.9.2: a change reaches every stream that is open
@@ -927,47 +900,17 @@ begin
     FFlow.ApplyStreamUpdate(AFrame.Header.StreamId, Increment);
 end;
 
-function TServerConnectionCore.EncodeResponseHeaders(const AStatus: Integer;
-  const AHeaders: THeaderBlock): TBytes;
-var
-  Block: THeaderBlock;
-  I: Integer;
-begin
-  SetLength(Block, Length(AHeaders) + 1);
-  Block[0].Name := HeaderStatus;
-  Block[0].Value := IntToStr(AStatus);
-  for I := 0 to Length(AHeaders) - 1 do
-    Block[I + 1] := AHeaders[I];
-  Result := FEncoder.Encode(Block);
-end;
-
 procedure TServerConnectionCore.EmitHeaderRun(const AStream: TServerStream;
   const AHeaderBlock: TBytes);
 var
-  Offset, Chunk: Integer;
-  Slice: TBytes;
-  First: Boolean;
+  Frames: TArray<TFrame>;
+  I: Integer;
 begin
-  // one HEADERS frame and any CONTINUATION frames follow each other with no
-  // other frame between them, because the encoder state follows wire order
-  Offset := 0;
-  First := True;
-  repeat
-    Chunk := Length(AHeaderBlock) - Offset;
-    if Chunk > Integer(FOptions.MaxFrameSize) then
-      Chunk := Integer(FOptions.MaxFrameSize);
-    SetLength(Slice, Chunk);
-    if Chunk > 0 then
-      Move(AHeaderBlock[Offset], Slice[0], Chunk);
-    Inc(Offset, Chunk);
-    if First then
-      QueueFrame(BuildHeadersFrame(AStream.StreamId, Slice, Offset >=
-        Length(AHeaderBlock), False))
-    else
-      QueueFrame(BuildContinuationFrame(AStream.StreamId, Slice, Offset >=
-        Length(AHeaderBlock)));
-    First := False;
-  until Offset >= Length(AHeaderBlock);
+  // the HPACK unit frames the header block, because the wire order of the
+  // HEADERS frame and its CONTINUATION frames follows the encoder state
+  Frames := FHpack.BuildHeaderRun(AStream.StreamId, AHeaderBlock);
+  for I := 0 to Length(Frames) - 1 do
+    QueueFrame(Frames[I]);
 end;
 
 procedure TServerConnectionCore.FlushQueue;
@@ -991,7 +934,7 @@ begin
       Continue;
     if not Stream.TakePendingHeaders(Status, Headers, EndStream) then
       Continue;
-    Encoded := EncodeResponseHeaders(Status, Headers);
+    Encoded := FHpack.EncodeResponse(Status, Headers);
     EmitHeaderRun(Stream, Encoded);
     if EndStream then
     begin
