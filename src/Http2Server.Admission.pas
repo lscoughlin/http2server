@@ -42,7 +42,8 @@ uses
   Http2Server.Seam,
   Http2Server.Stream,
   Http2Server.Waiter,
-  Http2Server.Config;
+  Http2Server.Config,
+  Http2Server.Observer;
 
 type
   /// the outcome of one admission attempt
@@ -197,6 +198,11 @@ type
     FPoolStopped: Boolean;
     FGracefulTimeoutMs: Integer;
     FOnHandlerError: THandlerErrorEvent;
+    /// the observer of the server; nil when the server set none
+    // - every event runs on the worker thread that raised it
+    FObserver: IHttp2ServerObserver;
+    procedure Notify(const AKind: TServerEventKind;
+      const AStream: TServerStream; const ADetail: string);
     function TakeOne: Boolean;
     procedure AnswerRefusal(const AStream: TServerStream);
     procedure ReportError(const AStream: TServerStream;
@@ -242,6 +248,8 @@ type
     /// the report of a handler that raised
     property OnHandlerError: THandlerErrorEvent read FOnHandlerError
       write FOnHandlerError;
+    /// the observer of the server (test and wire-up seam)
+    property Observer: IHttp2ServerObserver read FObserver write FObserver;
   end;
 
 implementation
@@ -707,8 +715,26 @@ end;
 procedure THandlerPool.ReportError(const AStream: TServerStream;
   const ABeforeHeaders: Boolean);
 begin
+  Notify(seHandlerException, AStream, 'the handler raised');
   if Assigned(FOnHandlerError) then
     FOnHandlerError(AStream, ABeforeHeaders);
+end;
+
+procedure THandlerPool.Notify(const AKind: TServerEventKind;
+  const AStream: TServerStream; const ADetail: string);
+var
+  Event: TServerEvent;
+begin
+  if FObserver = nil then
+    Exit;
+  Event.Kind := AKind;
+  Event.StreamId := 0;
+  if AStream <> nil then
+    Event.StreamId := AStream.StreamId;
+  Event.LimitKind := lkReset;
+  Event.ErrorCode := ecNoError;
+  Event.Detail := ADetail;
+  FObserver.OnEvent(Event);
 end;
 
 function THandlerPool.TakeOne: Boolean;
@@ -730,6 +756,7 @@ begin
     finally
       FLock.Release;
     end;
+    Notify(seRequestTimedOut, Stream, 'the queue wait limit passed');
     AnswerRefusal(Stream);
     Exit;
   end;
@@ -772,6 +799,7 @@ begin
     Res.Free;
     Req.Free;
     MarkIdle(Stream);
+    Notify(seStreamCompleted, Stream, 'the handler returned');
   end;
 end;
 
@@ -786,6 +814,8 @@ begin
     finally
       FLock.Release;
     end;
+    Notify(seQueueFull, AStream, 'the queue was full');
+    Notify(seStreamRefused, AStream, 'the queue was full');
     AnswerRefusal(AStream);
   end;
 end;

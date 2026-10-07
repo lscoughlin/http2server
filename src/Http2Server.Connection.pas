@@ -183,6 +183,11 @@ type
     // - the IO side calls this after a handler wrote, so the frames reach the
     //   output queue with no further input from the peer
     procedure DrainPending;
+    /// queue a GOAWAY frame and wake the write side
+    // - the graceful stop of the server calls this on every open connection;
+    //   the core sends no second GOAWAY
+    procedure GracefulGoAway(const ALastStreamId: LongWord;
+      const AErrorCode: THttp2ErrorCode);
 
     /// the stream that owns AStreamId, or nil
     function StreamById(const AStreamId: LongWord): TServerStream;
@@ -434,6 +439,12 @@ begin
   finally
     UnlockConn;
   end;
+end;
+
+procedure TServerConnectionCore.GracefulGoAway(const ALastStreamId: LongWord;
+  const AErrorCode: THttp2ErrorCode);
+begin
+  SendGoAway(ALastStreamId, AErrorCode);
 end;
 
 procedure TServerConnectionCore.SetWriteWaker(const AWaker: IWriteWaker);

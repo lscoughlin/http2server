@@ -46,6 +46,7 @@ uses
   Http2Server.Config,
   Http2Server.Connection,
   Http2Server.Limits,
+  Http2Server.Observer,
   Http2Server.Output,
   Http2Server.Seam,
   Http2Server.Stream,
@@ -74,9 +75,15 @@ type
   /// the events of one connection, wired to the shared handler pool
   THttp2ConnectionEvents = class(TInterfacedObject, IConnectionEvents)
   private
+    /// the server that owns the pool and the observer; a weak reference
+    FServer: THttp2AsyncServer;
+    /// the handler pool of the server
     FPool: THandlerPool;
+    procedure Notify(const AKind: TServerEventKind;
+      const AStreamId: LongWord; const ALimit: TLimitKind;
+      const ADetail: string);
   public
-    constructor Create(const APool: THandlerPool);
+    constructor Create(const AServer: THttp2AsyncServer);
     procedure RequestReady(const AStream: TServerStream);
     procedure StreamReset(const AStream: TServerStream);
     procedure ConnectionClosing;
@@ -142,6 +149,18 @@ type
     FCoreOptions: TConnectionCoreOptions;
     FControlBucket: TTokenBucketOptions;
     FStarted: Boolean;
+    /// the observer of the server; nil when the caller set none
+    FObserver: IHttp2ServerObserver;
+    /// the open connections now
+    FConnectionCount: Integer;
+    /// open streams now, counted across every connection
+    FOpenStreams: Integer;
+    /// streams the peer or the server reset since the build
+    FResetTotal: Int64;
+    /// bucket trips since the build
+    FTrippedTotal: Int64;
+    /// guards the connection counter against the IO threads
+    FConnectionLock: TCriticalSection;
     function BuildPolicy: TTlsPolicy;
     function BuildCoreOptions: TConnectionCoreOptions;
     function LeastControlBucket: TTokenBucketOptions;
@@ -173,6 +192,34 @@ type
     function BoundPort: Integer;
     /// the factory the server was built from
     property Factory: THttp2ServerFactory read FFactory;
+    /// the observer of the server
+    // - the observer runs on the thread that raised the event, so it must be
+    //   set before Start and never changed while the server runs
+    property Observer: IHttp2ServerObserver read FObserver write FObserver;
+    /// the connections that are open now
+    property ConnectionCount: Integer read FConnectionCount;
+    /// count one accepted connection, on the IO thread
+    procedure ConnectionOpened;
+    /// count one closed connection, on the IO thread
+    procedure ConnectionClosed;
+    /// send one event to the observer, on the thread that raised it
+    procedure Notify(const AEvent: TServerEvent); overload;
+    procedure Notify(const AKind: TServerEventKind; const AStreamId: LongWord;
+      const ALimit: TLimitKind; const ADetail: string); overload;
+    /// queue a GOAWAY frame on every open connection, then wake its output
+    // - the last stream identifier that the core processed goes into the
+    //   frame, so a peer keeps the streams below it
+    procedure BroadcastGoAway(const AErrorCode: THttp2ErrorCode);
+    /// the streams that are open on every connection now
+    function OpenStreamTotal: Integer;
+    /// count one stream reset, on the thread that saw it
+    procedure StreamResetted;
+    /// count one bucket trip, on the thread that saw it
+    procedure BucketTripped;
+    /// streams the peer or the server reset since the build
+    property ResetTotal: Int64 read FResetTotal;
+    /// bucket trips since the build
+    property TrippedTotal: Int64 read FTrippedTotal;
   end;
 
 implementation
@@ -204,14 +251,26 @@ end;
 
 { THttp2ConnectionEvents }
 
-constructor THttp2ConnectionEvents.Create(const APool: THandlerPool);
+constructor THttp2ConnectionEvents.Create(const AServer: THttp2AsyncServer);
 begin
   inherited Create;
-  FPool := APool;
+  FServer := AServer;
+  if FServer <> nil then
+    FPool := FServer.Handlers;
+end;
+
+procedure THttp2ConnectionEvents.Notify(const AKind: TServerEventKind;
+  const AStreamId: LongWord; const ALimit: TLimitKind;
+  const ADetail: string);
+begin
+  if FServer <> nil then
+    FServer.Notify(AKind, AStreamId, ALimit, ADetail);
 end;
 
 procedure THttp2ConnectionEvents.RequestReady(const AStream: TServerStream);
 begin
+  if AStream <> nil then
+    Notify(seStreamOpened, AStream.StreamId, lkReset, 'the request is complete');
   if FPool <> nil then
     FPool.Admit(AStream);
 end;
@@ -219,6 +278,12 @@ end;
 procedure THttp2ConnectionEvents.StreamReset(const AStream: TServerStream);
 begin
   // the stream is cancelled inside the core; the pool removes a queued entry
+  if AStream <> nil then
+  begin
+    Notify(seStreamReset, AStream.StreamId, lkReset, 'the stream reset');
+    if FServer <> nil then
+      FServer.StreamResetted;
+  end;
   if FPool <> nil then
     FPool.RemoveStream(AStream.StreamId);
 end;
@@ -230,7 +295,9 @@ end;
 
 procedure THttp2ConnectionEvents.LimitTripped(const AKind: TLimitKind);
 begin
-  // the observer of the server receives this event once it exists
+  if FServer <> nil then
+    FServer.BucketTripped;
+  Notify(seBucketTripped, 0, AKind, 'a token bucket tripped');
 end;
 
 { THttp2AsyncConnection }
@@ -253,16 +320,19 @@ begin
   // conservative of the five
   Limits := TConnectionLimits.Create(FServer.Factory.Clock,
     FServer.Factory.ResetBucket, FServer.ControlBucket);
-  FEvents := THttp2ConnectionEvents.Create(FServer.Handlers);
+  FEvents := THttp2ConnectionEvents.Create(FServer);
   FCore := TServerConnectionCore.Create(Options, FEvents, Limits,
     FServer.Factory.Clock);
   FWaker := THttp2ConnectionWaker.Create(Self);
   FCore.SetWriteWaker(FWaker);
   FSendLock := TCriticalSection.Create;
+  FServer.ConnectionOpened;
 end;
 
 procedure THttp2AsyncConnection.BeforeDestroy;
 begin
+  if FServer <> nil then
+    FServer.ConnectionClosed;
   FSendLock.Free;
   FCore.Free;
   FCore := nil;
@@ -431,6 +501,11 @@ begin
   FCoreOptions := BuildCoreOptions;
   FControlBucket := LeastControlBucket;
   FHandlers := THandlerPool.Create(AFactory);
+  FConnectionLock := TCriticalSection.Create;
+  FObserver := nil;
+  FConnectionCount := 0;
+  FResetTotal := 0;
+  FTrippedTotal := 0;
   Options := ASYNC_OPTION_PROD;
   if AFactory.Tls.CertificateFile <> '' then
     include(Options, acoEnableTls);
@@ -447,6 +522,8 @@ begin
   Stop;
   FHandlers.Free;
   FHandlers := nil;
+  FConnectionLock.Free;
+  FConnectionLock := nil;
   inherited Destroy;
 end;
 
@@ -524,6 +601,117 @@ begin
   result := Least(Least(FFactory.PingBucket, FFactory.SettingsBucket),
     Least(FFactory.EmptyDataBucket, FFactory.WindowUpdateBucket));
   result := Least(result, FFactory.ContinuationBucket);
+end;
+
+procedure THttp2AsyncServer.ConnectionOpened;
+begin
+  if FConnectionLock = nil then
+    exit;
+  FConnectionLock.Acquire;
+  try
+    Inc(FConnectionCount);
+  finally
+    FConnectionLock.Release;
+  end;
+  Notify(seConnectionAccepted, 0, lkReset, 'the socket is accepted');
+end;
+
+procedure THttp2AsyncServer.ConnectionClosed;
+begin
+  if FConnectionLock = nil then
+    exit;
+  FConnectionLock.Acquire;
+  try
+    if FConnectionCount > 0 then
+      Dec(FConnectionCount);
+  finally
+    FConnectionLock.Release;
+  end;
+  Notify(seConnectionClosed, 0, lkReset, 'the connection ended');
+end;
+
+procedure THttp2AsyncServer.Notify(const AEvent: TServerEvent);
+begin
+  if FObserver <> nil then
+    FObserver.OnEvent(AEvent);
+end;
+
+procedure THttp2AsyncServer.StreamResetted;
+begin
+  if FConnectionLock = nil then
+    exit;
+  FConnectionLock.Acquire;
+  try
+    Inc(FResetTotal);
+  finally
+    FConnectionLock.Release;
+  end;
+end;
+
+procedure THttp2AsyncServer.BucketTripped;
+begin
+  if FConnectionLock = nil then
+    exit;
+  FConnectionLock.Acquire;
+  try
+    Inc(FTrippedTotal);
+  finally
+    FConnectionLock.Release;
+  end;
+end;
+
+procedure THttp2AsyncServer.BroadcastGoAway(
+  const AErrorCode: THttp2ErrorCode);
+var
+  Instances: TAsyncConnectionDynArray;
+  I: Integer;
+  Conn: THttp2AsyncConnection;
+begin
+  // GetConnectionInstances copies the live instances and protects each one
+  // from recycling for a short moment, so a short call on the instance is
+  // safe without the main connection lock
+  Instances := GetConnectionInstances;
+  for I := 0 to High(Instances) do
+  begin
+    Conn := THttp2AsyncConnection(Instances[I]);
+    if (Conn = nil) or (Conn.Core = nil) then
+      continue;
+    Conn.Core.GracefulGoAway(Conn.Core.LastProcessedStreamId, AErrorCode);
+    Conn.Waker.Signal;
+  end;
+  Notify(seGoAwaySent, 0, lkReset,
+    'the server sends GOAWAY on every connection');
+end;
+
+function THttp2AsyncServer.OpenStreamTotal: Integer;
+var
+  Instances: TAsyncConnectionDynArray;
+  I: Integer;
+  Conn: THttp2AsyncConnection;
+begin
+  Result := 0;
+  Instances := GetConnectionInstances;
+  for I := 0 to High(Instances) do
+  begin
+    Conn := THttp2AsyncConnection(Instances[I]);
+    if (Conn <> nil) and (Conn.Core <> nil) then
+      Inc(Result, Conn.Core.OpenStreams);
+  end;
+end;
+
+procedure THttp2AsyncServer.Notify(const AKind: TServerEventKind;
+  const AStreamId: LongWord; const ALimit: TLimitKind; const ADetail: string);
+var
+  Event: TServerEvent;
+begin
+  if FObserver = nil then
+    exit;
+  Event.Kind := AKind;
+  Event.StreamId := AStreamId;
+  Event.LimitKind := ALimit;
+  Event.ErrorCode := ecNoError;
+  Event.Detail := ADetail;
+  FObserver.OnEvent(Event);
 end;
 
 procedure THttp2AsyncServer.Start;

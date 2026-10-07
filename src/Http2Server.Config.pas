@@ -20,8 +20,8 @@ notes:
 /// Server factory and configuration options for the HTTP/2 server
 // - THttp2ServerFactory is the one place where a server setting is set and
 //   where a server default lives
-// - Build is not part of this release.  It arrives with the server lifecycle
-//   unit, which holds the IHttp2Server type that Build returns
+// - the factory builds a running server through Http2Server.Server, which
+//   holds the IHttp2Server type that Build returns
 // - the settings are read-only to the caller
 unit Http2Server.Config;
 
