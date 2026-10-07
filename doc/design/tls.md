@@ -7,18 +7,23 @@ notes:
   - The TLS route and the ALPN binding of the server.
   - The route is option A: the mORMot2 INetTls interface plus one ALPN
     select callback, installed on the server context after the socket binds.
-scope: How the server reaches ALPN, and the mORMot2 TLS facts the route rests on.
+scope: How the server reaches ALPN, the TLS plug-in of a connection, and the mORMot2 TLS facts the route rests on.
 primary_types:
   - TAlpnSelectCb
   - TSslCtxSetAlpnSelectCb
+  - TTransport
+  - TTlsPolicy
 db_tables: None.
 related_docs:
   - doc/design/protocol.md
   - doc/design/fpc-runtime.md
+  - doc/design/io-pool.md
 invariants:
   - A client that offers no acceptable ALPN protocol is refused with a
     fatal alert, so no HTTP/1.1 request ever reaches an HTTP/2 code path.
   - The ALPN callback argument outlives every handshake.
+  - A TLS connection that did not negotiate h2 is refused after the handshake.
+  - The handshake deadline of the factory never exceeds the mORMot2 bound.
 ---
 }
 # TLS and ALPN
@@ -132,16 +137,56 @@ through the `PSSL` returned by `INetTls.GetRawTls`
 (`src/Http2Server.Alpn.pas:185-201`). An empty result means that no protocol
 was selected.
 
+## The TLS plug-in of a connection
+
+The unit `src/Http2Server.Tls.pas` applies the policy to a bound socket. It
+keeps every decision in a pure function, so a test reaches each branch with no
+socket and no OpenSSL.
+
+| Function | Decision |
+| --- | --- |
+| `TransportFor` | Which transport a policy offers: TLS, cleartext or a refusal (`src/Http2Server.Tls.pas:110-119`). |
+| `HandshakeExpired` | Whether a handshake has used up a deadline; a zero deadline never expires (`src/Http2Server.Tls.pas:120-126`). |
+| `EffectiveHandshakeTimeoutMs` | The deadline the server applies, clamped to the mORMot2 bound (`src/Http2Server.Tls.pas:128-139`). |
+| `NegotiatedH2` and `NegotiatedAlpnName` | Whether the finished handshake selected `h2`; a nil TLS instance answers False (`src/Http2Server.Tls.pas:141-152`). |
+
+`ApplyTls` carries out the policy on a bound socket
+(`src/Http2Server.Tls.pas:154-174`). The order is fixed: mORMot2 creates the
+server `SSL_CTX` inside `AfterBind`, so the server records the certificate and
+the key, calls `DoTlsAfter(cstaBind)`, and only then installs the ALPN
+callback on the context that `AfterBind` stored in `AcceptCert`. The call
+answers False when no certificate is named or the certificate file is absent.
+
+## The handshake deadline
+
+mORMot2 runs the server handshake at the first read of each connection, inside
+`INetTls.AfterAccept`, and it bounds the `SSL_accept` loop with a 5000 ms
+deadline (`mormot.lib.openssl11.pas:12146-12166`). A larger factory value can
+never take effect, so `EffectiveHandshakeTimeoutMs` clamps the factory value to
+that bound (`src/Http2Server.Tls.pas:128-139`). The server also sets the socket
+send and receive deadlines to the clamped value before the handshake runs
+(`src/Http2Server.Async.pas:262-279`). A client that opens a socket and sends
+nothing holds one IO thread for a bounded time only, and other clients still
+complete their handshakes on other threads.
+
+A TLS connection must select `h2`. After the handshake the connection checks
+the negotiated name and refuses the connection when the name is not `h2`
+(`src/Http2Server.Async.pas:262-279`).
+
 ## Open verification
 
 The pure select rule and the symbol resolution are verified by the unit tests
-of `test/Http2Server.Alpn.Test.pas`, which run in the normal test suite.
+of `test/Http2Server.Alpn.Test.pas`, which run in the normal test suite. The
+pure TLS decisions and the h2c loopback are verified by
+`test/Http2Server.Async.Test.pas`.
 
-Two checks need a live TLS client and are not part of this document's evidence:
-the ALPN name that a real handshake reports, and the behaviour of a client that
-stalls during the handshake. The scheduler and the output path are the subject
-of the later IO-integration work, which performs both checks against the
-finished server.
+**Open gap.** A live TLS handshake loopback is not yet part of the suite. It
+needs a self-signed certificate, generated at test time, and a client that
+offers the `h2` ALPN name. The ALPN select rule, the negotiated-name check and
+the handshake deadline each carry unit tests, and the h2c loopback proves the
+IO pool end to end, but no test yet drives `h2` through a real OpenSSL
+handshake on this server. The platform run on Linux amd64 is also open, because
+this host is macOS aarch64.
 
 ## Sources
 

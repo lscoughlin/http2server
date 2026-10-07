@@ -12,8 +12,8 @@ notes:
     the copied frame builders, and proves a full request and response.
   - A handler that blocks for a few seconds must not stop the IO of another
     connection; the test drives two connections at once to show it.
-  - A live TLS handshake loopback needs a generated certificate and is the
-    subject of a later story, so it is recorded as an open gap.
+  - A live TLS handshake loopback needs a generated certificate and is not
+    part of this suite, so it is recorded as an open gap.
 ---
 }
 /// Async IO pool tests for Http2Server.Async
