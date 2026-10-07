@@ -97,6 +97,9 @@ type
     /// the monotonic second at which the first header block must have ended
     // - zero once the first request reached the core
     FHeaderDeadlineSec: TAsyncConnectionSec;
+    /// the idle period of this connection, in seconds
+    // - taken from the factory; zero disables the idle close
+    FIdleSeconds: cardinal;
     /// guards the write path against its own nested AfterWrite callback
     // - fOwner.Write may call AfterWrite before it returns, so this flag keeps
     //   one send loop per connection
@@ -142,6 +145,11 @@ type
     function BuildPolicy: TTlsPolicy;
     function BuildCoreOptions: TConnectionCoreOptions;
     function LeastControlBucket: TTokenBucketOptions;
+  protected
+    /// the idle period before OnLastOperationIdle runs, in seconds
+    // - the base class returns zero, which disables the event, so the server
+    //   enables it with the factory idle timeout
+    function GetLastOperationIdleSeconds: cardinal; override;
   public
     /// create the listener from the factory
     // - the factory must pass Validate before this call
@@ -233,8 +241,11 @@ var
   Limits: TConnectionLimits;
 begin
   FServer := THttp2AsyncServer(fOwner);
-  FHeaderDeadlineSec := TAsyncConnectionSec(
-    (GetTickCount64 div 1000) + cardinal(FServer.Factory.HeaderTimeoutMs div 1000));
+  FHeaderDeadlineSec := TAsyncConnectionSec(GetTickCount64 div 1000);
+  if FServer.Factory.HeaderTimeoutMs > 0 then
+    FHeaderDeadlineSec := FHeaderDeadlineSec + TAsyncConnectionSec(
+      cardinal((FServer.Factory.HeaderTimeoutMs + 999) div 1000));
+  FIdleSeconds := cardinal(FServer.Factory.IdleTimeoutMs div 1000);
   Options := FServer.CoreOptions;
   // TConnectionLimits holds one reset bucket and one control bucket, while the
   // factory offers a bucket per control kind.  The reset bucket is the bucket
@@ -386,18 +397,18 @@ function THttp2AsyncConnection.OnLastOperationIdle(
   nowsec: TAsyncConnectionSec): boolean;
 begin
   result := false;
-  if (FCore <> nil) and (FHeaderDeadlineSec <> 0) and
-     (nowsec > FHeaderDeadlineSec) then
+  if FCore = nil then
+    exit;
+  // the first header block did not complete within the header timeout
+  if (FHeaderDeadlineSec <> 0) and (nowsec > FHeaderDeadlineSec) then
   begin
-    // the first header block did not complete within the header timeout
     fOwner.ConnectionRemove(Handle);
     Exit(True);
   end;
-  if FCore = nil then
-    exit;
   // an idle connection with no stream and no queued output is closed, so an
   // idle client does not hold a socket for ever
-  if (FCore.OpenStreams = 0) and not FCore.HasOutput then
+  if (FIdleSeconds <> 0) and (nowsec - fLastOperation >= FIdleSeconds) and
+     (FCore.OpenStreams = 0) and not FCore.HasOutput then
   begin
     fOwner.ConnectionRemove(Handle);
     Result := True;
@@ -437,6 +448,32 @@ begin
   FHandlers.Free;
   FHandlers := nil;
   inherited Destroy;
+end;
+
+function THttp2AsyncServer.GetLastOperationIdleSeconds: cardinal;
+var
+  Ms: Integer;
+
+  function Seconds(const AValue: Integer): cardinal;
+  begin
+    if AValue <= 0 then
+      exit(0);
+    // the base class compares in 32-bit seconds, so a sub-second timeout is
+    // rounded up to one second
+    result := cardinal(AValue div 1000);
+    if result = 0 then
+      result := 1;
+  end;
+
+begin
+  // the idle callback is the one place that both timeouts are checked, so the
+  // callback runs at the earlier of the two: an idle close uses the idle
+  // timeout, and a first-header-block close uses the header timeout
+  result := Seconds(FFactory.IdleTimeoutMs);
+  if (FFactory.HeaderTimeoutMs > 0) and
+     ((result = 0) or
+      (Seconds(FFactory.HeaderTimeoutMs) < result)) then
+    result := Seconds(FFactory.HeaderTimeoutMs);
 end;
 
 function THttp2AsyncServer.BuildPolicy: TTlsPolicy;

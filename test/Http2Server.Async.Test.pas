@@ -104,7 +104,12 @@ type
     FServer: THttp2AsyncServer;
     function StartServer(const AHandler: IHttp2Handler;
       const AHandlerThreads: Integer = 2): Integer;
+    function StartServerWithTimeouts(const AHandler: IHttp2Handler;
+      const AIdleMs, AHeaderMs: Integer): Integer;
     procedure StopServer;
+    /// TRUE once the peer closed the socket within ATimeoutMs
+    function PeerClosed(const AClient: TCrtSocket;
+      const ATimeoutMs: Integer): Boolean;
   public
     procedure TearDown; override;
   published
@@ -114,6 +119,10 @@ type
     procedure TestTwoConnectionsAtOnce;
     /// a handler that blocks does not stop IO on another connection
     procedure TestBlockedHandlerDoesNotStopOtherIo;
+    /// an idle connection is closed after the idle timeout
+    procedure TestIdleConnectionIsClosed;
+    /// a connection with no first header block is closed after the header timeout
+    procedure TestFirstHeaderBlockTimeout;
   end;
 
   /// the thread rule of the IO and handler sides
@@ -419,6 +428,43 @@ begin
   result := FServer.BoundPort;
 end;
 
+function TAsyncServerTest.StartServerWithTimeouts(const AHandler: IHttp2Handler;
+  const AIdleMs, AHeaderMs: Integer): Integer;
+var
+  Factory: THttp2ServerFactory;
+begin
+  Factory := THttp2ServerFactory.Create
+    .WithHost('127.0.0.1')
+    .WithPort(0)
+    .WithClearTextAllowed(True)
+    .WithHandler(AHandler)
+    .WithHandlerThreads(2)
+    .WithIOThreads(2)
+    .WithIdleTimeout(AIdleMs)
+    .WithHeaderTimeout(AHeaderMs);
+  FServer := THttp2AsyncServer.Create(Factory);
+  FServer.Start;
+  result := FServer.BoundPort;
+end;
+
+function TAsyncServerTest.PeerClosed(const AClient: TCrtSocket;
+  const ATimeoutMs: Integer): Boolean;
+var
+  Deadline: QWord;
+  Pending: TCrtSocketPending;
+begin
+  result := False;
+  Deadline := GetTickCount64 + QWord(ATimeoutMs);
+  while GetTickCount64 < Deadline do
+  begin
+    Pending := AClient.SockReceivePending(100);
+    if Pending in [cspSocketError, cspSocketClosed,
+       cspDataAvailableOnClosedSocket] then
+      Exit(True);
+    Sleep(50);
+  end;
+end;
+
 procedure TAsyncServerTest.StopServer;
 begin
   FreeAndNil(FServer);
@@ -504,6 +550,48 @@ begin
   finally
     Fast.Free;
     Blocked.Free;
+  end;
+end;
+
+procedure TAsyncServerTest.TestIdleConnectionIsClosed;
+var
+  Port: Integer;
+  Client: TCrtSocket;
+begin
+  // the idle timeout is the shortest unit the mORMot2 idle callback supports,
+  // so the test holds one second and checks a few seconds later
+  Port := StartServerWithTimeouts(TEchoHandler.Create, 1100, 30000);
+  Client := TCrtSocket.Open('127.0.0.1', IntToStr(Port), nlTcp, IoTimeoutMs);
+  try
+    // the client sends nothing, so the connection is idle from the first byte
+    AssertTrue('the idle server did not close the connection',
+      PeerClosed(Client, 8000));
+  finally
+    Client.Free;
+  end;
+end;
+
+procedure TAsyncServerTest.TestFirstHeaderBlockTimeout;
+var
+  Port: Integer;
+  Client: TCrtSocket;
+  Wire: TBytes;
+  I: Integer;
+begin
+  // a long idle timeout isolates the header timeout of this test
+  Port := StartServerWithTimeouts(TEchoHandler.Create, 60000, 1100);
+  Client := TCrtSocket.Open('127.0.0.1', IntToStr(Port), nlTcp, IoTimeoutMs);
+  try
+    // the preface alone starts the connection, but no header block follows
+    SetLength(Wire, ClientPrefaceSize);
+    for I := 0 to ClientPrefaceSize - 1 do
+      Wire[I] := ClientPreface[I];
+    Client.SockSend(@Wire[0], Length(Wire));
+    Client.SockSendFlush();
+    AssertTrue('the server kept a connection with no header block',
+      PeerClosed(Client, 8000));
+  finally
+    Client.Free;
   end;
 end;
 

@@ -166,8 +166,8 @@ function Http2IsIoThread: Boolean;
 
 /// raise when the calling thread runs IO-side code
 // - handler code calls this at entry.  A handler on an IO thread would hold
-//   the connection lock and would stall the whole pool, so the rule is
-//   checked in a debug build and it raises in every build
+//   the connection lock and would stall the whole pool, so the rule is a hard
+//   check and it raises in every build
 procedure Http2AssertHandlerThread(const AWhere: string);
 
 implementation
