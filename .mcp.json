@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "ast-grep": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        ".vendor/ast-grep-mcp",
+        ".vendor/ast-grep-mcp/main.py",
+        "--config",
+        "sgconfig.yml"
+      ]
+    },
+    "clarity": {
+      "command": "clarity",
+      "args": [
+        "mcp",
+        "--dir",
+        "."
+      ]
+    },
+    "codegraph": {
+      "type": "stdio",
+      "command": "codegraph",
+      "args": [
+        "serve",
+        "--mcp"
+      ],
+      "alwaysLoad": true
+    }
+  }
+}

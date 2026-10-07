@@ -1,0 +1,23 @@
+{
+  "skill_name": "do-build",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "do-build introduce-rate-balance",
+      "expected_output": "Creates a Cursor goal, reads .ai/plans/introduce-rate-balance.md, opens one worktree on build/introduce-rate-balance from main, symlinks .vendor, dispatches agents only on disjoint file sets, verifies with task tests in the worktree, merges locally to main, removes the worktree, and marks the goal complete. Does not push or open a PR.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Use a team of agents to implement this in a worktree and land it on main when done: add a RAT currency-class note to the deposits RATE_CHANGE admin transaction docs if the spec already requires it, and skip any code change that is already present.",
+      "expected_output": "Treats the rest of the message as the plan (no .ai/plans/ filename). Still creates one worktree, implements only what is missing, merges to main and drops the tree if there is a real change, or drops the empty worktree without merging if nothing changed. Does not implement on the original checkout.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "do-build .ai/plans/ui-human-review.md and introduce-rate-balance — same worktree, then merge to main and clean up.",
+      "expected_output": "Resolves both plans into a single worktree (not two trees, not best-of-n isolation). Coordinates a team so overlapping files stay sequential. One local merge to main, then the worktree is gone.",
+      "files": []
+    }
+  ]
+}
