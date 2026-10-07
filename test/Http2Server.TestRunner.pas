@@ -40,7 +40,8 @@ uses
   Http2Server.Protocol.Server.Test,
   Http2Server.Seam.Test,
   Http2Server.Stream.Test,
-  Http2Server.Limits.Test;
+  Http2Server.Limits.Test,
+  Http2Server.Output.Test;
 
 const
   /// name of the top-level suite in the runner report
