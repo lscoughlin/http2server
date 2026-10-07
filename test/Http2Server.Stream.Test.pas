@@ -27,7 +27,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs, fpcunit, testregistry,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter,
-  Http2Server.Stream, Http2Server.FlowControl;
+  Http2Server.Stream, Http2Server.FlowControl, Http2Server.Hpack;
 
 type
   /// the connection lock, with a count of the holds for the lock probe
@@ -106,6 +106,10 @@ type
     procedure TestLockIsNeverHeldAcrossWait;
     procedure TestReadEmitsWindowCredit;
     procedure TestInboundOverflowIsVisible;
+    procedure TestRemoteHeadersRoundTrip;
+    procedure TestPendingHeadersTake;
+    procedure TestFinishFlagRoundTrip;
+    procedure TestMarkRemoteEndedClosesRemoteSide;
   end;
 
 implementation
@@ -525,6 +529,69 @@ begin
   FStream.DeliverData(Data, False);
   AssertTrue('a delivery onto a full buffer is visible',
     FStream.InboundWouldOverflow(1));
+end;
+
+procedure TServerStreamTest.TestRemoteHeadersRoundTrip;
+var
+  H: THeaderBlock;
+begin
+  AssertEquals('a fresh stream holds no request headers',
+    0, Length(FStream.RemoteHeaders));
+  SetLength(H, 2);
+  H[0].Name := ':method';
+  H[0].Value := 'GET';
+  H[1].Name := ':path';
+  H[1].Value := '/index';
+  FStream.SetRemoteHeaders(H);
+  H := FStream.RemoteHeaders;
+  AssertEquals('the request block holds two fields', 2, Length(H));
+  AssertEquals('the first field name survives', ':method', H[0].Name);
+  AssertEquals('the second field value survives', '/index', H[1].Value);
+end;
+
+procedure TServerStreamTest.TestPendingHeadersTake;
+var
+  H, Got: THeaderBlock;
+  Status: Integer;
+  EndStream: Boolean;
+begin
+  AssertFalse('a fresh stream holds no response headers',
+    FStream.HasPendingHeaders);
+  SetLength(H, 1);
+  H[0].Name := ':status';
+  H[0].Value := '200';
+  FStream.QueueResponseHeaders(200, H, False);
+  AssertTrue('the response block is pending', FStream.HasPendingHeaders);
+  AssertTrue('the block is taken once',
+    FStream.TakePendingHeaders(Status, Got, EndStream));
+  AssertEquals('the status survives', 200, Status);
+  AssertEquals('the block holds one field', 1, Length(Got));
+  AssertEquals('the field name survives', ':status', Got[0].Name);
+  AssertFalse('the block did not ask for the body end', EndStream);
+  AssertFalse('nothing is pending after the take',
+    FStream.HasPendingHeaders);
+end;
+
+procedure TServerStreamTest.TestFinishFlagRoundTrip;
+begin
+  AssertFalse('a fresh stream does not ask for the end',
+    FStream.WantsFinish);
+  FStream.RequestFinish;
+  AssertTrue('the end request is recorded', FStream.WantsFinish);
+  FStream.ClearFinish;
+  AssertFalse('the end request can be cleared', FStream.WantsFinish);
+end;
+
+procedure TServerStreamTest.TestMarkRemoteEndedClosesRemoteSide;
+begin
+  AssertEquals('a fresh stream is open', Ord(ssOpen), Ord(FStream.State));
+  FStream.MarkRemoteEnded;
+  AssertEquals('the remote half is closed', Ord(ssHalfClosedRemote),
+    Ord(FStream.State));
+  AssertTrue('the body is complete', FStream.BodyIsComplete);
+  FStream.MarkLocalEnded;
+  AssertEquals('both halves closed the stream', Ord(ssClosed),
+    Ord(FStream.State));
 end;
 
 initialization

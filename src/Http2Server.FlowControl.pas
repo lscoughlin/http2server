@@ -69,7 +69,6 @@ type
     /// ADelta is signed; it may push the window negative. A positive delta
     /// that overflows past 2^31-1 is a FLOW_CONTROL_ERROR.
     procedure ApplyInitialWindowDelta(const ADelta: Int64);
-
     /// batching decision: has AThreshold worth of credit accrued?
     function NeedsUpdate(const AThreshold: LongInt): Boolean;
     /// the WINDOW_UPDATE increment to emit and reset the accrued credit
@@ -111,6 +110,10 @@ public
   /// apply a stream-level WINDOW_UPDATE
   procedure ApplyStreamUpdate(const AStreamId: LongWord;
     const AIncrement: LongWord);
+  /// deduct AN octets that a DATA frame of AStreamId carried
+  // - the send side deducts one stream window, with the same write-back rule
+  //   as TryConsume
+  procedure ApplyStreamDataSent(const AStreamId: LongWord; const AN: LongWord);
   /// apply a SETTINGS_INITIAL_WINDOW_SIZE delta to every open stream and
   /// remember the new initial size for streams opened later
   procedure ApplyInitialWindowDelta(const ADelta: Int64);
@@ -251,6 +254,17 @@ begin
   W.TryConsume(AN);
   FStreams[AStreamId] := W;
   Result := True;
+end;
+
+procedure TFlowControl.ApplyStreamDataSent(const AStreamId: LongWord;
+  const AN: LongWord);
+var
+  W: TWindow;
+begin
+  if not FStreams.TryGetValue(AStreamId, W) then
+    Exit;
+  W.ApplyDataSent(AN);
+  FStreams[AStreamId] := W;
 end;
 
 procedure TFlowControl.ApplyConnectionUpdate(const AIncrement: LongWord);

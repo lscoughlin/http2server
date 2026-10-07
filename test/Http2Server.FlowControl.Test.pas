@@ -50,6 +50,7 @@ type
     procedure TestInitialWindowDeltaCanDriveNegative;
     procedure TestInitialWindowDeltaOverflowRaisesFlowControlError;
     procedure TestInitialWindowDeltaAdjustsEveryOpenStream;
+    procedure TestStreamDataSentDeductsTheStreamWindow;
     procedure TestNewStreamUsesUpdatedInitialWindow;
     // 04.5 per-stream isolation
     procedure TestZeroWindowBlocksOnlyThatStream;
@@ -325,6 +326,28 @@ begin
       FC.TryConsume(1, 10));
     AssertEquals('connection window untouched by the refused DATA',
       Int64(65535 - 100), FC.Connection.Size);
+  finally
+    FC.Free;
+  end;
+end;
+
+procedure TFlowControlTest.TestStreamDataSentDeductsTheStreamWindow;
+var
+  FC: TFlowControl;
+  W: TWindow;
+begin
+  FC := TFlowControl.Create(65535, 65535);
+  try
+    FC.OpenStream(1);
+    FC.ApplyStreamDataSent(1, 1000);
+    AssertTrue('stream 1 present', FC.TryGetStream(1, W));
+    AssertEquals('the stream window lost the sent octets', Int64(64535),
+      W.Size);
+    AssertEquals('the connection window is untouched by a stream send',
+      Int64(65535), FC.Connection.Size);
+    // an unknown stream is ignored rather than faulted
+    FC.ApplyStreamDataSent(99, 1000);
+    AssertFalse('the unknown stream stays absent', FC.TryGetStream(99, W));
   finally
     FC.Free;
   end;

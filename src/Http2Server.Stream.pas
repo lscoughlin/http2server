@@ -32,7 +32,8 @@ interface
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs,
-  Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter;
+  Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter,
+  Http2Server.Hpack;
 
 type
   /// the RFC 9113 section 5.1 state of one stream, as the server sees it
@@ -100,6 +101,12 @@ type
     FWriteTimeoutMs: Integer;
     FConsumedSinceUpdate: LongWord;
     FUpdateThreshold: LongWord;
+    FRemoteHeaders: THeaderBlock;
+    FPendingStatus: Integer;
+    FPendingHeaders: THeaderBlock;
+    FPendingEndStream: Boolean;
+    FHasPendingHeaders: Boolean;
+    FFinishRequested: Boolean;
 
     function DoRead(var ABuffer; const ACount: Integer): Integer;
     function DoWrite(const ABuffer; const ACount: Integer): Boolean;
@@ -140,6 +147,28 @@ type
     function IsFinished: Boolean;
     /// mark the local side as ended, as a sent END_STREAM does
     procedure MarkLocalEnded;
+    /// mark the remote side as ended, as a received END_STREAM does
+    procedure MarkRemoteEnded;
+    /// take the request header block the decoder produced
+    procedure SetRemoteHeaders(const AHeaders: THeaderBlock);
+    /// the request header block of this stream
+    function RemoteHeaders: THeaderBlock;
+    /// hold a plain response header block until the IO thread encodes it
+    procedure QueueResponseHeaders(const AStatus: Integer;
+      const AHeaders: THeaderBlock; const AEndStream: Boolean);
+    /// take the pending response header block; False when none is pending
+    // - the IO thread calls this under the connection lock and then encodes
+    //   the block itself, because the HPACK encoder is connection state
+    function TakePendingHeaders(out AStatus: Integer; out AHeaders: THeaderBlock;
+      out AEndStream: Boolean): Boolean;
+    /// record that the handler asked for the end of the response
+    procedure RequestFinish;
+    /// true when the handler asked for the end of the response
+    function WantsFinish: Boolean;
+    /// true when a plain response header block waits for the IO thread
+    function HasPendingHeaders: Boolean;
+    /// clear the end-of-response request, after the last frame carried it
+    procedure ClearFinish;
     /// reset the stream: set the flag, wake a blocked handler and queue the
     /// cancel hook of the stream on a cancel-worker thread
     procedure Cancel(const AErrorCode: THttp2ErrorCode);
@@ -398,6 +427,108 @@ begin
   // a handler blocked on a full outbound buffer wakes on this drain
   FWaiter.Signal;
   Result := True;
+end;
+
+procedure TServerStream.MarkRemoteEnded;
+begin
+  LockStream;
+  try
+    FRemoteEnded := True;
+  finally
+    UnlockStream;
+  end;
+end;
+
+procedure TServerStream.SetRemoteHeaders(const AHeaders: THeaderBlock);
+begin
+  LockStream;
+  try
+    FRemoteHeaders := AHeaders;
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.RemoteHeaders: THeaderBlock;
+begin
+  LockStream;
+  try
+    Result := FRemoteHeaders;
+  finally
+    UnlockStream;
+  end;
+end;
+
+procedure TServerStream.QueueResponseHeaders(const AStatus: Integer;
+  const AHeaders: THeaderBlock; const AEndStream: Boolean);
+begin
+  LockStream;
+  try
+    FPendingStatus := AStatus;
+    FPendingHeaders := AHeaders;
+    FPendingEndStream := AEndStream;
+    FHasPendingHeaders := True;
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.TakePendingHeaders(out AStatus: Integer;
+  out AHeaders: THeaderBlock; out AEndStream: Boolean): Boolean;
+begin
+  LockStream;
+  try
+    Result := FHasPendingHeaders;
+    if not Result then
+      Exit;
+    AStatus := FPendingStatus;
+    AHeaders := FPendingHeaders;
+    AEndStream := FPendingEndStream;
+    FHasPendingHeaders := False;
+    FPendingHeaders := nil;
+  finally
+    UnlockStream;
+  end;
+end;
+
+procedure TServerStream.RequestFinish;
+begin
+  LockStream;
+  try
+    FFinishRequested := True;
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.HasPendingHeaders: Boolean;
+begin
+  LockStream;
+  try
+    Result := FHasPendingHeaders;
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.WantsFinish: Boolean;
+begin
+  LockStream;
+  try
+    Result := FFinishRequested;
+  finally
+    UnlockStream;
+  end;
+end;
+
+procedure TServerStream.ClearFinish;
+begin
+  LockStream;
+  try
+    FFinishRequested := False;
+  finally
+    UnlockStream;
+  end;
 end;
 
 function TServerStream.IsFinished: Boolean;
