@@ -1,0 +1,148 @@
+# http2server - Taskfile entry points.
+#
+# Mirrors the Makefile targets and adds the pinned dependency bootstrap.
+#
+#   task              list tasks
+#   task setup:deps   clone the pinned third_party checkout
+#   task build        build the library unit into bin/
+#   task test         build the library unit + run the fpcunit suite
+#   task clean        remove build outputs
+#
+# On a fresh clone run `task setup:deps` first. See
+# doc/verification/toolchain.md for the pinned revision this task tracks.
+#
+# Open-file-limit prerequisite (the 10,000-connection test)
+# ---------------------------------------------------------
+# The seam test opens 10,000 connections in one process. The per-process
+# file limit must be raised before that test runs.
+#
+#   macOS:  ulimit -n 20000          # the soft limit is raised to 20000
+#           sysctl kern.maxfilesperproc   # the hard ceiling (about 61440)
+#   Linux:  ulimit -n 20000          # the soft limit is raised to 20000
+#           /etc/security/limits.conf    # add "nofile 20000" for the user
+#           cat /proc/sys/fs/file-max    # the system-wide ceiling
+#
+# Raise the limit in the shell that starts the test binary. A limit that is
+# below the connection count makes the test fail with EMFILE, not with a
+# protocol error.
+#
+# Environment overrides (same names as the Makefile): FPC, FPC_UNITS,
+# MORMOT, OPENSSL_LIBPATH.
+version: '3'
+
+vars:
+  FPC:
+    sh: echo "${FPC:-fpc}"
+  FPC_VERSION:
+    sh: '{{.FPC}} -iV 2>/dev/null || true'
+  FPC_CPU:
+    sh: '{{.FPC}} -iTP 2>/dev/null || true'
+  FPC_OS:
+    sh: '{{.FPC}} -iTO 2>/dev/null || true'
+  FPC_UNITS:
+    sh: |
+      if [ -n "${FPC_UNITS:-}" ]; then
+        echo "$FPC_UNITS"
+      elif [ "$(uname -s)" = "Darwin" ]; then
+        echo "/usr/local/lib/fpc/{{.FPC_VERSION}}/units/{{.FPC_CPU}}-{{.FPC_OS}}"
+      else
+        echo "/usr/lib/fpc/{{.FPC_VERSION}}/units/{{.FPC_CPU}}-{{.FPC_OS}}"
+      fi
+  MORMOT: 'third_party/mORMot2/src'
+  MORMOT_REPO: 'third_party/mORMot2'
+  MORMOT_REV: '2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc'
+  OPENSSL_LIBPATH:
+    sh: |
+      if [ -n "${OPENSSL_LIBPATH:-}" ]; then
+        echo "$OPENSSL_LIBPATH"
+      elif [ "$(uname -s)" = "Darwin" ]; then
+        echo "/opt/homebrew/opt/openssl@3/lib"
+      else
+        echo "/usr/lib/x86_64-linux-gnu"
+      fi
+  FPCFLAGS: '-O2 -vw -Mdelphi -Fu./src -Fu{{.FPC_UNITS}}/fcl-fpcunit -Fu{{.MORMOT}}/core -Fu{{.MORMOT}}/lib -Fu{{.MORMOT}}/net -Fu{{.MORMOT}}/crypt'
+  BIN: bin
+
+env:
+  OPENSSL_LIBPATH: '{{.OPENSSL_LIBPATH}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  setup:deps:
+    desc: Clone the revision-pinned third_party mORMot2 checkout (idempotent)
+    cmds:
+      - |
+        set -e
+        repo="{{.MORMOT_REPO}}"
+        rev="{{.MORMOT_REV}}"
+        if [ ! -d "$repo/.git" ]; then
+          echo "cloning mORMot2 -> $repo"
+          git clone https://github.com/synopse/mORMot2.git "$repo"
+        fi
+        if [ "$(git -C "$repo" rev-parse HEAD)" != "$rev" ]; then
+          echo "pinning $repo at $rev"
+          git -C "$repo" fetch --all --tags 2>/dev/null || true
+          git -C "$repo" checkout "$rev"
+        else
+          echo "$repo already at $rev"
+        fi
+
+  setup:limits:
+    desc: Report the open-file limits for the 10,000-connection test
+    silent: true
+    cmds:
+      - |
+        echo "the 10,000-connection test needs a per-process open-file limit above 10000"
+        case "$(uname -s)" in
+          Darwin)
+            ceiling=$(sysctl -n kern.maxfilesperproc 2>/dev/null || echo unknown)
+            echo "macOS per-process hard ceiling (kern.maxfilesperproc): $ceiling"
+            echo "raise the soft limit in the shell that runs the test: ulimit -n 20000"
+            ;;
+          *)
+            ceiling=$(cat /proc/sys/fs/file-max 2>/dev/null || echo unknown)
+            echo "Linux system-wide file ceiling (/proc/sys/fs/file-max): $ceiling"
+            echo "raise the soft limit in the shell that runs the test: ulimit -n 20000"
+            echo "a persistent setting lives in /etc/security/limits.conf as: nofile 20000"
+            ;;
+        esac
+        echo "a limit below the connection count makes the test fail with EMFILE"
+
+  build:
+    desc: Compile the library unit into bin/
+    cmds:
+      - mkdir -p {{.BIN}}
+      - '{{.FPC}} {{.FPCFLAGS}} -Cn -FE{{.BIN}} src/Http2Server.pas'
+    sources:
+      - src/*.pas
+    generates:
+      - '{{.BIN}}/Http2Server.ppu'
+
+  examples:
+    desc: Compile the example programs into bin/ (smoke build, not run)
+    cmds:
+      - mkdir -p {{.BIN}}
+      - |
+        for f in examples/*.pas; do
+          [ -e "$f" ] || continue
+          {{.FPC}} {{.FPCFLAGS}} -FE{{.BIN}} "$f" || exit 1
+        done
+
+  test:
+    desc: Build the library unit and run the fpcunit suite
+    deps:
+      - build
+    cmds:
+      - mkdir -p {{.BIN}}
+      - '{{.FPC}} {{.FPCFLAGS}} -Fu./test -FE{{.BIN}} test/Http2Server.RunTests.pas'
+      - '{{.BIN}}/Http2Server.RunTests --all --format=plain --sparse'
+
+  clean:
+    desc: Remove build outputs
+    cmds:
+      - rm -rf {{.BIN}} src/*.o src/*.ppu test/*.o test/*.ppu examples/*.o examples/*.ppu

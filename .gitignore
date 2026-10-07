@@ -1,3 +1,22 @@
 plan/
 .ai/
 .claude/settings.local.json
+
+# Build artifacts
+bin/
+*.o
+*.ppu
+*.a
+spike/*.o
+
+# Vendored third-party checkouts (kept locally, never committed)
+third_party/
+
+# Editor / OS noise
+.DS_Store
+*.lps
+*.bak
+*~
+
+# Task runner cache (go-task checksum cache)
+.task
