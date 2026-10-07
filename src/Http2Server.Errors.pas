@@ -75,6 +75,16 @@ type
   /// a non-replayable body cannot be re-sent on a 307/308 redirect
   EHttpNotReplayable = class(EHttpError);
 
+  /// the factory rejected its own configuration; Validate names each fault
+  EServerConfigError = class(EHttpError);
+  /// the peer cancelled the stream; raised in the handler's own thread
+  // - every stream call after a cancellation raises this class too
+  EStreamCancelled = class(EHttpStreamError);
+  /// the server sent RST_STREAM for this stream
+  EStreamReset = class(EHttpStreamError);
+  /// the server stopped, so no stream makes progress
+  EServerStopped = class(EHttpError);
+
 /// stable, human-readable name for a wire error code
 function Http2ErrorCodeName(const ACode: THttp2ErrorCode): string;
 

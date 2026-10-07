@@ -34,6 +34,7 @@ uses
   Http2Server.HpackProps.Test,
   Http2Server.FlowControl.Test,
   Http2Server.Headers.Test,
+  Http2Server.Protocol.Server.Test,
   Http2Server.Limits.Test;
 
 const

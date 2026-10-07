@@ -26,6 +26,14 @@ uses
 const
   /// every frame starts with a 9-byte header
   FrameHeaderSize = 9;
+  /// RFC 9113 section 3.4 client connection preface, in octets
+  ClientPrefaceSize = 24;
+  /// RFC 9113 section 3.4 client connection preface, as raw octets
+  // - the server reads these 24 octets before the first frame and compares
+  //   them with the bytes that arrive on the stream
+  ClientPreface: array[0..ClientPrefaceSize - 1] of Byte = (
+    $50, $52, $49, $20, $2A, $20, $48, $54, $54, $50, $2F, $32,
+    $2E, $30, $0D, $0A, $0D, $0A, $53, $4D, $0D, $0A, $0D, $0A);
   /// SETTINGS_* payload entries are 6 bytes (2-byte id + 4-byte value)
   SettingsEntrySize = 6;
   /// RFC 7540 default SETTINGS_MAX_FRAME_SIZE
@@ -126,6 +134,17 @@ function BuildRstStreamFrame(const AStreamId: LongWord;
   const AErrorCode: THttp2ErrorCode): TFrame;
 function BuildSettingsFrame(const ASettings: TConnectionSettings): TFrame;
 function BuildSettingsAck: TFrame;
+
+/// the SETTINGS frame a server sends as the first frame of a connection
+// - the server states the values it will enforce, so the peer can plan
+function BuildServerSettings(const ASettings: TConnectionSettings): TFrame;
+
+/// true when ABuffer holds the exact client connection preface
+// - a server reads this preface before the first frame of a new connection
+function CheckClientPreface(const ABuffer: TBytes): Boolean;
+/// read and check the 24-octet client connection preface from a stream
+// - raises EHttpProtocolError(ecProtocolError) when the octets differ
+procedure ReadClientPreface(const AStream: TStream);
 function BuildPingFrame(const AData: TBytes; const AAck: Boolean): TFrame;
 function BuildGoAwayFrame(const ALastStreamId: LongWord;
   const AErrorCode: THttp2ErrorCode; const ADebug: TBytes): TFrame;
@@ -495,6 +514,47 @@ end;
 function BuildSettingsAck: TFrame;
 begin
   Result := TFrame.Create(ftSettings, [ffAck], 0, nil);
+end;
+
+function BuildServerSettings(const ASettings: TConnectionSettings): TFrame;
+begin
+  // The server sends the same encoding as any peer. The separate entry point
+  // exists so a reader can tell the server's first frame from a later one.
+  Result := BuildSettingsFrame(ASettings);
+end;
+
+function CheckClientPreface(const ABuffer: TBytes): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if Length(ABuffer) <> ClientPrefaceSize then
+    exit;
+  for I := 0 to ClientPrefaceSize - 1 do
+    if ABuffer[I] <> ClientPreface[I] then
+      exit;
+  Result := True;
+end;
+
+procedure ReadClientPreface(const AStream: TStream);
+var
+  Buf: TBytes;
+  N, Got: Integer;
+begin
+  SetLength(Buf, ClientPrefaceSize);
+  N := 0;
+  while N < ClientPrefaceSize do
+  begin
+    Got := AStream.Read(Buf[N], ClientPrefaceSize - N);
+    if Got <= 0 then
+      raise EHttpConnectionClosed.Create(
+        'stream ended inside the client connection preface');
+    Inc(N, Got);
+  end;
+  if not CheckClientPreface(Buf) then
+    raise EHttpProtocolError.Create(
+      'client connection preface is not PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n',
+      ecProtocolError);
 end;
 
 function BuildPingFrame(const AData: TBytes; const AAck: Boolean): TFrame;

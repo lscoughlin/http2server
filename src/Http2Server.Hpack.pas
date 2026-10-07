@@ -51,6 +51,11 @@ type
     FDecoder: THpackTableState;
     FMaxTableSize: LongWord;
     FHuffman: Boolean;
+    /// cap on the octets a single decoded header list may occupy
+    // - zero means no cap; RFC 9113 section 10.5.1 defines the size of a
+    //   field list as the sum over the field of 32 plus the name octets
+    //   plus the value octets
+    FMaxHeaderListSize: LongWord;
     function GetEncoderTableSize: LongWord;
     function GetDecoderTableSize: LongWord;
     function GetEncoderMaxSize: LongWord;
@@ -75,6 +80,12 @@ type
     property DecoderMaxSize: LongWord read GetDecoderMaxSize;
     /// when true (default) string literals are Huffman-encoded
     property Huffman: Boolean read FHuffman write FHuffman;
+    /// cap on the octets one decoded header list may occupy
+    // - Decode raises EHttpProtocolError(ecEnhanceYourCalm) as soon as the
+    //   running total passes the cap, so a hostile peer cannot make the
+    //   server build an unbounded list before the limit is noticed
+    property MaxHeaderListSize: LongWord
+      read FMaxHeaderListSize write FMaxHeaderListSize;
   end;
 
 implementation
@@ -703,6 +714,7 @@ var
   Name: string;
   F: THttpHeaderField;
   SizeUpdateAllowed: Boolean;
+  ListSize: LongWord;
 
   procedure Add(const AName: string);
   begin
@@ -710,10 +722,24 @@ var
     F.Value := DecodeString(AData, Pos);
   end;
 
+  /// append one field and stop as soon as the list passes the cap
+  procedure Append(const AField: THttpHeaderField);
+  begin
+    ListSize := ListSize + EntrySize(AField);
+    if (FMaxHeaderListSize <> 0) and (ListSize > FMaxHeaderListSize) then
+      raise EHttpProtocolError.Create(Format(
+        'header list of %d octets exceeds SETTINGS_MAX_HEADER_LIST_SIZE %d',
+        [ListSize, FMaxHeaderListSize]), ecEnhanceYourCalm);
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := AField;
+    SizeUpdateAllowed := False;
+  end;
+
 begin
   Result := nil;
   SetLength(Result, 0);
   Pos := 0;
+  ListSize := 0;
   SizeUpdateAllowed := True;
   while Pos < Length(AData) do
   begin
@@ -725,9 +751,7 @@ begin
       if Idx = 0 then
         CompressionError('HPACK: indexed field with index 0');
       F := TableEntryAt(FDecoder, Idx);
-      SetLength(Result, Length(Result) + 1);
-      Result[High(Result)] := F;
-      SizeUpdateAllowed := False;
+      Append(F);
     end
     else if (B and $C0) = $40 then
     begin
@@ -737,9 +761,7 @@ begin
       Add(Name);
       F.Sensitive := False;
       TableInsert(FDecoder, F);
-      SetLength(Result, Length(Result) + 1);
-      Result[High(Result)] := F;
-      SizeUpdateAllowed := False;
+      Append(F);
     end
     else if (B and $E0) = $20 then
     begin
@@ -758,9 +780,7 @@ begin
       Name := DecodeFieldName(AData, Pos, FDecoder, Idx);
       Add(Name);
       F.Sensitive := True;
-      SetLength(Result, Length(Result) + 1);
-      Result[High(Result)] := F;
-      SizeUpdateAllowed := False;
+      Append(F);
     end
     else
     begin
@@ -769,9 +789,7 @@ begin
       Name := DecodeFieldName(AData, Pos, FDecoder, Idx);
       Add(Name);
       F.Sensitive := False;
-      SetLength(Result, Length(Result) + 1);
-      Result[High(Result)] := F;
-      SizeUpdateAllowed := False;
+      Append(F);
     end;
   end;
 end;
