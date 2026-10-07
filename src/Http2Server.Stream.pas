@@ -74,10 +74,11 @@ type
   private
     /// the connection lock, shared by every stream of one connection
     FConnLock: TCriticalSection;
-    /// the per-stream lock; a handler holds it for one buffer operation and
-    /// never across a wait, so a blocked handler read leaves the connection
-    /// open to the IO thread
+    /// the per-stream lock; a handler takes it together with the connection
+    /// lock for one buffer operation and never holds either across a wait, so
+    /// a blocked handler read leaves the connection open to the IO thread
     FStreamLock: TCriticalSection;
+    FLockNested: Boolean;
     FHost: IStreamHost;
     FWaiter: IStreamWaiter;
     FStreamId: LongWord;
@@ -571,6 +572,10 @@ end;
 
 procedure TServerStream.LockStream;
 begin
+  // the connection lock comes first, so the IO thread and a handler thread
+  // always take the two locks in the same order
+  if (FConnLock <> nil) and not FLockNested then
+    FConnLock.Acquire;
   FStreamLock.Acquire;
   Inc(FLockDepth);
   if FLockDepth > FMaxLockDepth then
@@ -581,6 +586,8 @@ procedure TServerStream.UnlockStream;
 begin
   Dec(FLockDepth);
   FStreamLock.Release;
+  if (FConnLock <> nil) and not FLockNested then
+    FConnLock.Release;
 end;
 
 procedure TServerStream.RaiseIfCancelled;

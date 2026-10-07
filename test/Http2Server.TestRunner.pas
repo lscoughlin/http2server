@@ -29,6 +29,7 @@ uses
   SysUtils, fpcunit, testregistry,
   // each unit registers its test cases in its initialization section
   Http2Server.Alpn.Test,
+  Http2Server.Connection.Test,
   Http2Server.Errors.Test,
   Http2Server.Frames.Test,
   Http2Server.Hpack.Test,
