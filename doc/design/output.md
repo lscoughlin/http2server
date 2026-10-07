@@ -34,11 +34,11 @@ bytes and gives each of them a share of the connection window.
 | `MaxFrameSize` | The largest frame this server sends. |
 | `BytesPerTurn` | The share of the connection window one stream takes in a turn. A value of zero lets every active stream take its equal share of the window. |
 
-`Share` is the connection window divided by the count of active streams. The
-value `BytesPerTurn` caps that share when it is not zero. Each stream then
-sends at most its share, in as many frames as the peer frame size requires.
-The turn starts one stream further on than the last turn, so ten equal
-streams finish within one turn of each other.
+`Share` is the connection window divided by the count of active streams.
+When `BytesPerTurn` is not zero it caps that share. Each stream then sends at
+most its share, in as many frames as the peer frame size requires. The turn
+starts one stream further on than the last turn, so ten equal streams finish
+within one turn of each other.
 
 `DrainStream` reads the stream window first. A stream with no window credit
 sends nothing, and the other streams are not affected, because the connection

@@ -41,7 +41,8 @@ uses
   Http2Server.Seam.Test,
   Http2Server.Stream.Test,
   Http2Server.Limits.Test,
-  Http2Server.Output.Test;
+  Http2Server.Output.Test,
+  Http2Server.Admission.Test;
 
 const
   /// name of the top-level suite in the runner report
