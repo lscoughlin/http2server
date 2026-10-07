@@ -36,6 +36,8 @@ uses
   Http2Server.FlowControl.Test,
   Http2Server.Headers.Test,
   Http2Server.Protocol.Server.Test,
+  Http2Server.Seam.Test,
+  Http2Server.Stream.Test,
   Http2Server.Limits.Test;
 
 const
