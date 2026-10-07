@@ -758,6 +758,9 @@ begin
   Res := TServerStreamResponse.Create(Stream);
   try
     try
+      // a handler must never run on an IO thread: it would hold the connection
+      // lock and would stall the whole IO pool
+      Http2AssertHandlerThread('THandlerPool.TakeOne');
       FHandler.Handle(Req, Res);
     except
       on E: EStreamCancelled do

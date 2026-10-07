@@ -479,6 +479,9 @@ begin
   finally
     UnlockStream;
   end;
+  // the handler queued headers, so the IO side must wake to encode them
+  if Assigned(FHost) then
+    FHost.OutputPending(FStreamId);
 end;
 
 function TServerStream.TakePendingHeaders(out AStatus: Integer;
@@ -507,6 +510,9 @@ begin
   finally
     UnlockStream;
   end;
+  // a finish with an empty buffer still owes the peer an END_STREAM frame
+  if Assigned(FHost) then
+    FHost.OutputPending(FStreamId);
 end;
 
 function TServerStream.HasPendingHeaders: Boolean;

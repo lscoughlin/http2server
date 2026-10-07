@@ -97,10 +97,16 @@ type
     /// the monotonic second at which the first header block must have ended
     // - zero once the first request reached the core
     FHeaderDeadlineSec: TAsyncConnectionSec;
-    /// move the core output into the mORMot2 write buffer
-    // - the core lock is held for the drain only, so the HPACK encoder keeps
-    //   one owner per connection
-    function PushCoreOutput: Boolean;
+    /// guards the write path against its own nested AfterWrite callback
+    // - fOwner.Write may call AfterWrite before it returns, so this flag keeps
+    //   one send loop per connection
+    FInSend: Boolean;
+    /// a wake-up that arrived while the send loop ran
+    // - the outer loop repeats when this flag is set, so a wake-up that
+    //   loses the race to the loop exit is never lost
+    FSendRequested: Boolean;
+    /// guards the two send flags
+    FSendLock: TCriticalSection;
   protected
     procedure AfterCreate; override;
     procedure BeforeDestroy; override;
@@ -241,10 +247,12 @@ begin
     FServer.Factory.Clock);
   FWaker := THttp2ConnectionWaker.Create(Self);
   FCore.SetWriteWaker(FWaker);
+  FSendLock := TCriticalSection.Create;
 end;
 
 procedure THttp2AsyncConnection.BeforeDestroy;
 begin
+  FSendLock.Free;
   FCore.Free;
   FCore := nil;
   FWaker := nil;
@@ -294,7 +302,7 @@ begin
     end;
     if FCore.GoAwaySent and (FCore.OpenStreams = 0) then
       exit(soClose);
-    PushCoreOutput;
+    SendPendingOutput;
   finally
     Http2IoThreadLeave;
   end;
@@ -304,9 +312,10 @@ function THttp2AsyncConnection.AfterWrite: TPollAsyncSocketOnReadWrite;
 begin
   Http2IoThreadEnter;
   try
+    // the write buffer drained.  The send loop of SendPendingOutput carries
+    // the next pull, because fOwner.Write calls this method before it
+    // returns, so a pull here would recurse into the same write path
     result := soContinue;
-    // the write buffer drained, so more core output may reach the socket now
-    PushCoreOutput;
   finally
     Http2IoThreadLeave;
   end;
@@ -315,32 +324,62 @@ end;
 function THttp2AsyncConnection.SendPendingOutput: Boolean;
 var
   Data: TBytes;
+  Again: Boolean;
 begin
-  result := false;
+  result := False;
   if (FCore = nil) or IsClosed then
     exit;
-  PushCoreOutput;
-  if not FCore.TakeOutput(Data) then
-    exit;
-  // the mORMot2 write path takes the connection write lock, sends at once
-  // when it can, and otherwise subscribes for the write event.  A false
-  // answer means the lock went to the IO thread, so one retry runs the
-  // second check of the mORMot2 wake-up pattern
-  result := fOwner.Write(Self, pointer(Data), Length(Data), cWriteTimeoutMs);
-  if not result and not IsClosed then
-    result := fOwner.Write(Self, pointer(Data), Length(Data), cWriteTimeoutMs);
-end;
-
-function THttp2AsyncConnection.PushCoreOutput: Boolean;
-begin
-  result := false;
-  if FCore = nil then
-    exit;
-  // the drain turns the handler buffers into DATA frames.  It runs under the
-  // core lock, which every stream also takes, so the HPACK encoder keeps one
-  // owner per connection
-  FCore.DrainPending;
-  result := FCore.HasOutput;
+  // a wake-up that arrives while the loop runs is recorded and not dropped,
+  // because the outer loop repeats once the flag is set.  The lock closes the
+  // race between the loop exit and the last wake-up
+  FSendLock.Acquire;
+  try
+    FSendRequested := True;
+    if FInSend then
+      exit;   // the running loop owns the send path and will repeat
+    FInSend := True;
+  finally
+    FSendLock.Release;
+  end;
+  try
+    repeat
+      FSendLock.Acquire;
+      try
+        FSendRequested := False;
+      finally
+        FSendLock.Release;
+      end;
+      // the drain turns the handler buffers into DATA frames.  It runs under
+      // the core lock, which every stream also takes, so the HPACK encoder
+      // keeps one owner per connection
+      FCore.DrainPending;
+      while FCore.TakeOutput(Data) do
+      begin
+        // the mORMot2 write path takes the connection write lock, sends at
+        // once when it can, and otherwise subscribes for the write event.  A
+        // false answer means the lock went to the IO thread, so one retry runs
+        // the second check of the mORMot2 wake-up pattern
+        if not fOwner.Write(Self, pointer(Data), Length(Data),
+             cWriteTimeoutMs) then
+          fOwner.Write(Self, pointer(Data), Length(Data), cWriteTimeoutMs);
+        result := True;
+      end;
+      FSendLock.Acquire;
+      try
+        Again := FSendRequested;
+      finally
+        FSendLock.Release;
+      end;
+      // the loop repeats for a late wake-up or for output a handler just made
+    until (not Again) and (not FCore.HasOutput);
+  finally
+    FSendLock.Acquire;
+    try
+      FInSend := False;
+    finally
+      FSendLock.Release;
+    end;
+  end;
 end;
 
 function THttp2AsyncConnection.OnLastOperationIdle(
@@ -472,10 +511,15 @@ begin
 end;
 
 function THttp2AsyncServer.BoundPort: Integer;
+var
+  Addr: TNetAddr;
 begin
-  result := 0;
-  if (Server <> nil) and (Server.Port <> '') then
-    result := StrToIntDef(Server.Port, 0);
+  // a factory port of 0 asks the operating system for a free port, so the
+  // bound port must be read back from the socket itself
+  result := StrToIntDef(Server.Port, 0);
+  if (result = 0) and (Server <> nil) and (Server.Sock <> nil) then
+    if Server.Sock.GetName(Addr) = nrOk then
+      result := Addr.Port;
 end;
 
 end.

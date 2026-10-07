@@ -764,9 +764,12 @@ var
   Turns: Integer;
 begin
   Build;
-  // one chunk per turn, so the writer needs several turns to finish
+  // half a chunk per turn, so the single blocked write needs at least two
+  // turns to release.  A whole chunk per turn would let one turn free the
+  // writer, and whether the writer thread reports that before the loop checks
+  // its Done flag is a race, so the test would pass or fail by timing
   Override.MaxFrameSize := SmallFrameSize;
-  Override.BytesPerTurn := BufferChunk;
+  Override.BytesPerTurn := BufferChunk div 2;
   FKeepWaker := FWaker;
   FDrain.Free;
   FDrain := TOutputDrain.Create(Override, FFlow, FWaker);

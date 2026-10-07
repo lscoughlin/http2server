@@ -245,25 +245,31 @@ begin
   if AStreams.Count = 0 then
     Exit;
   Active := ActiveCount(AStreams);
-  if Active = 0 then
-    Exit;
-  if FFlow.Connection.Size <= 0 then
-    Exit;
-  // every active stream gets an equal share of what the connection window
-  // currently holds, so a stream cannot starve the others
-  Share := FFlow.Connection.Size div Active;
-  if FOptions.BytesPerTurn > 0 then
-    if Int64(FOptions.BytesPerTurn) < Share then
-      Share := FOptions.BytesPerTurn;
-  if Share <= 0 then
-    Share := 1;
+  // a stream that only asked to finish carries no data, so it needs no share
+  // of the connection window.  The turn still visits it, because an empty
+  // DATA frame with END_STREAM is the whole of its remaining output.
+  Share := 0;
+  if (Active > 0) and (FFlow.Connection.Size > 0) then
+  begin
+    // every active stream gets an equal share of what the connection window
+    // currently holds, so a stream cannot starve the others
+    Share := FFlow.Connection.Size div Active;
+    if FOptions.BytesPerTurn > 0 then
+      if Int64(FOptions.BytesPerTurn) < Share then
+        Share := FOptions.BytesPerTurn;
+    if Share <= 0 then
+      Share := 1;
+  end;
   for I := 0 to AStreams.Count - 1 do
   begin
     Index := (FRrCursor + I) mod AStreams.Count;
     Stream := AStreams[Index];
-    if Stream.OutboundCount = 0 then
+    if (Stream.OutboundCount = 0) and not Stream.WantsFinish then
       Continue;
-    DrainStream(Stream, Share);
+    if Stream.OutboundCount = 0 then
+      DrainStream(Stream, 0)   // the finish branch needs no share
+    else if Share > 0 then
+      DrainStream(Stream, Share);
   end;
   // the next turn starts one stream further on
   FRrCursor := (FRrCursor + 1) mod AStreams.Count;
