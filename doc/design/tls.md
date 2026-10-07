@@ -165,13 +165,13 @@ deadline (`mormot.lib.openssl11.pas:12146-12166`). A larger factory value can
 never take effect, so `EffectiveHandshakeTimeoutMs` clamps the factory value to
 that bound (`src/Http2Server.Tls.pas:128-139`). The server also sets the socket
 send and receive deadlines to the clamped value before the handshake runs
-(`src/Http2Server.Async.pas:262-279`). A client that opens a socket and sends
+(`src/Http2Server.Async.pas:273-293`). A client that opens a socket and sends
 nothing holds one IO thread for a bounded time only, and other clients still
 complete their handshakes on other threads.
 
 A TLS connection must select `h2`. After the handshake the connection checks
 the negotiated name and refuses the connection when the name is not `h2`
-(`src/Http2Server.Async.pas:262-279`).
+(`src/Http2Server.Async.pas:273-293`).
 
 ## Open verification
 
