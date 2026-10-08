@@ -42,7 +42,7 @@ mORMot2. It is the option A of the analysis below.
 ## mORMot2 facts the route rests on
 
 The following facts come from reading the pinned mORMot2 revision
-`2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc`. They are the facts that decide the
+`21b62bc88737336d9a1928a748d5f0e6a2f319a7`. They are the facts that decide the
 route, so they are recorded here with their citations.
 
 **Where the server context exists.** `TOpenSslNetTls.AfterBind` creates the

@@ -7,7 +7,7 @@ notes:
   - This document describes the IO pool of the server, the mORMot2 async
     classes it extends, the TLS plug-in of a connection and the write wake-up.
   - The document cites the server code as path:line.  The mORMot2 facts cite
-    the pinned revision 2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc.
+    the pinned revision 21b62bc88737336d9a1928a748d5f0e6a2f319a7.
 scope: The mORMot2 async subclasses, the per-connection core bridge, the TLS handshake, the write wake-up and the thread rule.
 primary_types:
   - THttp2AsyncConnection
@@ -41,7 +41,7 @@ integration.
 ## The async class set
 
 The server extends four mORMot2 classes. The reading of the pinned revision
-`2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc` fixes which method does what.
+`21b62bc88737336d9a1928a748d5f0e6a2f319a7` fixes which method does what.
 
 | Class | Role | The methods the server overrides |
 | --- | --- | --- |

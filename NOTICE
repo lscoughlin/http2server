@@ -32,8 +32,14 @@ They are not covered by the licence of this product.
    LGPL linking exception.
    This product uses the mORMot2 async, socket, TLS and ALPN units at build
    time and at run time. The mORMot2 checkout is a pinned external
-   dependency at revision 2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc. It is
+   dependency at revision 21b62bc88737336d9a1928a748d5f0e6a2f319a7. It is
    not part of the http2server source distribution.
+   That revision carries the aarch64 lock fix of `b2b195d` ("Locked*() are
+   now full memory barriers on FPC non-Intel CPUs"): on aarch64 FPC builds
+   the `Interlocked*` calls of a `TLightLock` without a memory barrier, so
+   the lock and unlock of mORMot2's pending-event list published no write and
+   the IO pool failed with an access violation under load. An earlier
+   revision `2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc` predates that fix.
 
 2. OpenSSL (loaded at run time from the system or from Homebrew)
    Licence: the Apache License, Version 2.0.
