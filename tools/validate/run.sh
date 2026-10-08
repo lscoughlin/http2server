@@ -18,6 +18,14 @@ here=$(dirname "$0")
 root=$(cd "$here/../.." && pwd)
 . "$here/lib.sh"
 
+# The TLS checks load OpenSSL at run time through mORMot2.  The library
+# directory of the development host is the Homebrew one, and a caller that
+# names another directory in OPENSSL_LIBPATH keeps it.
+if [ -z "${OPENSSL_LIBPATH:-}" ] && [ -d /opt/homebrew/opt/openssl@3/lib ]; then
+  OPENSSL_LIBPATH=/opt/homebrew/opt/openssl@3/lib
+  export OPENSSL_LIBPATH
+fi
+
 report_skip() {
   echo "SKIP  $1: $2"
 }
@@ -45,7 +53,6 @@ start_interop_server "$root/bin/interop_server" || {
 }
 trap 'stop_interop_server' EXIT INT TERM
 echo "the example server listens on port $INTEROP_PORT"
-
 # --- h2spec ---
 if command -v h2spec >/dev/null 2>&1; then
   if [ "$package" = "fast" ]; then
@@ -100,14 +107,49 @@ else
 fi
 
 # --- h2load ---
+# The streams in flight are `-c` times `-m`, and the server admits
+# `HandlerThreads + Queue.Depth` of them (4 + 64 = 68 in this build).  A
+# larger product reaches the bound and the server refuses the excess with
+# REFUSED_STREAM, which RFC 9113 section 8.7 permits.  This run stays inside
+# the bound, so a refusal is a defect here.
 if command -v h2load >/dev/null 2>&1; then
-  if h2load -n 200 -c 10 -m 10 "http://127.0.0.1:$INTEROP_PORT/" >/dev/null 2>&1 </dev/null; then
-    report_pass "h2load 200 requests, 10 connections, 10 streams each"
+  if h2load -n 200 -c 10 -m 6 "http://127.0.0.1:$INTEROP_PORT/" >/dev/null 2>&1 </dev/null; then
+    report_pass "h2load 200 requests, 10 connections, 6 streams each (60 in flight)"
   else
-    report_fail "h2load 200 requests, 10 connections, 10 streams each"
+    report_fail "h2load 200 requests, 10 connections, 6 streams each (60 in flight)"
   fi
 else
   report_skip h2load "the tool is not installed"
+fi
+
+# the checks above used the clear-text server; the TLS check starts its own
+stop_interop_server
+
+# --- TLS and ALPN ---
+# One listener serves one transport, so the TLS checks start a second server
+# with a certificate.  A certificate that is absent is created here.
+if command -v openssl >/dev/null 2>&1; then
+  cert_dir=$(ensure_validation_certificate "$root/test/certs")
+  if [ -n "$cert_dir" ]; then
+    if start_interop_server "$root/bin/interop_server" \
+      --cert="$cert_dir/localhost.crt" --key="$cert_dir/localhost.key"; then
+      tls_port=$INTEROP_PORT
+      alpn=$(echo | openssl s_client -connect "127.0.0.1:$tls_port" -alpn h2 2>/dev/null \
+        | sed -n 's/^ *ALPN protocol: *//p' | head -1)
+      if [ "$alpn" = "h2" ]; then
+        report_pass "openssl s_client negotiates ALPN h2"
+      else
+        report_fail "openssl s_client ALPN result ($alpn)"
+      fi
+      stop_interop_server
+    else
+      report_fail "the TLS server did not report a port"
+    fi
+  else
+    report_skip openssl "the certificate could not be created"
+  fi
+else
+  report_skip openssl "the tool is not installed"
 fi
 
 exit "$exit_code"

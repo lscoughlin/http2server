@@ -144,18 +144,27 @@ close sequence. The observer receives the bucket trip, and then the
 ## The default limits
 
 `THttp2ServerFactory.Create` sets the default of every bucket
-(`src/Http2Server.Config.pas:412`). The reset bucket holds 1000 tokens, with
+(`src/Http2Server.Config.pas:419`). The reset bucket holds 1000 tokens, with
 a refill of 100 tokens a second, a cost of one token before dispatch and
-five tokens after it (`src/Http2Server.Config.pas:412`).
+five tokens after it (`src/Http2Server.Config.pas:420`).
 
-The `PING`, `SETTINGS`, `empty DATA` and `CONTINUATION` buckets each hold
-100 tokens, with a refill of 10 tokens a second
-(`src/Http2Server.Config.pas:417`). Each of these kinds is a flood signal
-with no legitimate high rate, so a small bucket is the correct default.
+The `SETTINGS`, `empty DATA` and `CONTINUATION` buckets each hold 100 tokens,
+with a refill of 10 tokens a second (`src/Http2Server.Config.pas:429`). The
+`PING` bucket holds the same values (`src/Http2Server.Config.pas:425`). Each
+of these kinds is a flood signal with no legitimate high rate, so a small
+bucket is the correct default.
 
 The `WINDOW_UPDATE` bucket holds 10000 tokens, with a refill of 4000 tokens
-a second (`src/Http2Server.Config.pas:432`). The capacity admits a whole
+a second (`src/Http2Server.Config.pas:440`). The capacity admits a whole
 burst of a few megabytes, and the refill rate sits above the measured
 rate of 2450 frames a second with headroom. A small bucket of 100 tokens
 closed a healthy connection on a body of less than two megabytes: 107
-control frames arrived before the body ended.
+control frames arrived before the body ended. The measurement is in
+`doc/verification/validation.md`.
+
+The queue depth of 64 (`src/Http2Server.Config.pas:369`) and the IO thread
+count of 4 (`src/Http2Server.Config.pas:409`) come from the same seam
+measurement. The listener, stream and timeout values are the chosen protocol
+and operational bounds: RFC 9113 section 6.5.2 sets 100 concurrent streams as
+the customary value, 16384 is the frame size that RFC 9113 section 4.2
+recommends, and a timeout bounds a stalled peer.

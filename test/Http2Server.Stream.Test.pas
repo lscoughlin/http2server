@@ -38,18 +38,26 @@ type
   end;
 
   /// a stream host that records the credit the handler consumed
-  TRecordingHost = class(TInterfacedObject, IStreamHost)
+  TRecordingHost = class(TInterfacedObject, IStreamHost, IRefusalHost)
   private
     FUpdates: LongWord;
     FCalls: Integer;
     FWrites: Integer;
+    FRefusals: Integer;
+    FRefusalCode: THttp2ErrorCode;
   public
     procedure WindowUpdatePending(const AStreamId: LongWord;
       const AIncrement: LongWord);
     procedure OutputPending(const AStreamId: LongWord);
+    procedure QueueRefusal(const AStreamId: LongWord;
+      const AErrorCode: THttp2ErrorCode);
     property Updates: LongWord read FUpdates;
     property Calls: Integer read FCalls;
     property Writes: Integer read FWrites;
+    /// how many times a refusal asked for an RST_STREAM
+    property Refusals: Integer read FRefusals;
+    /// the error code of the last refusal
+    property RefusalCode: THttp2ErrorCode read FRefusalCode;
   end;
 
   /// a thread that parks in a stream read and records the outcome
@@ -100,6 +108,10 @@ type
     procedure TestReadChunkDrainsBuffer;
     procedure TestReadWaitsForDelivery;
     procedure TestCancelWakesBlockedRead;
+    /// a refusal asks the connection for an RST_STREAM
+    procedure TestRefuseAsksTheHostForAReset;
+    /// a bare Cancel sends no frame, because its callers queue their own
+    procedure TestCancelSendsNoFrame;
     procedure TestReadAfterCancelRaises;
     procedure TestWriteBlocksWhenFullAndDrains;
     procedure TestCancelWakesBlockedWrite;
@@ -162,6 +174,13 @@ end;
 procedure TRecordingHost.OutputPending(const AStreamId: LongWord);
 begin
   Inc(FWrites);
+end;
+
+procedure TRecordingHost.QueueRefusal(const AStreamId: LongWord;
+  const AErrorCode: THttp2ErrorCode);
+begin
+  Inc(FRefusals);
+  FRefusalCode := AErrorCode;
 end;
 
 { TStreamReadProbe }
@@ -236,6 +255,7 @@ begin
   // would otherwise leave the class field pointing at a destroyed object
   FHostRef := FHost;
   FStream := TServerStream.Create(1, FLock, FHost, 65536, 65536);
+  FStream.SetRefusalHost(FHost);
   FReadProbe := nil;
   FWriteProbe := nil;
 end;
@@ -359,6 +379,29 @@ begin
   AssertTrue('the read raised EStreamCancelled', FReadProbe.FCancelled);
   AssertEquals('the reset code is CANCEL', Ord(ecCancel),
     Ord(FStream.ResetCode));
+end;
+
+procedure TServerStreamTest.TestRefuseAsksTheHostForAReset;
+begin
+  // the pool refuses a stream with Refuse, and the peer learns of the
+  // refusal only from the frame the host is asked to queue
+  FStream.Refuse(ecRefusedStream);
+  AssertTrue('the stream is cancelled', FStream.IsCancelled);
+  AssertEquals('the connection was not asked for a reset', 1, FHost.Refusals);
+  AssertEquals('the refusal names REFUSED_STREAM', Ord(ecRefusedStream),
+    Ord(FHost.RefusalCode));
+  // a second refusal must not queue the same frame again
+  FStream.Refuse(ecRefusedStream);
+  AssertEquals('the refusal was queued twice', 1, FHost.Refusals);
+end;
+
+procedure TServerStreamTest.TestCancelSendsNoFrame;
+begin
+  // Cancel is silent: its callers queue their own frame, and the paths that
+  // answer a frame from the peer must not echo one
+  FStream.Cancel(ecCancel);
+  AssertTrue('the stream is cancelled', FStream.IsCancelled);
+  AssertEquals('a bare cancel asked for a frame', 0, FHost.Refusals);
 end;
 
 procedure TServerStreamTest.TestReadAfterCancelRaises;

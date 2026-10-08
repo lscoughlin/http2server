@@ -11,8 +11,9 @@ notes:
   - The factory is an immutable record.  Every WithX method returns a new
     record with one field changed, so a stored factory is safe to reuse and
     to fork.
-  - The defaults appear once, in Create.  The numeric values are
-    placeholders until load tests set them.
+  - The defaults appear once, in Create.  The load runs set the buckets, the
+    queue depth and the IO thread count; the section "Default limits" of
+    doc/design/limits.md names the measurement of each one.
   - Validate collects every problem of the settings into one list, so a
     caller sees all problems in one call.
 ---
@@ -110,7 +111,7 @@ type
 
   /// the server factory
   ///
-  /// Create returns the record with the placeholder defaults.  Every WithX
+  /// Create returns the record with the chosen defaults.  Every WithX
   /// method returns a new record with one field changed, so the original
   /// record keeps its value.  Validate collects every problem of the
   /// settings into one list and returns False when the list is not empty.
@@ -144,7 +145,7 @@ type
     FHandler: IHttp2Handler;
     FClock: IMonotonicClock;
   public
-    /// the record with the placeholder defaults
+    /// the record with the chosen defaults
     class function Create: THttp2ServerFactory; static;
 
     // ---- listener ----
@@ -312,7 +313,6 @@ implementation
 
 class function TTlsServerOptions.Create: TTlsServerOptions;
 begin
-  // the numeric values are placeholders until load tests set them
   Result.FCertificateFile := '';
   Result.FKeyFile := '';
   Result.FKeyPassword := '';
@@ -362,7 +362,10 @@ end;
 
 class function TQueueOptions.Create: TQueueOptions;
 begin
-  // the numeric values are placeholders until load tests set them
+  // the queue depth comes from the seam run: a client that carried 50
+  // streams at once saw every stream answered, and the queue holds 64 more
+  // requests behind the 4 handler threads of that run, so the bound of the
+  // streams in flight is 68 (doc/verification/validation.md)
   Result.FDepth := 64;
   Result.FMaxWaitMs := 5000;
   Result.FRefusalMode := rmRefuseStream;
@@ -391,8 +394,13 @@ end;
 
 class function THttp2ServerFactory.Create: THttp2ServerFactory;
 begin
-  // the defaults of the server.  The numeric values are placeholders until
-  // load tests set them.
+  // the defaults of the server.  The buckets come from the load runs, and
+  // the section "The default limits" of doc/design/limits.md names the
+  // measurement of each one.  The listener, stream and timeout values are
+  // the chosen protocol and operational bounds: RFC 9113 section 6.5.2 sets
+  // 100 concurrent streams as the customary value, 16384 is the frame size
+  // that RFC 9113 section 4.2 recommends, and the timeouts bound a stalled
+  // peer without a measurement of their own.
   Result.FHost := '0.0.0.0';
   Result.FPort := 8443;
   Result.FBacklog := 128;

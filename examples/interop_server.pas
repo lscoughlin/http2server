@@ -12,6 +12,12 @@ notes:
     program prints the port it received.
   - The program runs until it reads a line on the standard input, so a
     script stops it by closing the input.
+  - A second argument of `strict` lowers every control bucket, so the abuse
+    tool reaches its limits.
+  - The optional switches `--cert=FILE` and `--key=FILE` turn the listener
+    into TLS, and the port line then names `h2` instead of `h2c`.  A
+    certificate and a key come from `test/certs`, which the validation script
+    creates when the pair is absent.
 ---
 }
 /// The server that the validation runs drive
@@ -169,6 +175,21 @@ begin
     Exit;
   end;
 
+  if Path = '/slow' then
+  begin
+    // the connection-seam check asks for a delayed answer, so that the wait
+    // on the connection ends by itself with no further frame
+    Value := 0;
+    if Copy(Query, 1, 3) = 'ms=' then
+      TryStrToInt64(Copy(Query, 4, MaxInt), Value);
+    if Value < 0 then
+      Value := 0;
+    if Value > 0 then
+      Sleep(Value);
+    WriteText(AResponse, 200, 'a slow answer' + sLineBreak);
+    Exit;
+  end;
+
   if Path = '/' then
   begin
     WriteText(AResponse, 200,
@@ -183,7 +204,8 @@ end;
 var
   Server: IHttp2Server;
   Port: Integer;
-  Line: string;
+  Line, Arg, CertFile, KeyFile: string;
+  I: Integer;
   BigBucket, StrictBucket: TTokenBucketOptions;
   Strict: Boolean;
   Factory: THttp2ServerFactory;
@@ -202,16 +224,32 @@ begin
     .WithCostBeforeDispatch(1)
     .WithCostAfterDispatch(1);
   Port := 0;
-  if ParamCount >= 1 then
-    Port := StrToIntDef(ParamStr(1), 0);
-  Strict := (ParamCount >= 2) and (ParamStr(2) = 'strict');
+  CertFile := '';
+  KeyFile := '';
+  Strict := False;
+  for I := 1 to ParamCount do
+  begin
+    Arg := ParamStr(I);
+    if Arg = 'strict' then
+      Strict := True
+    else if Pos('--cert=', Arg) = 1 then
+      CertFile := Copy(Arg, Length('--cert=') + 1, MaxInt)
+    else if Pos('--key=', Arg) = 1 then
+      KeyFile := Copy(Arg, Length('--key=') + 1, MaxInt)
+    else
+      Port := StrToIntDef(Arg, 0);
+  end;
   Factory := THttp2ServerFactory.Create
     .WithHost('127.0.0.1')
     .WithPort(Port)
     .WithClearTextAllowed(True)
     .WithHandler(TInteropHandler.Create)
     .WithHandlerThreads(4)
-    .WithIOThreads(2);
+    .WithIOThreads(4);
+  if CertFile <> '' then
+    Factory := Factory.WithTls(TTlsServerOptions.Create
+      .WithCertificateFile(CertFile)
+      .WithKeyFile(KeyFile));
   if Strict then
     Factory := Factory
       .WithResetBucket(StrictBucket)
@@ -224,7 +262,12 @@ begin
       .WithHeaderTimeout(2000);
   Server := Factory.Build;
   Server.Start;
-  Writeln('the validation server listens on port ', Server.Port, ' (h2c)');
+  // one listener serves one transport: a certificate turns it into TLS, and
+  // the label tells the driver which one to expect
+  if CertFile <> '' then
+    Writeln('the validation server listens on port ', Server.Port, ' (h2)')
+  else
+    Writeln('the validation server listens on port ', Server.Port, ' (h2c)');
   Flush(Output);
   // a script keeps this process alive by holding the standard input open
   while not Eof(Input) do

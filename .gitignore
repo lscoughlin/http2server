@@ -20,3 +20,10 @@ third_party/
 
 # Task runner cache (go-task checksum cache)
 .task
+
+# python bytecode from the measurement tools
+__pycache__/
+*.pyc
+
+# the self-signed certificate that the validation script creates
+test/certs/

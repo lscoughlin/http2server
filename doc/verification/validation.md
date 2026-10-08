@@ -53,29 +53,82 @@ pattern again.
 |---|---|---|
 | Full conformance | `h2spec -h 127.0.0.1 -p PORT http2` | 94 tests, 94 passed, 0 skipped, 0 failed |
 | Generic frame rules | `h2spec -h 127.0.0.1 -p PORT generic` | 44 tests, 44 passed, 0 skipped, 0 failed |
-| Second implementation | `nghttp -n http://127.0.0.1:PORT/` | A body of 37 bytes and a GOAWAY frame with the code `NO_ERROR` |
+| Second implementation | `nghttp -n http://127.0.0.1:PORT/` | A body of 37 bytes, `:status: 200`, and a GOAWAY frame with the code `NO_ERROR` |
 | Widely deployed client | `curl --http2-prior-knowledge http://127.0.0.1:PORT/` | Status 200, 37 bytes |
-| Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0168 s |
-| Load | `h2load -n 200 -c 10 -m 10 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
+| Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0086 s |
+| Load | `h2load -n 200 -c 10 -m 6 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
 
-The unit suite adds 302 tests with 0 errors and 0 failures. The suite holds
+The unit suite adds 309 tests with 0 errors and 0 failures. The suite holds
 the local rules; the tools above hold the external rules.
 
-The `h2load` run with the settings `-n 5000 -c 50 -m 20` reports
-`REFUSED_STREAM` for 1002 of the 5000 requests. The reason is the bounded
-admission queue of 64 entries and the limit of 1000 concurrent streams. The
-server refuses the excess requests with `REFUSED_STREAM`, which RFC 9113
-section 8.7 permits. The small run above does not reach the limit.
+### The bound on the streams in flight
+
+The server admits `HandlerThreads + Queue.Depth` requests at once: the handler
+threads serve them, and the queue holds the rest. The example server uses
+4 handler threads and the default queue depth of 64, so the bound is **68**.
+A client that keeps more streams in flight reaches the bound, and the server
+refuses the excess with `REFUSED_STREAM`, which RFC 9113 section 8.7 permits.
+
+The load run of the table keeps 60 streams in flight, so it stays inside the
+bound and a refusal is a defect there. The same client with 100 streams
+(`-n 200 -c 10 -m 10`) fails a varying count of requests (0, 10 and 34 failed
+in three runs) because 100 is above 68. The large run
+`h2load -n 5000 -c 50 -m 10` keeps 500 in flight and reports 2067 of the 5000
+requests as failed for the same reason. The run `h2load -n 5000 -c 50 -m 1`
+keeps 50 in flight and reports 5000 of 5000 requests answered, 0 failed, in
+0.16 s.
 
 A `h2load` run of many requests holds the connection open until the idle
-timeout of 60 seconds, so the wall time of the run holds the timeout. The
-request counts and the failure counts of the table come from such a run. A
-run of the same shape against `nghttpd` of nghttp2 finishes at once. The
-cause of the difference is not established, and `h2load` is a benchmark and
-not a conformance tool, so the run is not part of the acceptance gate. The
-remark is in the gap table below.
+timeout of 60 seconds in one earlier measurement, so the wall time of that
+run held the timeout. The runs above finish in under one second, so the
+earlier behaviour came from the client build at that time. `h2load` is a
+benchmark and not a conformance tool, so no `h2load` wall time gates the
+acceptance.
 
-### The memory of a long-lived connection
+### The connection seam
+
+The command `python3 tools/seam/seam.py` drives a running example server and
+measures the connection seam of the server: many idle connections, many
+streams at once, and a handler that writes after a delay. The tool
+`tools/seam/poll_cost.py` is the control: it holds the same number of idle
+sockets with no HTTP/2 code and measures the cost of the platform call alone.
+Every run below is a run on the development host, macOS aarch64 with FPC
+3.2.4, against `bin/interop_server` with 4 IO threads and 4 handler threads.
+The file descriptor limit is 60000.
+
+The cost of an idle connection:
+
+| Idle connections | Server CPU |
+|---|---|
+| 100 | 1.00% |
+| 1000 | 3.80% |
+| 10000 | 32.60% |
+
+The cost is linear in the connection count, and the control names the cause:
+`poll_cost.py` holds 10000 idle sockets and reports 12.76% of one core, so the
+O(n) `poll` of the platform is about 40% of the server cost and the
+per-round work of the event loop is the rest. macOS has no `epoll`, so a
+Linux host is expected to show a cost near zero. The cost comes from the
+platform call for each idle connection, and it is not a busy loop.
+
+The answers of 500 streams on 500 connections:
+
+| Streams | Throughput | Latency p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| 500 | 4529 streams/s | 4.1 ms | 18.7 ms | 21.6 ms | 22.1 ms |
+
+Every stream was answered, and the server used 54.4% of one core.
+
+The write after a delay: the handler of `/slow?ms=N` sleeps, and the
+connection is quiet after the request, so a response can arrive only when the
+wait ends and the write wakes the event loop. The run `delayed 8 600` reports
+answers between 616 ms and 1226 ms for a delay of 600 ms. Every delayed
+answer arrived from the timer.
+
+The server is not modified for these runs. The tool raises its own file
+descriptor limit and starts no server.
+
+## The memory of a long-lived connection
 
 A leak of one `TServerStream` for each closed stream was present and is
 fixed (commit `1fc8d5a`). The measurement drives one connection with
@@ -91,9 +144,16 @@ The unit test `TConnectionCoreTest.TestClosedStreamsAreFreed` holds the same
 rule without a socket: it opens and resets 2000 streams and fails when the
 heap grows by one stream for each cycle.
 
-The server measurements that fixed the default limits came from an earlier
-run of 100 MiB of output over 2450 frames. The values are in
-`src/Http2Server.Config.pas` and `doc/design/configuration.md`.
+The measurement that fixed the `WINDOW_UPDATE` bucket came from the interop
+run of commit `9eda1e0`: a body of 100 MB drew 6102 `WINDOW_UPDATE` frames at
+a steady rate of 2450 frames a second on a healthy connection. The unit test
+`TFactoryTest.TestDefaultBuckets` holds the default capacity of 10000 and the
+refill of 4000 a second, and `TAbuseLimitTest.TestWindowUpdateFloodGoAway`
+holds the trip of a flood. The seam measurements above set the IO thread
+count. The queue depth comes from the same run: a client that carried 50
+streams at once saw every stream answered with a queue depth of 64. The
+remaining defaults are the chosen protocol and operational bounds, and the
+unit tests of `test/Http2Server.Config.Test.pas` hold them.
 
 ## Reference implementation comparison
 
@@ -127,23 +187,40 @@ The split rule is the same in both implementations.
 
 ## Recorded gaps
 
-Three checks do not run. Each entry holds the reason and the
+Two checks do not run. Each entry holds the reason and the
 condition that closes the gap.
 
 | Gap | Reason | Condition that closes the gap |
 |---|---|---|
-| A 10,000-connection seam test on Linux | No Linux amd64 host is present. The host of the development is macOS aarch64, which uses `poll` instead of `epoll`. The cost of `poll` at 10,000 connections is not the cost of `epoll`. | A Linux amd64 host with `fpc 3.2.4` and OpenSSL 3. The file `doc/verification/toolchain.md` records the Linux settings. |
+| A 10,000-connection seam test on Linux | No Linux amd64 host is present, and FPC 3.2.4 is not installable on one: no current Debian or Ubuntu suite publishes it (`debian:sid` offers `3.2.2+dfsg-51`, and Launchpad reports the same newest version), and every upstream tarball for `x86_64-linux` answers with HTTP 403 or 404. The host of the development is macOS aarch64, which uses `poll` instead of `epoll`. The cost of `poll` at 10,000 connections is not the cost of `epoll`. The `--platform linux/amd64` emulation of Docker does run, but no FPC 3.2.4 exists for it. | A Linux amd64 host with `fpc 3.2.4` and OpenSSL 3. The file `doc/verification/toolchain.md` records the Linux settings. |
 | A `h2spec` run on Linux | The same reason as the row above. | The same condition as the row above. |
-| The end of a long `h2load` run | The server holds the connection open until the idle timeout, so the run takes 60 seconds and reports a few requests as failed. The cause is not established. `h2load` is a benchmark, not a conformance tool, so the result does not gate the acceptance. | An analysis of the connection teardown that `h2load` starts at the end of a run. |
 
-The limit `ulimit -n` is 1048575 on the development host, so the file
-descriptor limit is not the reason for the gap. The absence of a Linux host
-is the reason.
+The limit `ulimit -n` is 1048575 on the development host, and the seam run
+below that limit with 60000. The absence of a Linux host is the reason for
+the gap, not the file descriptor limit.
 
 ## TLS and ALPN
 
 The tools above drive the server over clear text HTTP/2, which RFC 9113
 section 3.2 calls `h2c` with prior knowledge. The TLS layer is a separate
 seam: `src/Http2Server.Tls.pas` and the `INetTls` extension of mORMot2. The
-validation of the TLS handshake and the ALPN result needs a certificate and
-is a separate task.
+example server takes `--cert=FILE` and `--key=FILE`, which turn the listener
+into TLS, and the port line then names `h2` instead of `h2c`.
+
+Two independent clients confirm the handshake and the protocol:
+
+| Client | Command | Result |
+|---|---|---|
+| OpenSSL | `openssl s_client -connect 127.0.0.1:PORT -alpn h2` | `Protocol: TLSv1.3`, `Cipher: TLS_CHACHA20_POLY1305_SHA256`, `ALPN protocol: h2`, verify code 18 (self-signed certificate) |
+| The sibling client | `/tmp/h2p/h2probe --url=https://127.0.0.1:PORT/ --insecure` | `RESULT=success status=200 bytes=37`, exit 0 |
+
+The probe is `test/h2probe.pas` of the sibling repository `../http2client`,
+compiled against the certificate that the sibling repository generates. The
+probe succeeds only over a negotiated `h2`: it offers `http/1.1` as the
+other ALPN value and reports a failure on that answer. So one client of a
+second repository, in a separate process, drove this server over TLS with
+ALPN `h2`, and the two implementations of the same protocol family agree.
+
+The sibling example `bin/basic_get` needs a certificate authority for the
+self-signed certificate and holds no switch for one, which is why the probe
+takes the place of the example here.

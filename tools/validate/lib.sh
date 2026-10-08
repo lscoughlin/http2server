@@ -10,18 +10,19 @@
 
 INTEROP_PID=''
 
-# start_interop_server [binary]
+# start_interop_server [binary] [extra args...]
 # Start the server and set INTEROP_PID and INTEROP_PORT.
 # A missing binary is not an error here; the caller checks the result.
 start_interop_server() {
   interop_bin="${1:-bin/interop_server}"
+  shift 2>/dev/null || true
   if [ ! -x "$interop_bin" ]; then
     return 1
   fi
   interop_out="${TMPDIR:-/tmp}/http2_interop_out.$$"
   # a long sleep holds the standard input of the server open; the pipe ends
   # when the sleep ends or when the process group is killed
-  ( sleep 3600 | "$interop_bin" 0 >"$interop_out" 2>/dev/null ) &
+  ( sleep 3600 | "$interop_bin" 0 "$@" >"$interop_out" 2>/dev/null ) &
   INTEROP_PID=$!
   # wait for the port line, at most ten seconds
   i=0
@@ -43,11 +44,42 @@ start_interop_server() {
   return 0
 }
 
+# ensure_validation_certificate
+# Create the self-signed certificate that the TLS checks use, when the pair
+# is absent.  The subject and the subject alternative name are those of the
+# sibling repository, so the same name works in both.  The function echoes
+# the certificate directory on success and returns 1 on a missing openssl.
+ensure_validation_certificate() {
+  cert_dir="${1:-$root/test/certs}"
+  if [ -f "$cert_dir/localhost.crt" ] && [ -f "$cert_dir/localhost.key" ]; then
+    echo "$cert_dir"
+    return 0
+  fi
+  if ! command -v openssl >/dev/null 2>&1; then
+    return 1
+  fi
+  mkdir -p "$cert_dir" || return 1
+  openssl req -x509 -newkey rsa:2048 \
+    -keyout "$cert_dir/localhost.key" -out "$cert_dir/localhost.crt" \
+    -days 3650 -nodes -subj '/CN=localhost' \
+    -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' >/dev/null 2>&1 || return 1
+  echo "$cert_dir"
+  return 0
+}
+
 # stop_interop_server
 # End the server and its pipe holder.  A call with no live process is safe.
+# The server writes to a pipe whose write end a `sleep` holds, and both are
+# children of the subshell that runs the pipeline.  Ending the subshell alone
+# leaves the two children alive, so the caller waits on an open pipe for the
+# whole sleep.  Each child ends first, and the subshell follows.
 stop_interop_server() {
   if [ -n "$INTEROP_PID" ]; then
-    # the process id names the subshell that holds the pipe; kill the group
+    # the process id names the subshell; its children hold the pipe ends
+    children=$(pgrep -P "$INTEROP_PID" 2>/dev/null || true)
+    for child in $children; do
+      kill "$child" 2>/dev/null || true
+    done
     kill "$INTEROP_PID" 2>/dev/null || true
     wait "$INTEROP_PID" 2>/dev/null || true
     INTEROP_PID=''

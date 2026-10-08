@@ -30,7 +30,7 @@ uses
   mormot.core.os,
   mormot.net.sock,
   Http2Server,
-  Http2Server.Frames, Http2Server.Headers;
+  Http2Server.Errors, Http2Server.Frames, Http2Server.Headers;
 
 type
   /// a handler that answers every request with one body
@@ -71,6 +71,10 @@ type
       const ATimeoutMs: Integer; out ABody: TBytes): Boolean;
     /// TRUE once the peer closed the socket within ATimeoutMs
     function PeerClosed(const ATimeoutMs: Integer): Boolean;
+    /// wait for an RST_STREAM on AStreamId, and answer its error code
+    // - FALSE means no reset arrived within the deadline
+    function WaitForReset(const AStreamId: LongWord;
+      const ATimeoutMs: Integer; out AErrorCode: THttp2ErrorCode): Boolean;
   end;
 
   /// the lifecycle tests of the public server
@@ -86,6 +90,8 @@ type
     procedure TestObserverReceivesLifecycleEvents;
     /// the observer receives the refusal event on a full queue
     procedure TestObserverReceivesQueueRefusal;
+    /// a refused request is answered with RST_STREAM/REFUSED_STREAM
+    procedure TestQueueRefusalSendsRstStream;
     /// the statistics answer a truthful gauge and the totals
     procedure TestStatsCounters;
     /// Build with invalid settings raises and names every problem
@@ -310,6 +316,30 @@ begin
   end;
 end;
 
+function TLifecycleClient.WaitForReset(const AStreamId: LongWord;
+  const ATimeoutMs: Integer; out AErrorCode: THttp2ErrorCode): Boolean;
+var
+  Deadline: QWord;
+  Frame: TFrame;
+  Code: THttp2ErrorCode;
+begin
+  Result := False;
+  AErrorCode := ecNoError;
+  Deadline := GetTickCount64 + QWord(ATimeoutMs);
+  while GetTickCount64 < Deadline do
+  begin
+    Pump(50);
+    while TakeFrame(Frame) do
+      if (Frame.Header.FrameType = ftRstStream) and
+         (Frame.Header.StreamId = AStreamId) then
+      begin
+        ParseRstStream(Frame, Code);
+        AErrorCode := Code;
+        Exit(True);
+      end;
+  end;
+end;
+
 function TLifecycleClient.PeerClosed(const ATimeoutMs: Integer): Boolean;
 var
   Deadline: QWord;
@@ -455,6 +485,37 @@ begin
       Refused := True;
   end;
   AssertTrue('the refusal event did not arrive', Refused);
+end;
+
+procedure TServerLifecycleTest.TestQueueRefusalSendsRstStream;
+var
+  Server: IHttp2Server;
+  Client: TLifecycleClient;
+  Code: THttp2ErrorCode;
+begin
+  // depth 0 refuses every request, so the RST_STREAM is certain.  A refusal
+  // event alone does not prove that the peer learned of the refusal, so this
+  // test reads the frame itself.
+  Server := THttp2ServerFactory.Create
+    .WithHost('127.0.0.1')
+    .WithPort(0)
+    .WithClearTextAllowed(True)
+    .WithHandler(TServerTestHandler.Create)
+    .WithHandlerThreads(2)
+    .WithQueue(TQueueOptions.Create.WithDepth(0))
+    .Build;
+  Server.Start;
+  Client := TLifecycleClient.Create(Server.Port);
+  try
+    Client.SendGet(1, '/refused');
+    AssertTrue('the refused stream got no RST_STREAM',
+      Client.WaitForReset(1, 2000, Code));
+    AssertTrue('the reset names the wrong error code',
+      Code = ecRefusedStream);
+  finally
+    Client.Free;
+  end;
+  Server.Stop;
 end;
 
 procedure TServerLifecycleTest.TestStatsCounters;

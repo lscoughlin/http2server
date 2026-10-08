@@ -70,9 +70,11 @@ The test `TestDefaultsOnlyInCreate` reads the source of this unit and fails on
 a numeric literal of two digits or more outside a `Create` body
 (`test/Http2Server.Config.Test.pas:754`). The same rule for the other units is
 not yet testable: `Http2Server.Stream.pas`, `Http2Server.Connection.pas` and
-`Http2Server.Waiter.pas` still hold placeholder constants of their own. Those
-constants move into the factory as each unit starts to read the factory. A
-whole-tree sweep is the check for that later state.
+`Http2Server.Waiter.pas` still hold their own constants (`DefaultReadTimeoutMs`,
+`DefaultWriteTimeoutMs` and `DefaultUpdateThreshold` in
+`src/Http2Server.Stream.pas:290-294`). Those constants move into the factory
+as each unit starts to read the factory. A whole-tree sweep is the check for
+that later state.
 
 ### The listener settings
 
@@ -238,7 +240,9 @@ problem list, so one exception names every problem.
 
 ## Default values
 
-The default values of the server are placeholders. Load tests set them later.
+The defaults of the buckets, the queue depth and the IO thread count come
+from the load runs, and `doc/design/limits.md` names the measurement of each
+one. The remaining values are the chosen protocol and operational bounds.
 The values are:
 
 | Group | Defaults |
@@ -248,7 +252,7 @@ The values are:
 | Pools | 4 IO threads, 8 handler threads, 2 cancel workers |
 | Queue | depth 64, maximum wait 5000 ms, refusal by `REFUSED_STREAM` |
 | Streams | 100 concurrent streams, 65535 stream window, 65535 connection window, 16384 frame size, 65536 header list size, 16 `CONTINUATION` frames, 4096 header table |
-| Buckets | reset bucket 1000 tokens with a refill of 100 per second and costs 1 and 5; each control bucket 100 tokens with a refill of 10 per second |
+| Buckets | reset bucket 1000 tokens with a refill of 100 per second and costs 1 and 5; `PING`, `SETTINGS`, `empty DATA` and `CONTINUATION` 100 tokens with a refill of 10 per second; `WINDOW_UPDATE` 10000 tokens with a refill of 4000 per second |
 | Timeouts | idle 60000 ms, header 30000 ms, graceful stop 10000 ms |
 | Wiring | no handler, the process monotonic clock |
 

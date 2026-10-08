@@ -72,6 +72,19 @@ type
     procedure OutputPending(const AStreamId: LongWord);
   end;
 
+  /// The connection side of a refusal.
+  ///
+  /// The handler pool runs on its own threads, so a refusal cannot touch the
+  /// outbound queue directly.  Refuse marks the stream and then calls this
+  /// host method, and the connection queues the RST_STREAM under its own
+  /// lock, which is the same lock the IO thread holds while it flushes.
+  IRefusalHost = interface
+    ['{7E1F0C11-0007-4A11-9C72-000000000507}']
+    /// the local side refused AStreamId and owes the peer an RST_STREAM
+    procedure QueueRefusal(const AStreamId: LongWord;
+      const AErrorCode: THttp2ErrorCode);
+  end;
+
   /// The bounded buffers and the wait state of one stream.
   ///
   /// The connection lock of the owning connection guards every method that
@@ -88,6 +101,9 @@ type
     FStreamLock: TCriticalSection;
     FLockNested: Boolean;
     FHost: IStreamHost;
+    /// the refusal channel; the core sets it, and a test that builds a bare
+    /// stream leaves it nil
+    FRefusalHost: IRefusalHost;
     FWaiter: IStreamWaiter;
     FStreamId: LongWord;
     FInbound: TBytes;
@@ -203,7 +219,20 @@ type
     procedure ClearFinish;
     /// reset the stream: set the flag, wake a blocked handler and queue the
     /// cancel hook of the stream on a cancel-worker thread
-    procedure Cancel(const AErrorCode: THttp2ErrorCode);
+    // - True means this call performed the reset; a second call answers
+    //   False and leaves the state alone
+    function Cancel(const AErrorCode: THttp2ErrorCode): Boolean;
+
+    /// cancel the stream and tell the peer, with an RST_STREAM that names
+    /// AErrorCode
+    // - This is the refusal path.  Cancel alone is silent, because the
+    //   callers that queue their own frame (a malformed request, a
+    //   flow-control fault) and the paths that answer a frame from the peer
+    //   (its RST_STREAM, its GOAWAY) must not echo one
+    procedure Refuse(const AErrorCode: THttp2ErrorCode);
+
+    /// name the connection that carries the refusal frames of this stream
+    procedure SetRefusalHost(const AHost: IRefusalHost);
 
     // ---- the handler side ----
 
@@ -657,8 +686,9 @@ begin
   end;
 end;
 
-procedure TServerStream.Cancel(const AErrorCode: THttp2ErrorCode);
+function TServerStream.Cancel(const AErrorCode: THttp2ErrorCode): Boolean;
 begin
+  Result := False;
   LockStream;
   try
     if FReset then
@@ -666,6 +696,7 @@ begin
     FReset := True;
     FResetCode := AErrorCode;
     FRemoteEnded := True;
+    Result := True;
   finally
     UnlockStream;
   end;
@@ -673,6 +704,23 @@ begin
   // cancel-worker thread; no exception crosses a thread boundary here
   FWaiter.Cancel;
   FWaiter.Signal;
+end;
+
+procedure TServerStream.Refuse(const AErrorCode: THttp2ErrorCode);
+begin
+  // Cancel answers True to one caller only, so two threads that refuse the
+  // same stream cannot queue the same RST_STREAM twice
+  if not Cancel(AErrorCode) then
+    Exit;
+  // A stream built by a test holds no refusal host, and a unit that does not
+  // speak HTTP has no frame to send, so the failure is silent there
+  if Assigned(FRefusalHost) then
+    FRefusalHost.QueueRefusal(FStreamId, AErrorCode);
+end;
+
+procedure TServerStream.SetRefusalHost(const AHost: IRefusalHost);
+begin
+  FRefusalHost := AHost;
 end;
 
 procedure TServerStream.LockStream;

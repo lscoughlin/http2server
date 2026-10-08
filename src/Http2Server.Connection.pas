@@ -68,7 +68,7 @@ type
   /// A stream calls OutputPending when a handler wrote, and the adapter asks
   /// the core to wake the IO thread.  The adapter holds the core without an
   /// interface reference, so no reference cycle forms.
-  TCoreStreamHost = class(TInterfacedObject, IStreamHost)
+  TCoreStreamHost = class(TInterfacedObject, IStreamHost, IRefusalHost)
   private
     FCore: TServerConnectionCore;   // weak reference; the core owns this
   public
@@ -76,6 +76,8 @@ type
     procedure WindowUpdatePending(const AStreamId: LongWord;
       const AIncrement: LongWord);
     procedure OutputPending(const AStreamId: LongWord);
+    procedure QueueRefusal(const AStreamId: LongWord;
+      const AErrorCode: THttp2ErrorCode);
   end;
 
   /// the server connection state machine
@@ -90,6 +92,10 @@ type
     // - the core cannot be its own host interface: an interface reference to
     //   self inside a TInterfacedObject invites a refcount double-destroy
     FHost: IStreamHost;
+    /// the same adapter, seen as the refusal channel
+    // - a stream learns the refusal channel from this field, so a stream that
+    //   no interface owns is quiet
+    FRefusalHost: IRefusalHost;
     FStreams: TObjectList<TServerStream>;
     FById: TDictionary<LongWord, TServerStream>;
     /// the HPACK state of this connection
@@ -150,6 +156,11 @@ type
       const AErrorCode: THttp2ErrorCode);
     procedure CloseStream(const AStream: TServerStream);
     procedure ReapClosedStreams;
+    /// queue an RST_STREAM for a stream that the local side refused
+    // - the handler pool calls this from a worker thread, and the frame
+    //   enters the outbound queue under the connection lock
+    procedure QueueRefusalFrame(const AStreamId: LongWord;
+      const AErrorCode: THttp2ErrorCode);
     procedure FlushLocked;
     procedure FlushPendingHeaders;
     procedure FlushStreamCredits;
@@ -234,6 +245,15 @@ begin
     FCore.NotifyWantsWrite;
 end;
 
+procedure TCoreStreamHost.QueueRefusal(const AStreamId: LongWord;
+  const AErrorCode: THttp2ErrorCode);
+begin
+  // the pool calls this from a worker thread, so the frame enters the queue
+  // under the connection lock and the write waker carries it to the IO thread
+  if FCore <> nil then
+    FCore.QueueRefusalFrame(AStreamId, AErrorCode);
+end;
+
 { TServerConnectionCore }
 
 constructor TServerConnectionCore.Create(const AOptions: TConnectionCoreOptions;
@@ -258,6 +278,7 @@ begin
   // the host adapter is a borrowed reference to this core, so it forms no
   // reference cycle and its lifetime is the core lifetime
   FHost := TCoreStreamHost.Create(Self);
+  FRefusalHost := FHost as IRefusalHost;
   FStreams := TObjectList<TServerStream>.Create(False);
   FById := TDictionary<LongWord, TServerStream>.Create;
   FHpack := THpackConnection.Create(FOptions.MaxHeaderListSize,
@@ -304,6 +325,7 @@ var
   I: Integer;
 begin
   FHost := nil;
+  FRefusalHost := nil;
   FWakeLock.Free;
   FOut.Free;
   FById.Free;
@@ -459,6 +481,20 @@ begin
     Stream := FStreams[I];
     if (Stream.State = ssClosed) or Stream.IsCancelled then
       CloseStream(Stream);
+  end;
+end;
+
+procedure TServerConnectionCore.QueueRefusalFrame(const AStreamId: LongWord;
+  const AErrorCode: THttp2ErrorCode);
+begin
+  // the handler pool calls this from a worker thread; the connection lock
+  // keeps the queue consistent with the IO thread's flush
+  LockConn;
+  try
+    SendRstStream(AStreamId, AErrorCode);
+    NotifyWantsWrite;
+  finally
+    UnlockConn;
   end;
 end;
 
@@ -662,6 +698,7 @@ function TServerConnectionCore.NewStream(const AStreamId: LongWord): TServerStre
 begin
   Result := TServerStream.Create(AStreamId, FConnLock, FHost,
     FOptions.InboundBufferLimit, FOptions.OutboundBufferLimit);
+  Result.SetRefusalHost(FRefusalHost);
   Result.UpdateThreshold := FOptions.StreamUpdateThreshold;
   FStreams.Add(Result);
   FById.Add(AStreamId, Result);

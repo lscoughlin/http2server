@@ -714,7 +714,9 @@ procedure THandlerPool.AnswerRefusal(const AStream: TServerStream);
 begin
   case FOptions.RefusalMode of
     rmRefuseStream:
-      AStream.Cancel(ecRefusedStream);
+      // Refuse, not Cancel: the peer learns of the refusal only from the
+      // RST_STREAM that Refuse asks the connection to queue
+      AStream.Refuse(ecRefusedStream);
     rmHttp503:
       AStream.QueueResponseHeaders(503, nil, True);
   end;

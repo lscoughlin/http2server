@@ -112,9 +112,9 @@ a protocol error.
 Linux amd64 was not exercised in this environment. The acceptance record
 requires an FPC 3.2.4 build and an empty-suite run on Linux amd64. This host
 is macOS aarch64 (`fpc -iTP` reports `aarch64`, `fpc -iTO` reports `darwin`).
-Docker on this host reports `aarch64 linux` (`docker info`, 2026-10-07), so a
-container runs the host architecture unless the emulator handles `--platform
-linux/amd64`.
+Docker on this host runs `linux/amd64` through an emulator: `docker run --rm
+--platform linux/amd64 alpine:latest uname -m` reports `x86_64`
+(2026-10-08). The emulator is therefore not the obstacle.
 
 No amd64 FPC 3.2.4 toolchain is available here for a quick run:
 
@@ -122,12 +122,22 @@ No amd64 FPC 3.2.4 toolchain is available here for a quick run:
   reports `pull access denied`; `docker search fpc`, 2026-10-07).
 - The `freepascal/fpc` tags stop at `3.2.2`
   (`https://hub.docker.com/v2/repositories/freepascal/fpc/tags`, 2026-10-07).
-- The SourceForge path
-  `freepascal/files/Linux/3.2.4/fpc-3.2.4.x86_64-linux.tar` returns HTTP 404
-  for its `download` URL (2026-10-07).
+- `debian:sid` offers `3.2.2+dfsg-51` as its newest `fpc` candidate
+  (`apt-cache policy fpc`, 2026-10-08), and
+  `https://sources.debian.org/api/src/fpc/` lists `3.2.2+dfsg-51` as the
+  newest version in any suite. No suite publishes `3.2.4`.
+- Launchpad reports `3.2.2+dfsg-51` as the newest published `fpc` source for
+  Ubuntu (`getPublishedSources`, 2026-10-08). No release publishes `3.2.4`.
+- Every upstream tarball for `x86_64-linux` fails:
+  `https://sourceforge.net/projects/freepascal/files/Linux/3.2.4/fpc-3.2.4.x86_64-linux.tar/download`
+  returns HTTP 404, the same URL with `.tar.gz` returns HTTP 404,
+  `https://downloads.freepascal.org/fpc/dist/3.2.4/x86_64-linux/fpc-3.2.4.x86_64-linux.tar`
+  returns HTTP 403, and
+  `https://ftp.freepascal.org/pub/fpc/dist/3.2.4/x86_64-linux/fpc-3.2.4.x86_64-linux.tar`
+  returns an empty response (2026-10-08).
 
-The Linux amd64 run is therefore a recorded gap, not a completed task. The
-macOS aarch64 run covers the build, the runner and the empty suite.
+The Linux amd64 run is therefore a recorded gap, not a completed task, and
+the gap has two halves: no host, and no published toolchain for a host.
 
 A future run needs an amd64 host (or an amd64 emulator that starts an FPC
 3.2.4 toolchain) with FPC 3.2.4 and OpenSSL 3. The unit directory is then
