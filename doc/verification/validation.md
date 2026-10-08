@@ -53,7 +53,7 @@ pattern again.
 | Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0168 s |
 | Load | `h2load -n 200 -c 10 -m 10 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
 
-The unit suite adds 300 tests with 0 errors and 0 failures. The suite holds
+The unit suite adds 302 tests with 0 errors and 0 failures. The suite holds
 the local rules; the tools above hold the external rules.
 
 The `h2load` run with the settings `-n 5000 -c 50 -m 20` reports
@@ -61,6 +61,30 @@ The `h2load` run with the settings `-n 5000 -c 50 -m 20` reports
 admission queue of 64 entries and the limit of 1000 concurrent streams. The
 server refuses the excess requests with `REFUSED_STREAM`, which RFC 9113
 section 8.7 permits. The small run above does not reach the limit.
+
+A `h2load` run of many requests holds the connection open until the idle
+timeout of 60 seconds, so the wall time of the run holds the timeout. The
+request counts and the failure counts of the table come from such a run. A
+run of the same shape against `nghttpd` of nghttp2 finishes at once. The
+cause of the difference is not established, and `h2load` is a benchmark and
+not a conformance tool, so the run is not part of the acceptance gate. The
+remark is in the gap table below.
+
+### The memory of a long-lived connection
+
+A leak of one `TServerStream` for each closed stream was present and is
+fixed (commit `1fc8d5a`). The measurement drives one connection with
+`h2load -n 1000000 -c 1 -m 1` and reads the resident memory of the process
+`interop_server` itself, not the shell that holds its standard input open.
+
+| State | Resident memory after 1,000,000 streams |
+|---|---|
+| Before the fix | 6896 KB to 774496 KB |
+| After the fix | 6928 KB to 7968 KB |
+
+The unit test `TConnectionCoreTest.TestClosedStreamsAreFreed` holds the same
+rule without a socket: it opens and resets 2000 streams and fails when the
+heap grows by one stream for each cycle.
 
 The server measurements that fixed the default limits came from an earlier
 run of 100 MiB of output over 2450 frames. The values are in
@@ -99,13 +123,14 @@ The split rule is the same in both implementations.
 
 ## Recorded gaps
 
-Two checks from the story do not run. Each entry holds the reason and the
+Three checks from the story do not run. Each entry holds the reason and the
 condition that closes the gap.
 
 | Gap | Reason | Condition that closes the gap |
 |---|---|---|
 | A 10,000-connection seam test on Linux | No Linux amd64 host is present. The host of the development is macOS aarch64, which uses `poll` instead of `epoll`. The cost of `poll` at 10,000 connections is not the cost of `epoll`. | A Linux amd64 host with `fpc 3.2.4` and OpenSSL 3. The file `doc/verification/toolchain.md` records the Linux settings. |
 | A `h2spec` run on Linux | The same reason as the row above. | The same condition as the row above. |
+| The end of a long `h2load` run | The server holds the connection open until the idle timeout, so the run takes 60 seconds and reports a few requests as failed. The cause is not established. `h2load` is a benchmark, not a conformance tool, so the result does not gate the acceptance. | An analysis of the connection teardown that `h2load` starts at the end of a run. |
 
 The limit `ulimit -n` is 1048575 on the development host, so the file
 descriptor limit is not the reason for the gap. The absence of a Linux host
