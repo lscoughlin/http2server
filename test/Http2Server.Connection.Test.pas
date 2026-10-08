@@ -119,6 +119,7 @@ type
     procedure TestStreamCreditFollowsAHandlerRead;
     procedure TestResponseHeadersAreEncodedOnce;
     procedure TestLongHeaderListKeepsRunsContiguous;
+    procedure TestClosedStreamsAreFreed;
   end;
 
 implementation
@@ -834,11 +835,15 @@ begin
   NewCore;
   FCore.Feed(Pack(True, [RequestFrame(1, False), RequestFrame(3, False)]));
   Stream := FCore.StreamById(1);
+  // a running handler holds one reference, so the stream stays alive after
+  // the core closes it
+  Stream.AddRef;
   FCore.Feed(Pack(False, [TFrame.Create(ftGoAway, [], 0,
     GoAwayPayload(1, ecNoError))]));
   AssertEquals('a client GOAWAY closes every stream', 0, FCore.OpenStreams);
   AssertEquals('a client GOAWAY resets each open stream', 2, FEvents.Resets);
   AssertTrue('the blocked stream is cancelled', Stream.IsCancelled);
+  Stream.ReleaseRef;
   AssertTrue('the connection reports its close', FEvents.Closing > 0);
 end;
 
@@ -849,11 +854,15 @@ begin
   NewCore;
   FCore.Feed(Pack(True, [RequestFrame(1, False)]));
   Stream := FCore.StreamById(1);
+  // a running handler holds one reference, so the stream stays alive after
+  // the core closes it
+  Stream.AddRef;
   FCore.Feed(Pack(False, [TFrame.Create(ftRstStream, [], 1,
     RstPayload(ecCancel))]));
   AssertEquals('the reset stream is closed', 0, FCore.OpenStreams);
   AssertEquals('the reset raised one event', 1, FEvents.Resets);
   AssertTrue('the stream is cancelled', Stream.IsCancelled);
+  Stream.ReleaseRef;
   AssertFalse('the connection stays open', FCore.GoAwaySent);
 end;
 
@@ -1061,6 +1070,32 @@ begin
   for I := HeadAt to ContAt do
     AssertEquals('every frame of the run names the stream', 1,
       Frames[I].Header.StreamId);
+end;
+
+procedure TConnectionCoreTest.TestClosedStreamsAreFreed;
+var
+  Before, After: PtrUInt;
+  I: Integer;
+begin
+  NewCore;
+  FCore.Feed(Pack(True, []));
+  OutputFrames;
+  Before := GetFPCHeapStatus.CurrHeapUsed;
+  // each cycle opens a stream and then resets it, so the core closes it
+  for I := 0 to 1999 do
+  begin
+    FCore.Feed(Pack(False, [
+      RequestFrame(LongWord(I) * 2 + 1, False),
+      TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
+        RstPayload(ecCancel))]));
+    OutputFrames;
+  end;
+  After := GetFPCHeapStatus.CurrHeapUsed;
+  AssertEquals('every closed stream left the core', 0, FCore.OpenStreams);
+  // the heap grows by the fixed cost of the last stream only, not by one
+  // stream per cycle: a retained stream costs about 700 bytes
+  AssertTrue('a closed stream is freed, not retained',
+    (After - Before) < 100000);
 end;
 
 initialization

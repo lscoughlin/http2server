@@ -32,6 +32,7 @@ interface
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs,
+  mormot.core.base, mormot.core.os,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter,
   Http2Server.Hpack;
 
@@ -105,6 +106,10 @@ type
     FLockDepth: Integer;
     /// the deepest hold of the per-stream lock seen so far (test seam)
     FMaxLockDepth: Integer;
+    /// how many holders keep this stream alive
+    // - the core holds one, a queue entry holds one, and a running handler
+    //   holds one, so the stream is freed when the last holder releases it
+    FRefCount: Integer;
     FReadTimeoutMs: Integer;
     FWriteTimeoutMs: Integer;
     FConsumedSinceUpdate: LongWord;
@@ -139,6 +144,10 @@ type
       const AHost: IStreamHost; const AInboundLimit, AOutboundLimit: Integer);
     destructor Destroy; override;
 
+    /// take one reference; the stream is freed when the last one is released
+    procedure AddRef;
+    /// release one reference and free the stream at zero
+    procedure ReleaseRef;
     /// register the waiter; the default is a TBlockingWaiter
     procedure SetWaiter(const AWaiter: IStreamWaiter);
     /// the waiter of this stream
@@ -271,6 +280,21 @@ begin
   FReadTimeoutMs := DefaultReadTimeoutMs;
   FWriteTimeoutMs := DefaultWriteTimeoutMs;
   FUpdateThreshold := DefaultUpdateThreshold;
+  // the core holds the first reference
+  FRefCount := 1;
+end;
+
+procedure TServerStream.AddRef;
+begin
+  InterlockedIncrement(FRefCount);
+end;
+
+procedure TServerStream.ReleaseRef;
+begin
+  // the last holder frees the stream.  The stream lock is not held, because
+  // the lock object dies with the stream.
+  if InterlockedDecrement(FRefCount) = 0 then
+    Self.Free;
 end;
 
 destructor TServerStream.Destroy;

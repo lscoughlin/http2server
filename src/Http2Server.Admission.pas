@@ -295,6 +295,8 @@ begin
     E.Stream := AStream;
     E.EnqueueMs := FClock.NowMs;
     FEntries.Enqueue(E);
+    // the queue entry holds one reference until the entry leaves the queue
+    AStream.AddRef;
   finally
     FLock.Release;
   end;
@@ -354,7 +356,11 @@ begin
       begin
         E := FEntries.Dequeue;
         if (not Result) and (E.Stream.StreamId = AStreamId) then
-          Result := True
+        begin
+          Result := True;
+          // the removed entry drops its reference
+          E.Stream.ReleaseRef;
+        end
         else
           Kept.Enqueue(E);
       end;
@@ -685,6 +691,8 @@ begin
   finally
     FLock.Release;
   end;
+  // the active handler drops its reference
+  AStream.ReleaseRef;
 end;
 
 function THandlerPool.SnapshotActive: TArray<TServerStream>;
@@ -758,6 +766,8 @@ begin
     end;
     Notify(seRequestTimedOut, Stream, 'the queue wait limit passed');
     AnswerRefusal(Stream);
+    // this branch never reaches MarkBusy, so the queue reference drops here
+    Stream.ReleaseRef;
     Exit;
   end;
   if Stream.IsCancelled then
@@ -768,6 +778,7 @@ begin
     finally
       FLock.Release;
     end;
+    Stream.ReleaseRef;
     Exit;
   end;
   if FHandler = nil then
@@ -778,6 +789,7 @@ begin
     finally
       FLock.Release;
     end;
+    Stream.ReleaseRef;
     Exit;
   end;
   MarkBusy(Stream);
@@ -854,7 +866,11 @@ begin
   // every entry that still waits is refused, per the refusal mode
   Streams := FQueue.DrainAll;
   for I := 0 to High(Streams) do
+  begin
     AnswerRefusal(Streams[I]);
+    // each drained entry drops its queue reference
+    Streams[I].ReleaseRef;
+  end;
 
   // wait for the workers up to the graceful timeout.  A worker that runs a
   // handler is not finished until that handler returns.

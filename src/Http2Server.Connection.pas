@@ -91,9 +91,6 @@ type
     //   self inside a TInterfacedObject invites a refcount double-destroy
     FHost: IStreamHost;
     FStreams: TObjectList<TServerStream>;
-    /// closed streams; a handler may still hold a reference to one, so the
-    /// object lives until the whole connection goes away
-    FClosed: TObjectList<TServerStream>;
     FById: TDictionary<LongWord, TServerStream>;
     /// the HPACK state of this connection
     FHpack: THpackConnection;
@@ -131,8 +128,8 @@ type
     procedure ProcessHeaders(const AFrame: TFrame);
     procedure ProcessContinuation(const AFrame: TFrame);
     procedure CompleteHeaderBlock;
-    procedure ValidateRequestBlock(const AStream: TServerStream;
-      const AIsTrailer: Boolean);
+    function ValidateRequestBlock(const AStream: TServerStream;
+      const AIsTrailer: Boolean): Boolean;
     procedure ProcessData(const AFrame: TFrame);
     procedure ProcessSettings(const AFrame: TFrame);
     procedure ProcessRstStream(const AFrame: TFrame);
@@ -261,8 +258,7 @@ begin
   // the host adapter is a borrowed reference to this core, so it forms no
   // reference cycle and its lifetime is the core lifetime
   FHost := TCoreStreamHost.Create(Self);
-  FStreams := TObjectList<TServerStream>.Create(True);
-  FClosed := TObjectList<TServerStream>.Create(True);
+  FStreams := TObjectList<TServerStream>.Create(False);
   FById := TDictionary<LongWord, TServerStream>.Create;
   FHpack := THpackConnection.Create(FOptions.MaxHeaderListSize,
     FOptions.MaxHeaderTableSize, FOptions.MaxFrameSize);
@@ -304,13 +300,18 @@ begin
 end;
 
 destructor TServerConnectionCore.Destroy;
+var
+  I: Integer;
 begin
   FHost := nil;
   FWakeLock.Free;
   FOut.Free;
   FById.Free;
+  // each remaining stream holds the core reference; release it, so a stream
+  // that a queue entry or a handler still holds is freed on the last release
+  for I := 0 to FStreams.Count - 1 do
+    FStreams[I].ReleaseRef;
   FStreams.Free;
-  FClosed.Free;
   FFlow.Free;
   FHpack.Free;
   FConnLock.Free;
@@ -634,7 +635,9 @@ begin
   FFlow.CloseStream(AStream.StreamId);
   FById.Remove(AStream.StreamId);
   FStreams.Extract(AStream);
-  FClosed.Add(AStream);
+  // the core drops its reference; a queue entry or a running handler may
+  // hold the stream alive a while longer
+  AStream.ReleaseRef;
 end;
 
 function TServerConnectionCore.CheckStreamId(const AStreamId: LongWord): Boolean;
@@ -843,13 +846,14 @@ begin
   Stream.SetRemoteHeaders(Headers);
   if FHpack.BlockEndStream then
     Stream.MarkRemoteEnded;
-  ValidateRequestBlock(Stream, IsTrailer);
+  if not ValidateRequestBlock(Stream, IsTrailer) then
+    Exit;
   if FEvents <> nil then
     FEvents.RequestReady(Stream);
 end;
 
-procedure TServerConnectionCore.ValidateRequestBlock(
-  const AStream: TServerStream; const AIsTrailer: Boolean);
+function TServerConnectionCore.ValidateRequestBlock(
+  const AStream: TServerStream; const AIsTrailer: Boolean): Boolean;
 var
   Verdict: TRequestVerdict;
 begin
@@ -861,7 +865,7 @@ begin
     SendRstStream(AStream.StreamId, ecProtocolError);
     AStream.Cancel(ecProtocolError);
     CloseStream(AStream);
-    Exit;
+    Exit(False);
   end;
   // a trailer carries no content-length, so the head declaration stands
   if not AIsTrailer then
@@ -869,6 +873,7 @@ begin
     AStream.SetDeclaredLength(Verdict.DeclaredLength);
     AStream.MarkRequestHead;
   end;
+  Result := True;
 end;
 
 procedure TServerConnectionCore.ProcessData(const AFrame: TFrame);
