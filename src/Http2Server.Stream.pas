@@ -109,6 +109,10 @@ type
     FWriteTimeoutMs: Integer;
     FConsumedSinceUpdate: LongWord;
     FUpdateThreshold: LongWord;
+    FDeclaredLength: Int64;
+    FReceivedLength: Int64;
+    FHasDeclaredLength: Boolean;
+    FHasRequestHead: Boolean;
     FRemoteHeaders: THeaderBlock;
     FPendingStatus: Integer;
     FPendingHeaders: THeaderBlock;
@@ -161,6 +165,17 @@ type
     procedure SetRemoteHeaders(const AHeaders: THeaderBlock);
     /// the request header block of this stream
     function RemoteHeaders: THeaderBlock;
+    /// record the content-length that the request headers declared
+    // - ALength below zero clears the record, which a trailer never carries
+    procedure SetDeclaredLength(const ALength: Int64);
+    /// count ACount body bytes, and report a content-length fault
+    function CountReceivedBody(const ACount: Integer): Boolean;
+    /// report a fault when the body length differs from the declaration
+    function DeclaredLengthMatches: Boolean;
+    /// true once the request head of this stream arrived
+    function HasRequestHead: Boolean;
+    /// record that the request head of this stream arrived
+    procedure MarkRequestHead;
     /// hold a plain response header block until the IO thread encodes it
     procedure QueueResponseHeaders(const AStatus: Integer;
       const AHeaders: THeaderBlock; const AEndStream: Boolean);
@@ -462,6 +477,59 @@ begin
   LockStream;
   try
     Result := FRemoteHeaders;
+  finally
+    UnlockStream;
+  end;
+end;
+
+procedure TServerStream.SetDeclaredLength(const ALength: Int64);
+begin
+  LockStream;
+  try
+    FDeclaredLength := ALength;
+    FReceivedLength := 0;
+    FHasDeclaredLength := ALength >= 0;
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.CountReceivedBody(const ACount: Integer): Boolean;
+begin
+  LockStream;
+  try
+    FReceivedLength := FReceivedLength + ACount;
+    Result := (not FHasDeclaredLength) or (FReceivedLength <= FDeclaredLength);
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.DeclaredLengthMatches: Boolean;
+begin
+  LockStream;
+  try
+    Result := (not FHasDeclaredLength) or (FReceivedLength = FDeclaredLength);
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.HasRequestHead: Boolean;
+begin
+  LockStream;
+  try
+    Result := FHasRequestHead;
+  finally
+    UnlockStream;
+  end;
+end;
+
+procedure TServerStream.MarkRequestHead;
+begin
+  LockStream;
+  try
+    FHasRequestHead := True;
   finally
     UnlockStream;
   end;

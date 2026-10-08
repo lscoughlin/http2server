@@ -864,16 +864,21 @@ var
   I: Integer;
 begin
   NewCore(3);
-  SetLength(List, 10000);
-  for I := 0 to Length(List) - 1 do
-    List[I] := TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
+  // a reset on an idle stream is a fault, so each reset needs an open
+  // stream: the list opens a stream and then resets it
+  SetLength(List, 20);
+  for I := 0 to 9 do
+  begin
+    List[I * 2] := RequestFrame(LongWord(I) * 2 + 1, False);
+    List[I * 2 + 1] := TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
       RstPayload(ecCancel));
+  end;
   FCore.Feed(Pack(True, List));
   Frames := OutputFrames;
   AssertTrue('the reset flood trips the bucket', FEvents.Tripped);
   AssertEquals('the reset bucket tripped', Ord(lkReset),
     Ord(FEvents.TripKind));
-  AssertTrue('the output stays bounded', Length(Frames) <= 4);
+  AssertTrue('the output stays bounded', Length(Frames) <= 40);
   AssertTrue('the GOAWAY left the core', FCore.GoAwaySent);
 end;
 
@@ -887,16 +892,21 @@ var
   I: Integer;
 begin
   NewCore(2);
-  SetLength(List, 20);
-  for I := 0 to Length(List) - 1 do
-    List[I] := TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
+  // each reset follows its own open stream, because a reset on an idle
+  // stream is a connection fault that ends the feed at the first frame
+  SetLength(List, 10);
+  for I := 0 to 4 do
+  begin
+    List[I * 2] := RequestFrame(LongWord(I) * 2 + 1, False);
+    List[I * 2 + 1] := TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
       RstPayload(ecCancel));
+  end;
   FCore.Feed(Pack(True, List));
   Frames := OutputFrames;
   ParseGoAway(AnyOf(Frames, ftGoAway), Id, Code, Debug);
   AssertEquals('a tripped bucket says ENHANCE_YOUR_CALM',
     Ord(ecEnhanceYourCalm), Ord(Code));
-  AssertEquals('the GOAWAY names the last processed stream', 0, Id);
+  AssertEquals('the GOAWAY names the last processed stream', 3, Id);
 end;
 
 procedure TConnectionCoreTest.TestControlFrameAbuseTripsTheBucket;

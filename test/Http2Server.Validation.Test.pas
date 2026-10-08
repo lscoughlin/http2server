@@ -934,10 +934,12 @@ begin
   Client := TRawClient.Create(Port);
   try
     Client.SendPreface;
-    Client.SendFrame(Client.GetFrame(1, '/'));
+    // RFC 9113 section 5.1 makes a reset on an idle stream a connection
+    // fault, so the flood opens each stream and then resets it
     for I := 0 to 9 do
     begin
-      Frame := BuildRstStreamFrame(LongWord(3 + I * 2), ecCancel);
+      Client.SendFrame(Client.GetFrame(LongWord(1 + I * 2), '/'));
+      Frame := BuildRstStreamFrame(LongWord(1 + I * 2), ecCancel);
       Client.SendFrame(Frame);
     end;
     AssertTrue('the reset flood ends in GOAWAY',
@@ -1061,19 +1063,21 @@ var
   I: Integer;
 begin
   // the block byte limit is twice the header list size, so a long block with
-  // END_HEADERS cleared trips the limit on its first continuation frame
+  // END_HEADERS cleared trips the limit across several continuation frames.
+  // Each frame stays inside the frame-size limit, because an oversized frame
+  // is a different fault that fires first.
   Port := StartServer(SmallBucket(1000000), SmallBucket(1000000));
   Client := TRawClient.Create(Port);
   try
     Client.SendPreface;
-    SetLength(Big, 200000);
+    SetLength(Big, 16384);
     for I := 0 to High(Big) do
       Big[I] := Byte(I);
     Block := Client.EncodeHeaders(THeaderBlock(nil));
     Client.SendFrame(BuildHeadersFrame(1, Block, False, True));
-    // the block limit is 2 * 65536, so a 200000-octet block passes it
-    Client.SendFrame(BuildContinuationFrame(1, Big, False));
-    Client.SendFrame(BuildContinuationFrame(1, Big, True));
+    // the block limit is 2 * 65536, so nine 16384-octet frames pass it
+    for I := 0 to 8 do
+      Client.SendFrame(BuildContinuationFrame(1, Big, I = 8));
     AssertTrue('the oversized header block ends in GOAWAY',
       Client.WaitGoAway(Code, Last, ResponseTimeoutMs));
     AssertEquals('the GOAWAY code is ENHANCE_YOUR_CALM',

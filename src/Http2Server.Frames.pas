@@ -159,6 +159,8 @@ function ParseWindowUpdate(const AFrame: TFrame): LongWord;
 function ParsePing(const AFrame: TFrame): TBytes;
 procedure ParsePriority(const AFrame: TFrame; out ADependsOn, AWeight: LongWord;
   out AExclusive: Boolean);
+/// the stream that a HEADERS priority field depends on; 0 when absent
+function HeaderPriorityDependsOn(const AFrame: TFrame): LongWord;
 /// the header block of a HEADERS/CONTINUATION frame with padding and the
 /// optional priority fields removed
 function ExtractHeaderBlock(const AFrame: TFrame): TBytes;
@@ -651,6 +653,22 @@ begin
   AExclusive := Raw and $80000000 <> 0;
   ADependsOn := Raw and MaxStreamId;
   AWeight := AFrame.Payload[4];
+end;
+
+function HeaderPriorityDependsOn(const AFrame: TFrame): LongWord;
+var
+  Raw: LongWord;
+begin
+  Result := 0;
+  if not AFrame.IsPriority then
+    Exit;
+  // the priority field is the first five octets, surrounded by the header
+  // block and any padding, so the payload is longer than five octets
+  if Length(AFrame.Payload) < 5 then
+    raise EHttpProtocolError.Create(
+      'the priority field needs five octets', ecFrameSizeError);
+  Raw := ReadUInt32BE(AFrame.Payload, 0);
+  Result := Raw and MaxStreamId;
 end;
 
 function HeaderBlockOffset(const AFrame: TFrame): Integer;

@@ -394,7 +394,7 @@ begin
     // The GOAWAY frame of a trip or a graceful stop must reach the peer, so
     // the close waits for the whole output drain.  A close before the drain
     // drops the queued GOAWAY and the peer never learns why the socket ended.
-    if FCore.GoAwaySent and (FCore.OpenStreams = 0) and
+    if FCore.IsClosing and (FCore.OpenStreams = 0) and
        (not FCore.HasOutput) and (PendingWrite = 0) then
       exit(soClose);
   finally
@@ -415,7 +415,7 @@ begin
     // stream ends, because the trip already drained it, so the decision runs
     // here too: the close waits for the frames, and the peer learns why the
     // socket ended.
-    if FCore.GoAwaySent and (FCore.OpenStreams = 0) and
+    if FCore.IsClosing and (FCore.OpenStreams = 0) and
        (not FCore.HasOutput) and (PendingWrite = 0) then
       result := soClose;
   finally
