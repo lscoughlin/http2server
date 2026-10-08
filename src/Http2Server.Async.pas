@@ -390,9 +390,13 @@ begin
         // the first header block arrived, so the header deadline is met
         FHeaderDeadlineSec := 0;
     end;
-    if FCore.GoAwaySent and (FCore.OpenStreams = 0) then
-      exit(soClose);
     SendPendingOutput;
+    // The GOAWAY frame of a trip or a graceful stop must reach the peer, so
+    // the close waits for the whole output drain.  A close before the drain
+    // drops the queued GOAWAY and the peer never learns why the socket ended.
+    if FCore.GoAwaySent and (FCore.OpenStreams = 0) and
+       (not FCore.HasOutput) and (PendingWrite = 0) then
+      exit(soClose);
   finally
     Http2IoThreadLeave;
   end;
@@ -406,6 +410,14 @@ begin
     // the next pull, because fOwner.Write calls this method before it
     // returns, so a pull here would recurse into the same write path
     result := soContinue;
+    // A GOAWAY trip or a graceful stop closes the connection once the last
+    // frame left the socket.  OnRead cannot make that decision after the last
+    // stream ends, because the trip already drained it, so the decision runs
+    // here too: the close waits for the frames, and the peer learns why the
+    // socket ended.
+    if FCore.GoAwaySent and (FCore.OpenStreams = 0) and
+       (not FCore.HasOutput) and (PendingWrite = 0) then
+      result := soClose;
   finally
     Http2IoThreadLeave;
   end;

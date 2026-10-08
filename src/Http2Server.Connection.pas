@@ -149,6 +149,7 @@ type
     procedure FailConnection(const AMessage: string;
       const AErrorCode: THttp2ErrorCode);
     procedure CloseStream(const AStream: TServerStream);
+    procedure ReapClosedStreams;
     procedure FlushLocked;
     procedure FlushPendingHeaders;
     procedure FlushStreamCredits;
@@ -421,6 +422,23 @@ begin
   FlushDrainedOutput;
   FlushStreamCredits;
   FlushConnectionCredit;
+  // A stream whose two halves have ended is closed.  FById.Count feeds both
+  // the concurrent-stream limit and the GOAWAY drain, so a stream that ended
+  // must leave the map, or the count stays high for ever.
+  ReapClosedStreams;
+end;
+
+procedure TServerConnectionCore.ReapClosedStreams;
+var
+  I: Integer;
+  Stream: TServerStream;
+begin
+  for I := FStreams.Count - 1 downto 0 do
+  begin
+    Stream := FStreams[I];
+    if (Stream.State = ssClosed) or Stream.IsCancelled then
+      CloseStream(Stream);
+  end;
 end;
 
 procedure TServerConnectionCore.FlushDrainedOutput;
@@ -470,8 +488,21 @@ end;
 function TServerConnectionCore.TakeOutput(out AData: TBytes): Boolean;
 begin
   AData := nil;
+  // The wake flag clears under the connection lock, in the same section that
+  // takes the bytes.  A handler queues its bytes under the connection lock
+  // and then signals.  A clear outside that lock could fall between the two,
+  // so the handler would see the flag still set and skip the signal, and the
+  // IO thread would leave the bytes with no later wake-up.  A clear inside
+  // the lock serializes with every queue, so each queued byte either arrives
+  // in this take or leaves the flag set for the handler to signal.
   LockConn;
   try
+    FWakeLock.Acquire;
+    try
+      FWakePending := False;
+    finally
+      FWakeLock.Release;
+    end;
     Result := FOutputCount > 0;
     if not Result then
       Exit;
@@ -480,13 +511,6 @@ begin
     FOutputCount := 0;
   finally
     UnlockConn;
-  end;
-  // the IO thread holds the bytes now, so the next write may wake it again
-  FWakeLock.Acquire;
-  try
-    FWakePending := False;
-  finally
-    FWakeLock.Release;
   end;
 end;
 
