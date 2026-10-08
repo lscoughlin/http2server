@@ -111,6 +111,7 @@ type
     procedure TestPingIsAcknowledged;
     procedure TestPriorityIsIgnored;
     procedure TestClientGoAwayCancelsOpenStreams;
+    procedure TestClientGoAwayAnswersAndKeepsReading;
     procedure TestRstStreamKeepsTheConnection;
     procedure TestResetAbuseTripsTheBucket;
     procedure TestBucketTripSendsEnhanceYourCalm;
@@ -845,6 +846,34 @@ begin
   AssertTrue('the blocked stream is cancelled', Stream.IsCancelled);
   Stream.ReleaseRef;
   AssertTrue('the connection reports its close', FEvents.Closing > 0);
+end;
+
+procedure TConnectionCoreTest.TestClientGoAwayAnswersAndKeepsReading;
+var
+  Frames: TArray<TFrame>;
+  Ping: TBytes;
+const
+  // One FED sequence holds the peer GOAWAY and a PING after it.  RFC 9113
+  // section 6.8 lets the peer keep the connection in use until its last
+  // stream ends, and section 7 holds that an unknown error code triggers no
+  // special behaviour, so the PING must still be acknowledged.  A read loop
+  // that ended on the peer GOAWAY dropped that PING, and the peer then saw
+  // neither an answer nor a close.
+  PayloadOctets = 8;
+begin
+  NewCore;
+  SetLength(Ping, PayloadOctets);
+  FillChar(Ping[0], PayloadOctets, Ord('g'));
+  FCore.Feed(Pack(True,
+    [TFrame.Create(ftGoAway, [], 0, GoAwayPayload(0, THttp2ErrorCode($ff))),
+     TFrame.Create(ftPing, [], 0, Ping)]));
+  Frames := OutputFrames;
+  AssertTrue('the peer GOAWAY is answered with a GOAWAY',
+    CountOf(Frames, ftGoAway) > 0);
+  AssertEquals('the PING after a peer GOAWAY is answered', 1,
+    CountOf(Frames, ftPing));
+  AssertTrue('the answer is a PING acknowledgement',
+    AnyOf(Frames, ftPing).IsAck);
 end;
 
 procedure TConnectionCoreTest.TestRstStreamKeepsTheConnection;

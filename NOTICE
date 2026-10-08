@@ -32,7 +32,7 @@ They are not covered by the licence of this product.
    LGPL linking exception.
    This product uses the mORMot2 async, socket, TLS and ALPN units at build
    time and at run time. The mORMot2 checkout is a pinned external
-   dependency at revision 21b62bc88737336d9a1928a748d5f0e6a2f319a7. It is
+   dependency at revision b2b195da1e0580058672a88620ef71bb47283eb1. It is
    not part of the http2server source distribution.
    That revision carries the aarch64 lock fix of `b2b195d` ("Locked*() are
    now full memory barriers on FPC non-Intel CPUs"): on aarch64 FPC builds

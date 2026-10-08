@@ -50,7 +50,7 @@ vars:
       fi
   MORMOT: 'third_party/mORMot2/src'
   MORMOT_REPO: 'third_party/mORMot2'
-  MORMOT_REV: '21b62bc88737336d9a1928a748d5f0e6a2f319a7'
+  MORMOT_REV: 'b2b195da1e0580058672a88620ef71bb47283eb1'
   OPENSSL_LIBPATH:
     sh: |
       if [ -n "${OPENSSL_LIBPATH:-}" ]; then

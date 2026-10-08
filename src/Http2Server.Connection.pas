@@ -111,6 +111,8 @@ type
     FLastStreamId: LongWord;
     FClosing: Boolean;
     FGoAwaySent: Boolean;
+    /// the peer sent GOAWAY, so the read loop continues to its last stream
+    FPeerGoAway: Boolean;
     FTripKind: TLimitKind;
     FConnUpdatePending: LongWord;
     /// the waker that the IO side installs; nil until the server registers one
@@ -420,7 +422,11 @@ begin
       end;
     end;
     Inc(Offset, FrameLen);
-    if FClosing then
+    // A connection error or a trip ends the read loop, because no later frame
+    // of the buffer changes the outcome.  A GOAWAY from the peer is not such
+    // an end: RFC 9113 section 6.8 lets the peer keep the connection in use
+    // until the last stream ends, so the frames after it are still read.
+    if FClosing and FGoAwaySent and not FPeerGoAway then
       Break;
   end;
   if Offset > 0 then
@@ -1097,6 +1103,9 @@ begin
     Exit;
   end;
   ParseGoAway(AFrame, Id, Code, Debug);
+  // RFC 9113 section 6.8: the peer may keep the connection in use until its
+  // last stream ends, so the read loop must not stop on this frame
+  FPeerGoAway := True;
   // the peer opens no stream after GOAWAY, so every open stream is cancelled
   for I := FStreams.Count - 1 downto 0 do
   begin
@@ -1106,6 +1115,12 @@ begin
       FEvents.StreamReset(Stream);
     CloseStream(Stream);
   end;
+  // RFC 9113 section 6.8: a receiver of a GOAWAY that has no more use for the
+  // connection SHOULD still send a GOAWAY frame before terminating.  The
+  // answer names the last stream the server processed, and it is also what
+  // makes the end of the connection visible: the peer learns that the socket
+  // is going away instead of waiting for a frame that never comes.
+  SendGoAway(FLastStreamId, ecNoError);
   FClosing := True;
   if FEvents <> nil then
     FEvents.ConnectionClosing;

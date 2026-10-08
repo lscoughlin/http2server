@@ -58,7 +58,7 @@ pattern again.
 | Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0086 s |
 | Load | `h2load -n 200 -c 10 -m 6 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
 
-The unit suite adds 310 tests with 0 errors and 0 failures. The suite holds
+The unit suite adds 311 tests with 0 errors and 0 failures. The suite holds
 the local rules; the tools above hold the external rules.
 
 ### The stability of the IO pool under abusive load
@@ -70,23 +70,41 @@ run together with 300 parallel sockets that each send a connection preface,
 SETTINGS and a DATA frame on an idle stream, and 300 sockets that reset at
 once. A healthy server holds 11 threads, and a stalled server held 6 to 8.
 
-Two faults caused it. The first was a fault of this server: `OnFirstRead`
-set the handshake deadline, and Darwin answers `EINVAL` for `SO_RCVTIMEO` on
-a socket whose peer already sent RST, so the hook raised out of a call that
-mORMot2 makes outside any `try`, and the pool loop ends the thread on any
-escape. The hook now reports a refusal instead of raising, and the test
+Three faults caused it, and one of them is also the reason of a `h2spec`
+failure that appeared in about one run in ten.
+
+The first two are faults of this server. `OnFirstRead` set the handshake
+deadline, and Darwin answers `EINVAL` for `SO_RCVTIMEO` on a socket whose
+peer already sent RST, so the hook raised out of a call that mORMot2 makes
+outside any `try`, and the pool loop ends the thread on any escape. The hook
+now reports a refusal instead of raising, and the test
 `TAsyncServerTest.TestImmediateResetKeepsTheIoPoolAlive` holds that rule:
 64 sockets reset at once, then the server must answer a fresh request.
 
+The third fault is also a fault of this server, and the `h2spec` case names
+it. The case is `http2/7` "Sends a GOAWAY frame with unknown error code": the
+peer sends a GOAWAY and then a PING, and the test passes on a PING
+acknowledgement *or* on a connection close. The read loop ended on the peer
+GOAWAY, so the PING that followed in the same read was dropped, and the close
+stayed invisible because `OnRead` closes only after the output drains, which
+never happened. The peer then saw neither an answer nor a close, and the case
+timed out. RFC 9113 section 6.8 lets the peer keep the connection in use
+until its last stream ends, and section 7 holds that an unknown error code
+triggers no special behaviour, so both answers were wrong. `ProcessGoAway`
+now answers with a GOAWAY of its own, which makes the end of the connection
+visible, and the read loop treats a peer GOAWAY as ordinary input. The test
+`TConnectionCoreTest.TestClientGoAwayAnswersAndKeepsReading` holds the rule,
+and 30 cold-start full-package `h2spec` runs then passed 30 times.
 
-The second fault was in the pinned mORMot2 revision. On aarch64, FPC builds
+The fourth fault is in the pinned mORMot2 revision. On aarch64, FPC builds
 the `Interlocked*` calls of a `TLightLock` without a memory barrier, so the
 lock of the pending-event list of the poll did not publish its writes, and
-the pool threads failed with an access violation. The pin is now
-`21b62bc88737336d9a1928a748d5f0e6a2f319a7`, which carries the fix `b2b195d`
-of 2026-10-08. With that revision 25 rounds of the same load held 11 threads
-and answered every request. An Intel host would not show the fault, so the
-fix is invisible on some hardware and decisive on this one.
+the pool threads failed with an access violation. The pin is
+`b2b195da1e0580058672a88620ef71bb47283eb1`, which is the fix `b2b195d` of
+2026-10-08 and the earliest revision that holds it. With that revision 25
+rounds of the same load held 11 threads and answered every request. An Intel
+host would not show the fault, so the fix is invisible on some hardware and
+decisive on this one.
 
 ### The bound on the streams in flight
 
