@@ -389,6 +389,13 @@ begin
       if FCore.LastProcessedStreamId <> 0 then
         // the first header block arrived, so the header deadline is met
         FHeaderDeadlineSec := 0;
+      // a header block that arrives one byte at a time keeps the connection
+      // busy, so the idle check never runs.  The deadline is judged here,
+      // on every read, and a block that missed it ends the connection.
+      if (FHeaderDeadlineSec <> 0) and
+         (TAsyncConnectionSec(GetTickCount64 div 1000) > FHeaderDeadlineSec)
+      then
+        exit(soClose);
     end;
     SendPendingOutput;
     // The GOAWAY frame of a trip or a graceful stop must reach the peer, so

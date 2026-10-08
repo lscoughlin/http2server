@@ -123,6 +123,8 @@ type
     procedure TestIdleConnectionIsClosed;
     /// a connection with no first header block is closed after the header timeout
     procedure TestFirstHeaderBlockTimeout;
+    /// a header block that arrives one byte at a time still meets the header timeout
+    procedure TestTrickledHeaderBlockTimeout;
   end;
 
   /// the thread rule of the IO and handler sides
@@ -590,6 +592,64 @@ begin
     Client.SockSendFlush();
     AssertTrue('the server kept a connection with no header block',
       PeerClosed(Client, 8000));
+  finally
+    Client.Free;
+  end;
+end;
+
+procedure TAsyncServerTest.TestTrickledHeaderBlockTimeout;
+var
+  Port: Integer;
+  Client: TCrtSocket;
+  Wire: TBytes;
+  FrameBytes: TBytes;
+  I: Integer;
+  Closed: Boolean;
+begin
+  // a long idle timeout isolates the header timeout of this test.  A header
+  // block that arrives one byte at a time keeps the connection busy, so the
+  // idle callback never runs.  The deadline must still end the connection.
+  Port := StartServerWithTimeouts(TEchoHandler.Create, 60000, 1100);
+  Client := TCrtSocket.Open('127.0.0.1', IntToStr(Port), nlTcp, IoTimeoutMs);
+  try
+    SetLength(Wire, ClientPrefaceSize);
+    for I := 0 to ClientPrefaceSize - 1 do
+      Wire[I] := ClientPreface[I];
+    Client.SockSend(@Wire[0], Length(Wire));
+    Client.SockSendFlush();
+    // a HEADERS frame header holds the length, the type, the flags and the
+    // stream, and no payload follows it
+    SetLength(FrameBytes, 9);
+    FrameBytes[0] := 0;
+    FrameBytes[1] := 0;
+    FrameBytes[2] := 64;   // the declared payload length
+    FrameBytes[3] := 1;    // HEADERS
+    FrameBytes[4] := 5;    // END_STREAM and END_HEADERS
+    FrameBytes[5] := 0;
+    FrameBytes[6] := 0;
+    FrameBytes[7] := 0;
+    FrameBytes[8] := 1;    // stream 1
+    // one byte every 300 ms keeps the connection busy, so the idle callback
+    // never runs.  The header deadline must end the connection anyway.
+    Closed := False;
+    for I := 0 to 60 do
+    begin
+      try
+        Client.SockSend(@FrameBytes[I mod Length(FrameBytes)], 1);
+        Client.SockSendFlush();
+      except
+        Closed := True;
+        Break;
+      end;
+      Sleep(300);
+      if PeerClosed(Client, 10) then
+      begin
+        Closed := True;
+        Break;
+      end;
+    end;
+    AssertTrue('the server kept a trickled header block past the deadline',
+      Closed);
   finally
     Client.Free;
   end;

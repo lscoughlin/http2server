@@ -184,25 +184,45 @@ var
   Server: IHttp2Server;
   Port: Integer;
   Line: string;
-  BigBucket: TTokenBucketOptions;
+  BigBucket, StrictBucket: TTokenBucketOptions;
+  Strict: Boolean;
+  Factory: THttp2ServerFactory;
 begin
   // the validation runs drive a large body, so the control-frame rate limits
   // must not fire.  The server keeps one control bucket: it takes the least
-  // capacity of the five, so all five are raised together.
+  // capacity of the five, so all five are raised together.  The second
+  // argument `strict` lowers every control bucket, so the abuse tool can
+  // reach the limits.
   BigBucket := TTokenBucketOptions.Create
     .WithCapacity(100000000)
     .WithRefillPerSecond(100000000);
+  StrictBucket := TTokenBucketOptions.Create
+    .WithCapacity(20)
+    .WithRefillPerSecond(1)
+    .WithCostBeforeDispatch(1)
+    .WithCostAfterDispatch(1);
   Port := 0;
   if ParamCount >= 1 then
     Port := StrToIntDef(ParamStr(1), 0);
-  Server := THttp2ServerFactory.Create
+  Strict := (ParamCount >= 2) and (ParamStr(2) = 'strict');
+  Factory := THttp2ServerFactory.Create
     .WithHost('127.0.0.1')
     .WithPort(Port)
     .WithClearTextAllowed(True)
     .WithHandler(TInteropHandler.Create)
     .WithHandlerThreads(4)
-    .WithIOThreads(2)
-    .Build;
+    .WithIOThreads(2);
+  if Strict then
+    Factory := Factory
+      .WithResetBucket(StrictBucket)
+      .WithPingBucket(StrictBucket)
+      .WithSettingsBucket(StrictBucket)
+      .WithEmptyDataBucket(StrictBucket)
+      .WithWindowUpdateBucket(StrictBucket)
+      .WithContinuationBucket(StrictBucket)
+      .WithMaxHeaderListSize(8192)
+      .WithHeaderTimeout(2000);
+  Server := Factory.Build;
   Server.Start;
   Writeln('the validation server listens on port ', Server.Port, ' (h2c)');
   Flush(Output);

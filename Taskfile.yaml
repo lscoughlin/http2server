@@ -142,6 +142,20 @@ tasks:
       - '{{.FPC}} {{.FPCFLAGS}} -Fu./test -FE{{.BIN}} test/Http2Server.RunTests.pas'
       - '{{.BIN}}/Http2Server.RunTests --all --format=plain --sparse'
 
+  validate:
+    desc: Build the example server and run the external HTTP/2 conformance tools
+    deps:
+      - examples
+    cmds:
+      - 'sh tools/validate/run.sh'
+
+  validate:fast:
+    desc: Build the example server and run the short HTTP/2 conformance packages
+    deps:
+      - examples
+    cmds:
+      - 'sh tools/validate/run.sh fast'
+
   clean:
     desc: Remove build outputs
     cmds:
