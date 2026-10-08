@@ -1,5 +1,10 @@
 {**
 ---
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, lifecycle, start, stop, goaway, drain
+notes:
+  - This document describes the life of one server.
 scope: The life of one server from Bind to Stop — the start path, the graceful stop, the GOAWAY broadcast, the drain wait and the shutdown order.
 primary_types:
   - IHttp2Server

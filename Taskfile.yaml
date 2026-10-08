@@ -156,6 +156,11 @@ tasks:
     cmds:
       - 'sh tools/validate/run.sh fast'
 
+  docs:check:
+    desc: Check the documentation tree against the source rules
+    cmds:
+      - 'sh tools/check/doc_rules.sh'
+
   clean:
     desc: Remove build outputs
     cmds:

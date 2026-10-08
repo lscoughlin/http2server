@@ -1,17 +1,21 @@
+{**
 ---
-title: "FPC runtime and language facts"
-aliases:
-  - "fpc-runtime"
-tags:
-  - http2server
-  - design
-  - fpc
-status: draft
-up: "[[http2server]]"
-related:
-  - "[[toolchain]]"
-updated: 2026-10-07
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, fpc, compiler-mode, thread-manager, runtime
+notes:
+  - This document records the Free Pascal facts the library rests on.
+scope: The compiler modes, the thread manager, the verified runtime facts, the build line and the file header rule.
+primary_types: []
+db_tables: []
+related_docs:
+  - doc/design/architecture.md
+  - doc/verification/toolchain.md
+invariants:
+  - The library compiles in the Delphi mode.
+  - The thread manager comes from mORMot2 and not from a program unit.
 ---
+}
 
 # FPC runtime and language facts
 

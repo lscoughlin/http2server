@@ -159,10 +159,19 @@ settings in `TConnectionSettings` (`src/Http2Server.Frames.pas:94`).
 
 The factory holds one `TTokenBucketOptions` per limited client action: the
 reset bucket and one bucket per control frame kind
-(`src/Http2Server.Config.pas:134-139`). Each has its own `WithX` method
-(`src/Http2Server.Config.pas:211-226`). `TTokenBucketOptions` is the fluent
-record of `src/Http2Server.Limits.pas:71`; `doc/design/limits.md` describes
-the bucket itself.
+(`src/Http2Server.Config.pas:134-139`). Each bucket has its own `WithX`
+method (`src/Http2Server.Config.pas:557-600`). `TTokenBucketOptions` is the
+fluent record of `src/Http2Server.Limits.pas:71`; `doc/design/limits.md`
+describes the bucket itself.
+
+| Bucket | `WithX` | The client action it bounds |
+|---|---|---|
+| reset | `WithResetBucket` | `RST_STREAM`, the rapid-reset technique of CVE-2023-44487 |
+| ping | `WithPingBucket` | `PING` |
+| settings | `WithSettingsBucket` | `SETTINGS` |
+| empty data | `WithEmptyDataBucket` | `DATA` with no payload |
+| window update | `WithWindowUpdateBucket` | `WINDOW_UPDATE`, the tiny-increment technique of RFC 9113 section 10.5 |
+| continuation | `WithContinuationBucket` | `CONTINUATION`, the flooding technique of CERT VU#421644 |
 
 The reset bucket has two costs. `CostBeforeDispatch` applies to a reset before
 a handler runs, and `CostAfterDispatch` applies to a reset after a handler

@@ -1,14 +1,21 @@
+{**
 ---
-title: "Toolchain and environment"
-aliases:
-  - "toolchain"
-tags:
-  - http2server
-  - verification
-status: draft
-up: "[[http2server]]"
-updated: 2026-10-07
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, toolchain, fpc, openssl, build, platform
+notes:
+  - This document records the compiler, the platform and the build.
+scope: The compiler and platform facts, the build flags, the TLS libraries, the dependency bootstrap, the test suite and the deliberate gaps.
+primary_types: []
+db_tables: []
+related_docs:
+  - doc/design/fpc-runtime.md
+  - doc/verification/validation.md
+invariants:
+  - The pinned compiler is Free Pascal 3.2.4.
+  - OpenSSL 3 is a run-time dependency and is not linked into the binary.
 ---
+}
 
 # Toolchain and environment
 

@@ -1,5 +1,10 @@
 {**
 ---
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, public-api, factory, handler, observer, statistics
+notes:
+  - This document describes the public surface of the library.
 scope: The public surface of the library — the factory, the server, the handler contract and the observation events.
 primary_types:
   - THttp2ServerFactory

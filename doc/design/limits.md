@@ -1,16 +1,27 @@
+{**
 ---
-title: "Per-connection abuse limits"
-aliases:
-  - "limits"
-tags:
-  - http2server
-  - design
-  - limits
-status: draft
-related:
-  - "[[fpc-runtime]]"
-updated: 2026-10-07
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, limits, token-bucket, reset-flood, abuse
+notes:
+  - This document describes the token buckets that bound the work a peer may ask for.
+scope: The reason for the limit, the clock, the bucket options, the bucket, the limit set and the defaults.
+primary_types:
+  - TTokenBucket
+  - TTokenBucketOptions
+  - TConnectionLimits
+  - IMonotonicClock
+db_tables: []
+related_docs:
+  - doc/design/configuration.md
+  - doc/design/admission.md
+  - doc/design/connection.md
+invariants:
+  - A bucket never holds more tokens than its capacity.
+  - A bucket tripped sends GOAWAY with ENHANCE_YOUR_CALM.
+  - Every bucket reads the clock through one interface.
 ---
+}
 
 # Per-connection abuse limits
 

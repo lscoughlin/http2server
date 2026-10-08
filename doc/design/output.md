@@ -1,5 +1,11 @@
+{**
 ---
-scope: Http2Server.Output
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, output, drain, frames, flow-control, wake-up
+notes:
+  - This document describes the response path and the drain.
+scope: The response path, the turn of the drain, the flow-control share, the header encoding and the frame building.
 primary_types:
   - TOutputDrain
   - TOutputDrainOptions
@@ -15,6 +21,7 @@ invariants:
   - One HPACK encoder serves one connection.
   - No handler thread runs drain code.
 ---
+}
 
 # Outbound path
 

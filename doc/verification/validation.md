@@ -1,17 +1,22 @@
+{**
 ---
-title: "Validation evidence"
-aliases:
-  - "validation"
-tags:
-  - http2server
-  - verification
-status: draft
-up: "[[http2server]]"
-related:
-  - "[[toolchain]]"
-  - "[[protocol]]"
-updated: 2026-10-08
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, validation, h2spec, conformance, interop, evidence
+notes:
+  - This document records the conformance evidence of the server.
+scope: The external tools, the runs and their results, the comparison with the C and FreePascal implementations, and the recorded gaps.
+primary_types: []
+db_tables: []
+related_docs:
+  - doc/verification/toolchain.md
+  - doc/design/protocol.md
+  - doc/design/connection.md
+invariants:
+  - Every number in the run table comes from one run that is named.
+  - Every gap holds the reason and the condition that closes it.
 ---
+}
 
 # Validation evidence
 
@@ -96,7 +101,6 @@ Two C implementations and one FreePascal implementation act as references:
 `nghttp2` (`nghttp2_v2` and `nghttp2_asio`), and the `wchttpserver`
 implementation with its `commonutils` support library. The table below
 records the rule, the reference behaviour, and the behaviour of this server.
-
 | Rule | Reference | This server |
 |---|---|---|
 | A frame larger than `SETTINGS_MAX_FRAME_SIZE` | `nghttp2_conn.c:1762` rejects the frame with `NGHTTP2_ERR_FRAME_SIZE`. | `TServerConnectionCore.Feed` calls `FailConnection(..., ecFrameSizeError)` before the payload is buffered. |
@@ -123,7 +127,7 @@ The split rule is the same in both implementations.
 
 ## Recorded gaps
 
-Three checks from the story do not run. Each entry holds the reason and the
+Three checks do not run. Each entry holds the reason and the
 condition that closes the gap.
 
 | Gap | Reason | Condition that closes the gap |
@@ -142,4 +146,4 @@ The tools above drive the server over clear text HTTP/2, which RFC 9113
 section 3.2 calls `h2c` with prior knowledge. The TLS layer is a separate
 seam: `src/Http2Server.Tls.pas` and the `INetTls` extension of mORMot2. The
 validation of the TLS handshake and the ALPN result needs a certificate and
-is a separate story.
+is a separate task.

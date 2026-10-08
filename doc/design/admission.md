@@ -1,4 +1,10 @@
+{**
 ---
+license: TBD-LICENCE
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, admission, queue, handler-pool, refusal, backpressure
+notes:
+  - This document describes the admission queue and the handler pool.
 scope: The bounded request queue, the handler pool, the refusal modes, the queue wait limit, the reset-before-dispatch rule, the counters and the shutdown.
 primary_types:
   - TRequestQueue
@@ -19,6 +25,7 @@ invariants:
   - The queue is the only admission point of a request.
   - The HPACK codec runs only on an IO thread, so a response header block is queued, not encoded, on the handler side.
 ---
+}
 
 # Admission and the handler pool
 
