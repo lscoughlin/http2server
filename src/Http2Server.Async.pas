@@ -353,22 +353,47 @@ function THttp2AsyncConnection.OnFirstRead(aOwner: TPollAsyncSockets): boolean;
 var
   Ms: LongWord;
 begin
-  // the accepted socket is blocking while TLS is on, so the socket deadline
-  // and the mORMot2 SSL_accept deadline together bound the handshake.  A
-  // client that stalls therefore holds its IO thread for a bounded time only
-  Ms := EffectiveHandshakeTimeoutMs(FServer.Policy.HandshakeTimeoutMs);
-  if Ms > 0 then
-  begin
-    fSocket.SetReceiveTimeout(Integer(Ms));
-    fSocket.SetSendTimeout(Integer(Ms));
+  // The mORMot2 read path calls this method and never catches what it
+  // raises: an exception here reaches TAsyncConnectionsThread.DoExecute,
+  // whose handler ends the pool thread for ever
+  // (mormot.net.async.pas:2354 calls OnFirstRead, :2811 runs the pool loop,
+  // :4474 catches the escape; read 2026-10-08).  A dead pool thread reads no
+  // socket again, so one fault would stop the whole server while the
+  // listener stays bound.  Every failure below is therefore reported as a
+  // refusal, and a refused connection is closed by the caller.
+  result := false;
+  try
+    // the accepted socket is blocking while TLS is on, so the socket
+    // deadline and the mORMot2 SSL_accept deadline together bound the
+    // handshake.  A client that stalls holds its IO thread for a bounded
+    // time only.
+    // A deadline is a convenience: Darwin answers EINVAL for SO_RCVTIMEO on
+    // a socket whose peer already sent RST, so a failure here forbids no
+    // valid connection and must not raise.
+    try
+      Ms := EffectiveHandshakeTimeoutMs(FServer.Policy.HandshakeTimeoutMs);
+      if Ms > 0 then
+      begin
+        fSocket.SetReceiveTimeout(Integer(Ms));
+        fSocket.SetSendTimeout(Integer(Ms));
+      end;
+    except
+      on ENetSock do
+        ;   // no deadline is set; the connection still proceeds
+    end;
+    result := inherited OnFirstRead(aOwner);
+    if not result then
+      exit;
+    // a TLS connection that did not negotiate h2 is refused, so no HTTP/1.1
+    // request ever reaches the HTTP/2 state machine
+    if (fSecure <> nil) and not NegotiatedH2(fSecure) then
+      result := false;
+  except
+    on E: Exception do
+      // an unreadable socket is refused, and the refusal keeps the read
+      // thread alive, which is worth more than any one connection
+      result := false;
   end;
-  result := inherited OnFirstRead(aOwner);
-  if not result then
-    exit;
-  // a TLS connection that did not negotiate h2 is refused, so no HTTP/1.1
-  // request ever reaches the HTTP/2 state machine
-  if (fSecure <> nil) and not NegotiatedH2(fSecure) then
-    result := false;
 end;
 
 function THttp2AsyncConnection.OnRead: TPollAsyncSocketOnReadWrite;

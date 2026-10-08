@@ -110,6 +110,8 @@ type
     /// TRUE once the peer closed the socket within ATimeoutMs
     function PeerClosed(const AClient: TCrtSocket;
       const ATimeoutMs: Integer): Boolean;
+    /// TRUE once the server answers a fresh request, within ATimeoutMs
+    function ServerAnswers(const APort, ATimeoutMs: Integer): Boolean;
   public
     procedure TearDown; override;
   published
@@ -125,6 +127,8 @@ type
     procedure TestFirstHeaderBlockTimeout;
     /// a header block that arrives one byte at a time still meets the header timeout
     procedure TestTrickledHeaderBlockTimeout;
+    /// a peer that resets the socket at once keeps the IO pool alive
+    procedure TestImmediateResetKeepsTheIoPoolAlive;
   end;
 
   /// the thread rule of the IO and handler sides
@@ -472,6 +476,22 @@ begin
   FreeAndNil(FServer);
 end;
 
+function TAsyncServerTest.ServerAnswers(const APort,
+  ATimeoutMs: Integer): Boolean;
+var
+  Client: TH2cClient;
+  Body: TBytes;
+begin
+  result := False;
+  Client := TH2cClient.Create(APort);
+  try
+    Client.SendGet(1, RequestPath);
+    result := Client.WaitForResponse(1, ATimeoutMs, Body);
+  finally
+    Client.Free;
+  end;
+end;
+
 procedure TAsyncServerTest.TearDown;
 begin
   StopServer;
@@ -653,6 +673,42 @@ begin
   finally
     Client.Free;
   end;
+end;
+
+procedure TAsyncServerTest.TestImmediateResetKeepsTheIoPoolAlive;
+const
+  // A peer that resets its socket puts the accepted socket in a state where
+  // Darwin answers EINVAL for SO_RCVTIMEO.  One such connection used to
+  // raise from the first-read hook, and the mORMot2 pool loop treats any
+  // escape as fatal, so the whole IO pool died and the server stopped
+  // serving while its listener stayed bound.
+  Resets = 64;
+var
+  I: Integer;
+  Sock: TCrtSocket;
+  Port: Integer;
+begin
+  Port := StartServer(TEchoHandler.Create);
+  // a served request proves the pool is healthy before the resets
+  AssertTrue('the server did not answer before the resets',
+    ServerAnswers(Port, ResponseTimeoutMs));
+  for I := 1 to Resets do
+  begin
+    Sock := TCrtSocket.Open('127.0.0.1', IntToStr(Port), nlTcp, IoTimeoutMs);
+    try
+      // SO_LINGER with a zero timeout makes close() send RST at once, so the
+      // server reads a reset rather than an orderly end of file.  The client
+      // sends nothing, so the server meets the reset in its first read.
+      Sock.Sock.SetLinger(0);
+    finally
+      Sock.Free;
+    end;
+  end;
+  // The pool still works only when a fresh request is answered.  A dead pool
+  // accepts the socket at the kernel level and never reads it, so a plain
+  // connect would succeed while the request hangs.
+  AssertTrue('the IO pool died after the resets',
+    ServerAnswers(Port, ResponseTimeoutMs));
 end;
 
 { TThreadRuleTest }
