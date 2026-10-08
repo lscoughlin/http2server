@@ -1,6 +1,6 @@
 {**
 ---
-license: TBD-LICENCE
+license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, test, fpcunit
 notes:
@@ -43,6 +43,7 @@ uses
   Http2Server.Stream.Test,
   Http2Server.Limits.Test,
   Http2Server.Output.Test,
+  Http2Server.Licence.Test,
   Http2Server.Validation.Test,
   Http2Server.Admission.Test,
   Http2Server.Server.Test;

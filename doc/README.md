@@ -1,11 +1,19 @@
 {**
 ---
-license: TBD-LICENCE
+license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, documentation, index, map
 notes:
   - This file is the root of the documentation tree.
   - Every other document is reachable from this file.
+scope: The route map of the documentation tree, the licence and the third-party components.
+primary_types: []
+db_tables: []
+related_docs:
+  - doc/design/architecture.md
+invariants:
+  - Every document in doc/ is linked from this file.
+  - The third-party components are named in the file NOTICE.
 ---
 
 }
@@ -62,6 +70,14 @@ The verification documents record what ran and what did not run.
 The directory `examples/` holds small servers that the verification runs use.
 The directory `tools/` holds the scripts that start a server and drive the
 external tools. The command `task validate` repeats every conformance check.
+The command `task docs:check` holds the rules of this tree.
+
+## Licence
+
+This library is licensed under the GNU Lesser General Public License, version
+2.1, with the Free Pascal linking exception. The SPDX expression is
+`LGPL-2.1-only WITH Independent-modules-exception`. The file `LICENSE` holds
+the full text, and the file `NOTICE` names the third-party components.
 
 ## Where to read first
 

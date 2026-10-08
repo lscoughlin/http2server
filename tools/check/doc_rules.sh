@@ -34,6 +34,7 @@ else
 fi
 
 # 2. Every document starts with the pasdoc YAML front matter.
+licence='LGPL-2.1-only WITH Independent-modules-exception'
 bad=""
 for f in $(find doc -name '*.md' | sort); do
   first=$(sed -n '1p' "$f")
@@ -41,7 +42,7 @@ for f in $(find doc -name '*.md' | sort); do
   zero=$(sed -n '3p' "$f")
   last=$(awk 'NR>2 && $0=="---"{print "yes"; exit}' "$f")
   if [ "$first" != '{**' ] || [ "$second" != '---' ] ||
-     [ "$zero" != 'license: TBD-LICENCE' ] || [ "$last" != 'yes' ]; then
+     [ "$zero" != "license: $licence" ] || [ "$last" != 'yes' ]; then
     bad="$bad $f"
   fi
 done
@@ -51,8 +52,31 @@ else
   echo "PASS every document carries the pasdoc YAML front matter"
 fi
 
-# 3. The placeholder licence is present in every document, so the licence
-#    sweep of the licence story reaches all of them.
+# 2a. No placeholder licence survives anywhere.
+#     Two files must hold the string, because their job is to find it: the
+#     check script itself and the licence test unit.  Both are skipped.
+PLACEHOLDER='TBD-LICENCE'
+hits=$(grep -rn "$PLACEHOLDER" src test examples doc tools Makefile Taskfile.yaml NOTICE LICENSE README.md 2>/dev/null \
+  | grep -v '^tools/check/doc_rules.sh:' \
+  | grep -v '^test/Http2Server.Licence.Test.pas:')
+if [ -n "$hits" ]; then
+  report "the placeholder licence is still present" "$hits"
+else
+  echo "PASS the placeholder licence is gone"
+fi
+
+# 2b. Every Pascal file header names the chosen licence expression.
+bad=""
+for f in $(find src test examples -name '*.pas' | sort); do
+  grep -q "^license: $licence$" "$f" || bad="$bad $f"
+done
+if [ -n "$bad" ]; then
+  report "a Pascal file names another licence" "$bad"
+else
+  echo "PASS every Pascal file names the chosen licence"
+fi
+
+# 3. Every document names the copyright holder.
 missing=""
 for f in $(find doc -name '*.md' | sort); do
   grep -q '^copyright: Copyright 2026 Liam Seamus Coughlin$' "$f" ||

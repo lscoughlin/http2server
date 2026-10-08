@@ -1,0 +1,66 @@
+http2server
+Copyright 2026 Liam Seamus Coughlin
+
+This product is licensed under the GNU Lesser General Public License,
+version 2.1, with the Free Pascal linking exception.
+See the LICENSE file for the full text of both, and the README file for the
+full licence name.
+
+The Software Package Data Exchange (SPDX) licence expression is:
+
+    LGPL-2.1-only WITH Independent-modules-exception
+
+The SPDX licence list holds the exception under the identifier
+`Independent-modules-exception` (full name "Independent Module Linking
+exception"). The SPDX entry names the Free Pascal file `rtl/COPYING.FPC` as
+its source, and the SPDX text matches that file. The lookup date is
+2026-10-08, and the sources of the lookup are:
+
+    https://spdx.org/licenses/Independent-modules-exception.html
+    https://spdx.org/licenses/LGPL-2.1-only.html
+
+Third-party components
+----------------------
+
+This product builds against, links with, or runs the components below.
+They are separate works and they keep their own licences.
+They are not covered by the licence of this product.
+
+1. mORMot2 (third_party/mORMot2, synopse/mORMot2)
+   Copyright (C) Arnaud Bouchez.
+   Licence: a choice of MPL 1.1, GPL 2.0, or LGPL 2.1 with the FPC modified
+   LGPL linking exception.
+   This product uses the mORMot2 async, socket, TLS and ALPN units at build
+   time and at run time. The mORMot2 checkout is a pinned external
+   dependency at revision 2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc. It is
+   not part of the http2server source distribution.
+
+2. OpenSSL (loaded at run time from the system or from Homebrew)
+   Licence: the Apache License, Version 2.0.
+   This product loads OpenSSL through mORMot2. No OpenSSL code is included.
+   OpenSSL 3 is required.
+
+3. The copied protocol units
+   The units Http2Server.Errors, Http2Server.Frames, Http2Server.Hpack,
+   Http2Server.Headers and Http2Server.FlowControl are copies of the units
+   Http2.Errors, Http2.Frames, Http2.Hpack, Http2.Headers and
+   Http2.FlowControl of the sibling http2client repository at revision
+   2b63ac290c86c61339e97226784bc61d3b354f06. Copyright 2026 Liam Seamus
+   Coughlin. The sibling repository is licensed under the Apache License,
+   Version 2.0. Its copyright holder, who is also the copyright holder of
+   this product, distributes the copies here under the licence of this
+   product. (Recorded as a user decision on 2026-10-08.)
+
+4. nghttp2 (the `nghttp`, `h2load` and `nghttpd` programs)
+   Licence: the MIT License.
+   This product uses these programs as external test tools only.
+
+5. h2spec
+   Licence: the MIT License.
+   This product uses this program as an external test tool only.
+
+6. h2-client-test-harness (third_party/h2-client-test-harness,
+   nomadlabsinc/h2-client-test-harness)
+   Licence: the upstream repository states no licence.
+   This product uses the harness only as a test tool. No harness code enters
+   the http2server library or its binaries.

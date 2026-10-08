@@ -1,6 +1,6 @@
 {**
 ---
-license: TBD-LICENCE
+license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, validation, h2spec, conformance, interop, evidence
 notes:

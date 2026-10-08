@@ -1,6 +1,6 @@
 {**
 ---
-license: TBD-LICENCE
+license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, fpc, compiler-mode, thread-manager, runtime
 notes:
@@ -105,6 +105,7 @@ planned units of the library are recorded in `doc/design/` as they arrive.
 ## File headers
 
 Each Pascal file starts with a pasdoc comment that wraps YAML front matter
-(`src/Http2Server.pas:1-11`). The front matter holds a `license` key and a
-`copyright` key. The licence value is the placeholder `TBD-LICENCE` until the
-licence change replaces it. The placeholder names no other document.
+(`src/Http2Server.pas:1-27`). The front matter holds a `license` key and a
+`copyright` key. The licence value is the SPDX expression of the library,
+`LGPL-2.1-only WITH Independent-modules-exception`. The file `NOTICE` names
+the full licence name and the third-party components.
