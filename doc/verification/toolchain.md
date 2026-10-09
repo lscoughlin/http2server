@@ -51,7 +51,7 @@ the output in the `bin/` directory) (`Makefile:44-45`).
 
 | Fact | Value | Evidence |
 |---|---|---|
-| mORMot checkout | `third_party/mORMot2` at `21b62bc88737336d9a1928a748d5f0e6a2f319a7` | `Taskfile.yaml:53`, `git -C third_party/mORMot2 rev-parse HEAD` |
+| mORMot checkout | `third_party/mORMot2` at `b2b195da1e0580058672a88620ef71bb47283eb1` | `Taskfile.yaml:53`, `git -C third_party/mORMot2 rev-parse HEAD` |
 | mORMot unit dirs | `core`, `lib`, `net`, `crypt` | `Makefile:34`, `Taskfile.yaml:63` |
 | `OPENSSL_LIBPATH` (Darwin) | `/opt/homebrew/opt/openssl@3/lib` | `Makefile:22`, `Taskfile.yaml:54-62` |
 | `OPENSSL_LIBPATH` (Linux) | `/usr/lib/x86_64-linux-gnu` | `Makefile:25`, `Taskfile.yaml:54-62` |

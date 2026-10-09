@@ -58,7 +58,7 @@ They are not covered by the licence of this product.
    product. (Recorded as a user decision on 2026-10-08.)
 
    The unit Http2Server.Encoding is a copy of the unit Http2.Encoding of
-   the same repository at revision 331af60, the revision that introduces
+   the same repository at revision 9eb0ffc, the revision that introduces
    it. Its licence and copyright match the units above.
 
 4. The Free Pascal zlib bindings (paszlib, zstream)

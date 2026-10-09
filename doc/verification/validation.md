@@ -58,7 +58,7 @@ pattern again.
 | Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0086 s |
 | Load | `h2load -n 200 -c 10 -m 6 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
 
-The unit suite adds 312 tests with 0 errors and 0 failures. The suite holds
+The unit suite adds 336 tests with 0 errors and 0 failures. The suite holds
 the local rules; the tools above hold the external rules.
 
 ### The stability of the IO pool under abusive load
