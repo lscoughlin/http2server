@@ -614,9 +614,25 @@ end;
 
 procedure TServerConnectionCore.FailConnection(const AMessage: string;
   const AErrorCode: THttp2ErrorCode);
+var
+  I: Integer;
+  Stream: TServerStream;
 begin
   // a connection error names the last stream the server processed
   SendGoAway(FLastStreamId, AErrorCode);
+  // RFC 9113 section 5.4.1: after sending the GOAWAY frame for an error
+  // condition, the endpoint MUST close the TCP connection.  The IO side
+  // closes only when no stream is open, so every open stream ends here.  A
+  // connection error that left a stream open would send its GOAWAY and then
+  // hold the socket, and the peer would wait for a close that never comes.
+  for I := FStreams.Count - 1 downto 0 do
+  begin
+    Stream := FStreams[I];
+    Stream.Cancel(AErrorCode);
+    if FEvents <> nil then
+      FEvents.StreamReset(Stream);
+    CloseStream(Stream);
+  end;
   FClosing := True;
   if FEvents <> nil then
     FEvents.ConnectionClosing;

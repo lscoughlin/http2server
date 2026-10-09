@@ -58,7 +58,7 @@ pattern again.
 | Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0086 s |
 | Load | `h2load -n 200 -c 10 -m 6 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
 
-The unit suite adds 311 tests with 0 errors and 0 failures. The suite holds
+The unit suite adds 312 tests with 0 errors and 0 failures. The suite holds
 the local rules; the tools above hold the external rules.
 
 ### The stability of the IO pool under abusive load
@@ -70,8 +70,8 @@ run together with 300 parallel sockets that each send a connection preface,
 SETTINGS and a DATA frame on an idle stream, and 300 sockets that reset at
 once. A healthy server holds 11 threads, and a stalled server held 6 to 8.
 
-Three faults caused it, and one of them is also the reason of a `h2spec`
-failure that appeared in about one run in ten.
+Five faults caused it, and two of them are also the reason of a `h2spec`
+failure that appeared in a repeated run.
 
 The first two are faults of this server. `OnFirstRead` set the handshake
 deadline, and Darwin answers `EINVAL` for `SO_RCVTIMEO` on a socket whose
@@ -96,7 +96,20 @@ visible, and the read loop treats a peer GOAWAY as ordinary input. The test
 `TConnectionCoreTest.TestClientGoAwayAnswersAndKeepsReading` holds the rule,
 and 30 cold-start full-package `h2spec` runs then passed 30 times.
 
-The fourth fault is in the pinned mORMot2 revision. On aarch64, FPC builds
+The fourth fault is a fault of this server too, and it is the reason the
+`h2spec` failure above appeared often under a repeated run. RFC 9113 section
+5.4.1 holds that after the GOAWAY frame of an error condition, the endpoint
+MUST close the TCP connection. The IO side closes a connection only when no
+stream is open, and `FailConnection` sent its GOAWAY without ending the open
+streams, so a connection error on a connection that held one open stream
+sent its GOAWAY and then held the socket open for ever. The peer saw no
+close, and the case timed out. `FailConnection` now ends every open stream,
+so the close condition holds. The test
+`TConnectionCoreTest.TestConnectionErrorClosesEveryOpenStream` holds the
+rule, and 40 cold-start runs of the whole `http2` package then passed 40
+times, with 40 further runs of the `6.2` package also clean.
+
+The fifth fault is in the pinned mORMot2 revision. On aarch64, FPC builds
 the `Interlocked*` calls of a `TLightLock` without a memory barrier, so the
 lock of the pending-event list of the poll did not publish its writes, and
 the pool threads failed with an access violation. The pin is

@@ -107,6 +107,7 @@ type
     procedure TestContinuationWithoutHeadersIsRefused;
     procedure TestDataReachesTheStreamAndBothWindows;
     procedure TestDataOverrunIsAConnectionError;
+    procedure TestConnectionErrorClosesEveryOpenStream;
     procedure TestSlowHandlerResetsOnlyItsStream;
     procedure TestPingIsAcknowledged;
     procedure TestPriorityIsIgnored;
@@ -767,6 +768,34 @@ begin
   ParseGoAway(GoAway, Id, Code, Debug);
   AssertEquals('an overrun is a flow-control connection error',
     Ord(ecFlowControlError), Ord(Code));
+end;
+
+procedure TConnectionCoreTest.TestConnectionErrorClosesEveryOpenStream;
+var
+  Frames: TArray<TFrame>;
+  Stream: TServerStream;
+begin
+  // RFC 9113 section 5.4.1 holds that after a GOAWAY frame for an error
+  // condition, the endpoint MUST close the TCP connection.  The IO side
+  // closes only when no stream is open, so a connection error with an open
+  // stream must end that stream, or the peer waits for a close that never
+  // comes and the case times out.
+  NewCore;
+  FCore.Feed(Pack(True, [RequestFrame(1, False), RequestFrame(3, False)]));
+  Stream := FCore.StreamById(3);
+  Stream.AddRef;
+  // an even stream id is a connection error, and stream 3 is still open
+  FCore.Feed(Pack(False, [TFrame.Create(ftHeaders, [ffEndStream], 4,
+    BlockOf([':method'], ['GET']))]));
+  Frames := OutputFrames;
+  AssertEquals('a connection error names the protocol error',
+    Ord(ecProtocolError), Ord(GoAwayCodeOf(Frames)));
+  AssertEquals('a connection error closes every open stream', 0,
+    FCore.OpenStreams);
+  AssertTrue('the open stream is cancelled', Stream.IsCancelled);
+  AssertEquals('the closed stream raises a reset', 2, FEvents.Resets);
+  Stream.ReleaseRef;
+  AssertTrue('the connection reports its close', FEvents.Closing > 0);
 end;
 
 procedure TConnectionCoreTest.TestSlowHandlerResetsOnlyItsStream;
