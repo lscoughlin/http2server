@@ -22,7 +22,7 @@
         </SyntaxOptions>
       </Parsing>
     </CompilerOptions>
-    <Files Count="21">
+    <Files Count="22">
       <Item1>
         <Filename Value="src/Http2Server.pas"/>
         <UnitName Value="Http2Server"/>
@@ -48,65 +48,69 @@
         <UnitName Value="Http2Server.Connection"/>
       </Item6>
       <Item7>
-        <Filename Value="src/Http2Server.Errors.pas"/>
-        <UnitName Value="Http2Server.Errors"/>
+        <Filename Value="src/Http2Server.Encoding.pas"/>
+        <UnitName Value="Http2Server.Encoding"/>
       </Item7>
       <Item8>
-        <Filename Value="src/Http2Server.FlowControl.pas"/>
-        <UnitName Value="Http2Server.FlowControl"/>
+        <Filename Value="src/Http2Server.Errors.pas"/>
+        <UnitName Value="Http2Server.Errors"/>
       </Item8>
       <Item9>
-        <Filename Value="src/Http2Server.Frames.pas"/>
-        <UnitName Value="Http2Server.Frames"/>
+        <Filename Value="src/Http2Server.FlowControl.pas"/>
+        <UnitName Value="Http2Server.FlowControl"/>
       </Item9>
       <Item10>
-        <Filename Value="src/Http2Server.Headers.pas"/>
-        <UnitName Value="Http2Server.Headers"/>
+        <Filename Value="src/Http2Server.Frames.pas"/>
+        <UnitName Value="Http2Server.Frames"/>
       </Item10>
       <Item11>
-        <Filename Value="src/Http2Server.Hpack.pas"/>
-        <UnitName Value="Http2Server.Hpack"/>
+        <Filename Value="src/Http2Server.Headers.pas"/>
+        <UnitName Value="Http2Server.Headers"/>
       </Item11>
       <Item12>
-        <Filename Value="src/Http2Server.HpackConnection.pas"/>
-        <UnitName Value="Http2Server.HpackConnection"/>
+        <Filename Value="src/Http2Server.Hpack.pas"/>
+        <UnitName Value="Http2Server.Hpack"/>
       </Item12>
       <Item13>
-        <Filename Value="src/Http2Server.Limits.pas"/>
-        <UnitName Value="Http2Server.Limits"/>
+        <Filename Value="src/Http2Server.HpackConnection.pas"/>
+        <UnitName Value="Http2Server.HpackConnection"/>
       </Item13>
       <Item14>
-        <Filename Value="src/Http2Server.Observer.pas"/>
-        <UnitName Value="Http2Server.Observer"/>
+        <Filename Value="src/Http2Server.Limits.pas"/>
+        <UnitName Value="Http2Server.Limits"/>
       </Item14>
       <Item15>
-        <Filename Value="src/Http2Server.Output.pas"/>
-        <UnitName Value="Http2Server.Output"/>
+        <Filename Value="src/Http2Server.Observer.pas"/>
+        <UnitName Value="Http2Server.Observer"/>
       </Item15>
       <Item16>
-        <Filename Value="src/Http2Server.RequestValidation.pas"/>
-        <UnitName Value="Http2Server.RequestValidation"/>
+        <Filename Value="src/Http2Server.Output.pas"/>
+        <UnitName Value="Http2Server.Output"/>
       </Item16>
       <Item17>
-        <Filename Value="src/Http2Server.Seam.pas"/>
-        <UnitName Value="Http2Server.Seam"/>
+        <Filename Value="src/Http2Server.RequestValidation.pas"/>
+        <UnitName Value="Http2Server.RequestValidation"/>
       </Item17>
       <Item18>
-        <Filename Value="src/Http2Server.Server.pas"/>
-        <UnitName Value="Http2Server.Server"/>
+        <Filename Value="src/Http2Server.Seam.pas"/>
+        <UnitName Value="Http2Server.Seam"/>
       </Item18>
       <Item19>
-        <Filename Value="src/Http2Server.Stream.pas"/>
-        <UnitName Value="Http2Server.Stream"/>
+        <Filename Value="src/Http2Server.Server.pas"/>
+        <UnitName Value="Http2Server.Server"/>
       </Item19>
       <Item20>
-        <Filename Value="src/Http2Server.Tls.pas"/>
-        <UnitName Value="Http2Server.Tls"/>
+        <Filename Value="src/Http2Server.Stream.pas"/>
+        <UnitName Value="Http2Server.Stream"/>
       </Item20>
       <Item21>
+        <Filename Value="src/Http2Server.Tls.pas"/>
+        <UnitName Value="Http2Server.Tls"/>
+      </Item21>
+      <Item22>
         <Filename Value="src/Http2Server.Waiter.pas"/>
         <UnitName Value="Http2Server.Waiter"/>
-      </Item21>
+      </Item22>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>

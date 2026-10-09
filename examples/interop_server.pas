@@ -123,6 +123,9 @@ var
   Read: Integer;
   Total: Integer;
   Chunk: TBytes;
+  Coding: TContentEncoding;
+  Text: string;
+  Headers: THeaderBlock;
 begin
   Path := ARequest.Path;
   Equal := Pos('?', Path);
@@ -141,6 +144,34 @@ begin
         LargeBytes := Value;
     AResponse.SendHeaders(200, nil, False);
     AResponse.SetBodyWriter(TPatternWriter.Create(LargeBytes, ChunkBytes));
+    AResponse.Finish;
+    Exit;
+  end;
+
+  // a body offered as gzip or deflate when the request asked for it.  The
+  // body is the same text the plain route answers with, so a tool that
+  // decodes and a tool that does not are easy to compare.
+  if Path = '/gzip' then
+  begin
+    Coding := NegotiateEncoding(
+      HeaderValueOf(ARequest.Headers, 'accept-encoding'));
+    Text := 'the validation server answered ' + ARequest.Method + ' ' +
+      ARequest.Path + sLineBreak;
+    SetLength(Body, Length(Text));
+    if Length(Text) > 0 then
+      Move(Text[1], Body[0], Length(Text));
+    if IsEncoded(Coding) then
+    begin
+      SetLength(Headers, 1);
+      Headers[0].Name := 'content-encoding';
+      Headers[0].Value := EncodingToken(Coding);
+      Headers[0].Sensitive := False;
+      Body := CompressFor(Coding, Body);
+    end
+    else
+      Headers := nil;
+    AResponse.SendHeaders(200, Headers, False);
+    AResponse.Write(Body);
     AResponse.Finish;
     Exit;
   end;

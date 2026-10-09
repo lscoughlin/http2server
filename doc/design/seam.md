@@ -151,6 +151,35 @@ the consumed count. The connection owns the credit, so the handler reports what
 it consumed and the IO thread decides when to emit `WINDOW_UPDATE`. The
 consumed count is cleared by `ClearConsumed` after the frame goes out.
 
+## Content coding
+
+The seam carries bytes and never inspects them, so a content coding is the
+affair of the handler. `src/Http2Server.Encoding.pas` gives the handler the
+codecs to do that work:
+
+- `NegotiateEncoding(AcceptEncoding)` reads a request's `accept-encoding`
+value and answers the coding to use, with the quality rules of RFC 9110
+section 12.5.3. An absent or empty value yields `ceIdentity`, so a peer that
+offered no coding is never sent one. `HeaderValueOf(ARequest.Headers,
+'accept-encoding')` reads the value from the request block.
+- `CompressFor(Coding, Bytes)` codes a complete body, and
+`GzipCompress`/`DeflateCompress` code one directly.
+- `TCompressingBodyWriter` wraps another `IBodyWriter` and codes every
+chunk, so a large body is coded as it streams. It is handed to
+`IServerResponse.SetBodyWriter`. The gzip container is closed when the
+inner writer is exhausted, so the footer reaches the peer before the
+response ends.
+
+The library never codes a body on its own. Auto-coding would fight the
+handler authority of the seam, and it cannot know the coded size for a
+streamed body. A handler that codes a body sets `content-encoding` itself
+and sends no `content-length`, because HTTP/2 delimits the body by
+END_STREAM.
+
+The example server shows the path: the route `/gzip` negotiates from
+`accept-encoding`, codes the body, and answers with `content-encoding` when
+a coding was chosen.
+
 ## Test seams
 
 The waiter records `WaitCount` and `SignalCount`; the cancel pool records

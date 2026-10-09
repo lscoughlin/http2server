@@ -25,6 +25,7 @@ unit Http2Server;
 interface
 
 uses
+  SysUtils,
   Http2Server.Errors,
   Http2Server.Frames,
   Http2Server.Hpack,
@@ -32,6 +33,7 @@ uses
   Http2Server.Observer,
   Http2Server.Seam,
   Http2Server.Config,
+  Http2Server.Encoding,
   Http2Server.Server;
 
 type
@@ -77,6 +79,14 @@ type
   THttpHeaderField = Http2Server.Hpack.THttpHeaderField;
   THpackCodec = Http2Server.Hpack.THpackCodec;
 
+  /// the content codings a handler can put on a response body
+  ///
+  /// A handler reads `accept-encoding` from the request, negotiates a coding,
+  /// and either writes the coded bytes itself or hands a
+  /// TCompressingBodyWriter to IServerResponse.SetBodyWriter.
+  TContentEncoding = Http2Server.Encoding.TContentEncoding;
+  TCompressingBodyWriter = Http2Server.Encoding.TCompressingBodyWriter;
+
   /// the entry point that turns a factory into a server
   ///
   /// Build validates the settings, then returns a server that the caller
@@ -103,6 +113,37 @@ const
   seBucketTripped = Http2Server.Observer.seBucketTripped;
   seGoAwaySent = Http2Server.Observer.seGoAwaySent;
   seHandlerException = Http2Server.Observer.seHandlerException;
+
+/// the coding to answer a request with, given its `accept-encoding` value
+/// - an absent or empty value yields ceIdentity, so a peer that offered no
+///   coding is never sent one
+function NegotiateEncoding(const AAcceptEncoding: string): TContentEncoding;
+
+/// the token to put in `content-encoding` for ACoding ('' for identity)
+function EncodingToken(const ACoding: TContentEncoding): string;
+
+/// true when the coding codes the body rather than passing it through
+function IsEncoded(const ACoding: TContentEncoding): Boolean;
+
+/// compact AData for ACoding, or return AData when the coding is identity
+function CompressFor(const ACoding: TContentEncoding;
+  const AData: TBytes): TBytes;
+
+/// the first value of AName in AHeaders, or '' when the name is absent
+///
+/// Header names are compared without case, as RFC 9113 section 8.2 requires.
+/// A handler uses this to read `accept-encoding` from a request.
+function HeaderValueOf(const AHeaders: THeaderBlock;
+  const AName: string): string;
+
+/// compress AData into a gzip container
+function GzipCompress(const AData: TBytes): TBytes;
+/// compress AData into a zlib container
+function DeflateCompress(const AData: TBytes): TBytes;
+/// decompress a gzip container
+function GzipDecompress(const AData: TBytes): TBytes;
+/// decompress a deflate body, zlib-wrapped or bare
+function DeflateDecompress(const AData: TBytes): TBytes;
 
 implementation
 
@@ -141,6 +182,53 @@ begin
       LineEnding + Text);
   Settings := Self;
   Result := THttp2Server.Create(Settings, AObserver);
+end;
+
+function NegotiateEncoding(const AAcceptEncoding: string): TContentEncoding;
+begin
+  Result := Http2Server.Encoding.NegotiateEncoding(AAcceptEncoding);
+end;
+
+function EncodingToken(const ACoding: TContentEncoding): string;
+begin
+  Result := Http2Server.Encoding.EncodingToken(ACoding);
+end;
+
+function IsEncoded(const ACoding: TContentEncoding): Boolean;
+begin
+  Result := Http2Server.Encoding.IsEncoded(ACoding);
+end;
+
+function CompressFor(const ACoding: TContentEncoding;
+  const AData: TBytes): TBytes;
+begin
+  Result := Http2Server.Encoding.CompressFor(ACoding, AData);
+end;
+
+function HeaderValueOf(const AHeaders: THeaderBlock;
+  const AName: string): string;
+begin
+  Result := Http2Server.Encoding.HeaderValueOf(AHeaders, AName);
+end;
+
+function GzipCompress(const AData: TBytes): TBytes;
+begin
+  Result := Http2Server.Encoding.GzipCompress(AData);
+end;
+
+function DeflateCompress(const AData: TBytes): TBytes;
+begin
+  Result := Http2Server.Encoding.DeflateCompress(AData);
+end;
+
+function GzipDecompress(const AData: TBytes): TBytes;
+begin
+  Result := Http2Server.Encoding.GzipDecompress(AData);
+end;
+
+function DeflateDecompress(const AData: TBytes): TBytes;
+begin
+  Result := Http2Server.Encoding.DeflateDecompress(AData);
 end;
 
 end.

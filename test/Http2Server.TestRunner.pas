@@ -44,6 +44,7 @@ uses
   Http2Server.Limits.Test,
   Http2Server.Output.Test,
   Http2Server.Licence.Test,
+  Http2Server.Encoding.Test,
   Http2Server.Validation.Test,
   Http2Server.Admission.Test,
   Http2Server.Server.Test;

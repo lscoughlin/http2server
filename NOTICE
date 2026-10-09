@@ -57,15 +57,26 @@ They are not covered by the licence of this product.
    this product, distributes the copies here under the licence of this
    product. (Recorded as a user decision on 2026-10-08.)
 
-4. nghttp2 (the `nghttp`, `h2load` and `nghttpd` programs)
+   The unit Http2Server.Encoding is a copy of the unit Http2.Encoding of
+   the same repository at revision 331af60, the revision that introduces
+   it. Its licence and copyright match the units above.
+
+4. The Free Pascal zlib bindings (paszlib, zstream)
+   Licence: part of the Free Pascal Runtime Library, which the Free Pascal
+   project distributes under the same modified GNU Lesser General Public
+   Licence, version 2.1, with the linking exception that this product uses.
+   This product compiles against the bindings that ship with the compiler;
+   it includes no Free Pascal source. No extra dependency is added.
+
+5. nghttp2 (the `nghttp`, `h2load` and `nghttpd` programs)
    Licence: the MIT License.
    This product uses these programs as external test tools only.
 
-5. h2spec
+6. h2spec
    Licence: the MIT License.
    This product uses this program as an external test tool only.
 
-6. h2-client-test-harness (third_party/h2-client-test-harness,
+7. h2-client-test-harness (third_party/h2-client-test-harness,
    nomadlabsinc/h2-client-test-harness)
    Licence: the upstream repository states no licence.
    This product uses the harness only as a test tool. No harness code enters
