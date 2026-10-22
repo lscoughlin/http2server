@@ -30,3 +30,6 @@ test/certs/
 
 # Obsidian vault settings
 .obsidian/
+
+# CodeGraph index (rebuild with: codegraph index)
+.codegraph/
