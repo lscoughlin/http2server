@@ -56,7 +56,7 @@ pattern again.
 | Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0086 s |
 | Load | `h2load -n 200 -c 10 -m 6 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
 
-The unit suite adds 336 tests with 0 errors and 0 failures. The suite holds
+The unit suite adds 376 tests with 0 errors and 0 failures. The suite holds
 the local rules; the tools above hold the external rules.
 
 ### The stability of the IO pool under abusive load
@@ -146,6 +146,29 @@ answer arrived from the timer.
 
 The server is not modified for these runs. The tool raises its own file
 descriptor limit and starts no server.
+
+A second set of runs compares the server before and after the detached-stream
+work (the split of the connection core, the streaming pool, the channel and the
+loss-of-socket cancel). Each run used a fresh server, on the same host and in the
+same session (2026-10-22):
+
+| Run | Before | After |
+|---|---|---|
+| 1000 idle connections, idle CPU | 8.19% | 3.80% |
+| 10000 idle connections, idle CPU | 30.79% | 31.58% |
+| 500 streams on 500 connections, throughput | 9442 streams/s | 9021 streams/s |
+| the same run, latency p50 / p99 | 2.0 ms / 6.4 ms | 2.0 ms / 8.6 ms |
+
+The idle run of 1000 connections varies with the host load of the moment; the
+10000-connection and the throughput runs agree within the noise of one run. The
+full `h2spec` package `http2` and the short runs pass before and after.
+
+One observation is outside that comparison. A run that holds the three seam
+modes one after another on a single server, with the 10000-connection idle step
+first, stopped that step at 9323 connections (`Connection reset by peer`), and
+the next step answered 34 of 500 streams in 120 seconds. A fresh server for each
+mode does not show it. The behaviour predates the detached-stream work and
+needs its own investigation.
 
 ## The memory of a long-lived connection
 
