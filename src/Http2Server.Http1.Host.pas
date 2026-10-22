@@ -38,6 +38,9 @@ type
     // - AKeepAlive is the persistence decision; AFailed says that the response
     //   was cut or the exchange broke, so the connection closes
     procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean); virtual; abstract;
+    /// the writer cannot go on (a stalled client, an abort): close the connection
+    // without waiting for the queued octets
+    procedure AbortConnection; virtual; abstract;
     /// call ASink.WriteDrained once the backlog falls to ALowWater, then forget it
     procedure WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
       virtual; abstract;
@@ -64,6 +67,7 @@ type
     procedure RequestContinue;
     procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean);
     procedure WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
+    procedure AbortConnection;
   end;
 
 implementation
@@ -196,6 +200,20 @@ begin
     Leave;
   end;
 end;
+procedure THostLink.AbortConnection;
+var
+  H: TH1Host;
+begin
+  H := Enter;
+  if H = nil then
+    Exit;
+  try
+    H.AbortConnection;
+  finally
+    Leave;
+  end;
+end;
+
 procedure THostLink.WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
 var
   H: TH1Host;

@@ -64,6 +64,8 @@ type
     procedure TestOneListenerServesBothProtocols;
     procedure TestLargeResponseIsDelivered;
     procedure TestAClientThatNeverReadsBlocksTheHandlerInsteadOfGrowingMemory;
+    procedure TestAClientThatNeverReadsDoesNotPinTheOnlyHandlerThread;
+    procedure TestStopDuringARequestEndsIt;
   end;
 
 implementation
@@ -500,6 +502,7 @@ procedure THttp1LiveTest.TestQueueFullAnswers503WithRetryAfter;
 var
   A, B, D: TRawHttp;
   R: TRawResponse;
+  Deadline: QWord;
 begin
   FHandler.SlowMs := 800;
   StartServer(LiveFactory(FHandlerRef).WithHandlerThreads(1)
@@ -509,9 +512,17 @@ begin
   D := TRawHttp.Create(FServer.Port);
   try
     A.Send('GET /slow HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
-    Sleep(150);   // the first request holds the only handler thread
+    // the first request holds the only handler thread
+    Deadline := GetTickCount64 + ResponseMs;
+    while (FHandler.Calls < 1) and (GetTickCount64 < Deadline) do
+      Sleep(2);
+    AssertEquals(1, FHandler.Calls);
     B.Send('GET /slow HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
-    Sleep(150);   // the second fills the queue
+    // the second fills the queue: poll the pool, not the clock
+    Deadline := GetTickCount64 + ResponseMs;
+    while (FServer.Stats.QueueLength < 1) and (GetTickCount64 < Deadline) do
+      Sleep(2);
+    AssertEquals(1, FServer.Stats.QueueLength);
     D.Send('GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
     AssertTrue(D.ReadResponse(False, ResponseMs, R));
     AssertEquals(503, R.Status);
@@ -619,6 +630,56 @@ begin
     while (FHandler.HugeDone = 0) and (GetTickCount64 < Deadline) do
       Sleep(5);
     AssertEquals(1, FHandler.HugeDone);
+  finally
+    C.Free;
+  end;
+end;
+
+procedure THttp1LiveTest.TestAClientThatNeverReadsDoesNotPinTheOnlyHandlerThread;
+var
+  A, B: TRawHttp;
+  R: TRawResponse;
+begin
+  // one handler thread and a short idle period: a client that never reads must
+  // not hold the thread for ever
+  StartServer(LiveFactory(FHandlerRef).WithHandlerThreads(1).WithIdleTimeout(1000));
+  A := TRawHttp.Create(FServer.Port);
+  B := TRawHttp.Create(FServer.Port);
+  try
+    A.Send('GET /huge HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
+    Sleep(500);   // the handler now waits for the reader that never comes
+    B.Send('GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
+    AssertTrue('the second client is served once the idle period closed the first',
+      B.ReadResponse(False, 15000, R));
+    AssertEquals('status of the second answer: ' + R.Head, 200, R.Status);
+    AssertEquals('hello', R.Body);
+  finally
+    A.Free;
+    B.Free;
+  end;
+end;
+
+procedure THttp1LiveTest.TestStopDuringARequestEndsIt;
+var
+  C: TRawHttp;
+  R: TRawResponse;
+  Deadline: QWord;
+begin
+  FHandler.SlowMs := 3000;
+  StartServer(LiveFactory(FHandlerRef));
+  C := TRawHttp.Create(FServer.Port);
+  try
+    C.Send('GET /slow HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
+    Deadline := GetTickCount64 + ResponseMs;
+    while (FHandler.Calls = 0) and (GetTickCount64 < Deadline) do
+      Sleep(5);
+    AssertEquals('the handler runs', 1, FHandler.Calls);
+    FServer.Stop;
+    // the answer either completes or the connection ends; Stop does not hang
+    if C.ReadResponse(False, 6000, R) then
+      AssertEquals('slow', R.Body)
+    else
+      AssertTrue('the connection ended', C.WaitClosed(ResponseMs));
   finally
     C.Free;
   end;

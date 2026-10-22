@@ -128,7 +128,9 @@ chunked responses, `HEAD`, 204 and 304, `Connection: close`, HTTP/1.0, the
 handler exception before and after the headers, framing defects, a smuggled
 request, `Date`, header injection by a handler, an early answer with an unread
 body, a full queue, `Stop`, the fallback off, both protocols on one listener, a
-large response, and a client that never reads. The last test showed the effect of
+large response, a client that never reads, a client that never reads while the only
+handler thread waits for it (the idle period closes the connection and the next
+client is served), and `Stop` during a request. The test of the client that never reads showed the effect of
 the pending-octet term in the backlog: with the term removed, a handler that writes
 8 MiB to a client that does not read finishes at once. The detach tests
 (`THttp1DetachTest`, 11 tests) cover the chunked channel and the event stream on
@@ -143,8 +145,8 @@ over clear text and over TLS. A server with the fallback off and a certificate
 refuses `curl --http1.1` and serves `curl --http2`.
 
 Gaps of this record: the request body of HTTP/1.1 is not streamed past
-`MaxBodySize`, because the parser of mORMot2 cannot pause the reads of a
-connection. The run with 1,000,000 mutated requests is not part of `make test`,
+`MaxBodySize`, because the async layer of mORMot2 has no supported call that pauses
+the reads of one connection (see [http1](../design/http1.md)). The run with 1,000,000 mutated requests is not part of `make test`,
 which runs 20,000; the environment variable `HTTP1_FUZZ_RUNS` sets the count.
 
 ### Server-sent events

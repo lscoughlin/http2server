@@ -330,6 +330,7 @@ begin
   else
     Options.Scheme := 'http';
   Options.OutboundLimit := FServer.Factory.ChannelQueueLimit;
+  Options.WriteStallMs := FServer.Factory.IdleTimeoutMs;
   FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers);
   Core := TH1Core.Create(Options, FH1Events);
   FWaker := THttp2ConnectionWaker.Create(Self);

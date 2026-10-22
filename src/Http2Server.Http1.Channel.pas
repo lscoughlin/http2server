@@ -59,6 +59,11 @@ type
     FSink: IChannelSink;
     FHold: TBytes;
     FReleased: Boolean;
+    /// Activate is sending the head and the held bytes; a Send joins the held bytes
+    FActivating: Boolean;
+    /// Close came while Activate ran; Activate closes at its end
+    FCloseDuringActivate: Boolean;
+    FCloseMode: TChannelClose;
     procedure Release;
     function Frame(const AData: TBytes): TBytes;
   public
@@ -158,9 +163,11 @@ begin
     State := FState;
     if (State = csClosed) or (Owner = nil) then
       Exit;
-    if State = csPending then
+    if (State = csPending) or FActivating then
     begin
-      // no body octet may leave before the head, so a pending channel holds it
+      // no body octet may leave before the head, so a pending channel holds it.
+      // The same holds while Activate sends the head and the held bytes, or a
+      // late Send could overtake them
       if (FRegistry <> nil) and (FRegistry.QueueLimit > 0) and
          (Length(FHold) + Length(AData) > FRegistry.QueueLimit) then
         Exit(srFull);
@@ -191,21 +198,60 @@ procedure TH1ChunkedChannel.Activate(const AStatus: Integer;
 var
   Owner: IH1ChannelOwner;
   Held: TBytes;
+  Mode: TChannelClose;
+  CloseNow: Boolean;
 begin
   FLock.Acquire;
   try
-    if FState <> csPending then
+    if (FState <> csPending) or FActivating then
       raise EHttpError.Create('Activate needs a pending channel');
     Owner := FOwner;
-    Held := FHold;
-    FHold := nil;
-    FState := csActive;
+    FActivating := True;
   finally
     FLock.Release;
   end;
-  Owner.OwnerHead(AStatus, AHeaders);
-  if (Length(Held) > 0) and not Owner.OwnerNoBody then
-    Owner.OwnerEmit(Frame(Held));
+  try
+    Owner.OwnerHead(AStatus, AHeaders);
+  except
+    FLock.Acquire;
+    try
+      FActivating := False;
+    finally
+      FLock.Release;
+    end;
+    raise;
+  end;
+  // the held bytes go out in order. A Send that comes meanwhile joins the held
+  // bytes, so the loop runs until the hold is empty, and only then does the
+  // channel turn active
+  repeat
+    FLock.Acquire;
+    try
+      Held := FHold;
+      FHold := nil;
+      if Length(Held) = 0 then
+      begin
+        if FState = csPending then
+          FState := csActive;
+        FActivating := False;
+      end;
+    finally
+      FLock.Release;
+    end;
+    if (Length(Held) > 0) and not Owner.OwnerNoBody then
+      Owner.OwnerEmit(Frame(Held));
+  until Length(Held) = 0;
+  // a Close that came during the activation runs now
+  FLock.Acquire;
+  try
+    CloseNow := FCloseDuringActivate;
+    Mode := FCloseMode;
+    FCloseDuringActivate := False;
+  finally
+    FLock.Release;
+  end;
+  if CloseNow then
+    Close(Mode);
 end;
 
 procedure TH1ChunkedChannel.Complete(const AStatus: Integer;
@@ -242,6 +288,13 @@ begin
   try
     if FState = csClosed then
       Exit;
+    if FActivating then
+    begin
+      // the head and the held bytes are going out; Activate closes at its end
+      FCloseDuringActivate := True;
+      FCloseMode := AMode;
+      Exit;
+    end;
     Pending := FState = csPending;
     Owner := FOwner;
     FState := csClosed;

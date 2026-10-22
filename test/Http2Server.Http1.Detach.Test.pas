@@ -24,6 +24,14 @@ uses
   Http2Server.Http1.RawClient;
 
 type
+  /// sends from another thread while the handler activates the channel
+  TRaceSender = class(TThread)
+  public
+    Channel: IDuplexChannel;
+    Go: PRTLEvent;
+    procedure Execute; override;
+  end;
+
   /// opens an event stream and keeps it, and keeps a plain detached channel
   TStreamHandler = class(TInterfacedObject, IHttp2Handler)
   private
@@ -65,9 +73,27 @@ type
     procedure TestCompleteSendsAWholeResponse;
     procedure TestTheDetachLimitRefusesTheNextDetach;
     procedure TestAbortCutsTheConnection;
+    procedure TestSendDuringActivateNeverOvertakesTheHead;
   end;
 
 implementation
+
+{ TRaceSender }
+
+procedure TRaceSender.Execute;
+var
+  I: Integer;
+begin
+  RTLEventWaitFor(Go);
+  // send at once, and again as soon as the channel is no longer pending: a channel
+  // that turns active before its head is out would let these bytes overtake it
+  for I := 1 to 250 do
+    Channel.Send(TBytes.Create(Ord('r')));
+  while Channel.State = csPending do
+    ;
+  for I := 251 to 500 do
+    Channel.Send(TBytes.Create(Ord('r')));
+end;
 
 { TStreamHandler }
 
@@ -89,6 +115,7 @@ var
   S: ISseStream;
   C: IDuplexChannel;
   H: THeaderBlock;
+  Sender: TRaceSender;
 begin
   if ARequest.Path = '/channel' then
   begin
@@ -105,6 +132,25 @@ begin
     finally
       FLock.Release;
     end;
+    Exit;
+  end;
+  if ARequest.Path = '/race' then
+  begin
+    C := AResponse.Detach;
+    Sender := TRaceSender.Create(True);
+    Sender.Channel := C;
+    Sender.Go := RTLEventCreate;
+    Sender.Start;
+    // the sender starts to send as Activate begins
+    RTLEventSetEvent(Sender.Go);
+    SetLength(H, 1);
+    H[0].Name := 'content-type';
+    H[0].Value := 'application/octet-stream';
+    C.Activate(200, H);
+    Sender.WaitFor;
+    RTLEventDestroy(Sender.Go);
+    Sender.Free;
+    C.Close(ccGraceful);
     Exit;
   end;
   if ARequest.Path = '/complete' then
@@ -453,6 +499,36 @@ begin
     AssertTrue('an abort closes the connection', C.WaitClosed(ResponseMs));
   finally
     C.Free;
+  end;
+end;
+
+procedure THttp1DetachTest.TestSendDuringActivateNeverOvertakesTheHead;
+var
+  I: Integer;
+  C: TRawHttp;
+  R: TRawResponse;
+  Total: Integer;
+  Data: string;
+  Last: Boolean;
+begin
+  StartServer(LiveFactory(FHandlerRef));
+  for I := 1 to 20 do
+  begin
+    C := TRawHttp.Create(FServer.Port);
+    try
+      C.Send('GET /race HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
+      // the first octets on the wire are the status line, never a chunk
+      AssertTrue('the head comes first in round ' + IntToStr(I), C.ReadHead(ResponseMs, R));
+      AssertEquals(200, R.Status);
+      Total := 0;
+      repeat
+        AssertTrue(C.ReadChunk(ResponseMs, Data, Last));
+        Inc(Total, Length(Data));
+      until Last;
+      AssertEquals('no byte was lost or doubled in round ' + IntToStr(I), 500, Total);
+    finally
+      C.Free;
+    end;
   end;
 end;
 

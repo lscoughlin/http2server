@@ -168,6 +168,13 @@ if command -v openssl >/dev/null 2>&1; then
         else
           report_fail "curl --http1.1 and --http2 differ over TLS ('$tbody1' / '$tbody2')"
         fi
+        # a request with Connection: close takes the close path of a TLS connection
+        tbody3=$(curl -sk --http1.1 -H 'Connection: close' "https://127.0.0.1:$tls_port/" </dev/null)
+        if [ -n "$tbody3" ] && [ "$tbody3" = "$tbody1" ]; then
+          report_pass "curl --http1.1 with Connection: close over TLS"
+        else
+          report_fail "curl --http1.1 with Connection: close over TLS ('$tbody3')"
+        fi
       fi
       stop_interop_server
       # with the fallback off, a client that offers only http/1.1 is refused

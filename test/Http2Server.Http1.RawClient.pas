@@ -77,6 +77,7 @@ type
     FCalls: Integer;
     FSlowMs: Integer;
     FHugeDone: Integer;
+    FHugeEnded: Integer;
   public
     constructor Create;
     destructor Destroy; override;
@@ -85,6 +86,8 @@ type
     function Calls: Integer;
     /// how many /huge responses the handler wrote to the end
     function HugeDone: Integer;
+    /// how many /huge handlers ended, whole or cut
+    function HugeEnded: Integer;
     property SlowMs: Integer read FSlowMs write FSlowMs;
   end;
 
@@ -353,6 +356,16 @@ begin
   inherited Destroy;
 end;
 
+function TTestHandler.HugeEnded: Integer;
+begin
+  FLock.Acquire;
+  try
+    Result := FHugeEnded;
+  finally
+    FLock.Release;
+  end;
+end;
+
 function TTestHandler.HugeDone: Integer;
 begin
   FLock.Acquire;
@@ -480,14 +493,23 @@ begin
     SetLength(Part, 65536);
     FillChar(Part[0], Length(Part), Ord('y'));
     AResponse.SendHeaders(200, Len(128 * 65536), False);
-    for I := 1 to 128 do
-      AResponse.Write(Part);
-    AResponse.Finish;
-    FLock.Acquire;
     try
-      Inc(FHugeDone);
+      for I := 1 to 128 do
+        AResponse.Write(Part);
+      AResponse.Finish;
+      FLock.Acquire;
+      try
+        Inc(FHugeDone);
+      finally
+        FLock.Release;
+      end;
     finally
-      FLock.Release;
+      FLock.Acquire;
+      try
+        Inc(FHugeEnded);
+      finally
+        FLock.Release;
+      end;
     end;
   end
   else if Path = '/own-date' then

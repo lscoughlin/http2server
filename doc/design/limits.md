@@ -139,6 +139,14 @@ control bucket on each limited control frame. A `False` answer starts the
 close sequence. The observer receives the bucket trip, and then the
 `GOAWAY` sent event.
 
+## HTTP/1.1 rejections
+
+The HTTP/1.1 core uses no token bucket. A request that breaks a rule of the guard
+is answered once and the connection closes, so a sender that floods defective
+requests pays one connection for each rejection, and the server holds no state
+for the next one. The limits of the parser are in the record `THttp11Limits` (see
+[http1](http1.md)).
+
 ## The stall timeout of an event stream
 
 An event stream whose outbound queue stays full is a slow reader. The setting

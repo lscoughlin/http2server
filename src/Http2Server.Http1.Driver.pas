@@ -100,6 +100,9 @@ function TH1Driver.ClosePhase(const APendingWrite: Int64; const ANowSec: Cardina
   const ADrainSeconds: Cardinal): TH1ClosePhase;
 begin
   Result := cpNone;
+  // a writer that gave up closes the connection without waiting for the octets
+  if FCore.AbortRequested then
+    Exit(cpCloseNow);
   if FDrainUntilSec <> 0 then
     Exit;
   if (APendingWrite <> 0) or not FCore.WantsClose then
@@ -120,9 +123,11 @@ begin
   // a request half read past the head deadline gets a 408 and a close
   if FCore.CheckDeadlines(ANowMs, AHeadTimeoutMs) then
     Exit(iaFlush);
-  // an idle connection holds no request; a stalled writer sends nothing
+  // an idle connection holds no request. A writer that is stalled has a backlog,
+  // which counts the octets that the socket layer holds back; it sends nothing,
+  // and its handler thread must not wait for it for ever
   if (AIdleSeconds <> 0) and (ANowSec - ALastOperationSec >= AIdleSeconds) and
-     ((not FCore.Busy) or FCore.HasOutput) then
+     ((not FCore.Busy) or (FCore.OutputBacklog > 0)) then
     Result := iaClose;
 end;
 

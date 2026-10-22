@@ -48,6 +48,9 @@ type
     Scheme: string;
     /// the backlog of unsent octets at which a handler write waits
     OutboundLimit: Int64;
+    /// a handler write that sees no progress for this time aborts the connection;
+    /// 0 turns the check off
+    WriteStallMs: Integer;
   end;
 
   /// the HTTP/1.1 core of one connection
@@ -74,6 +77,8 @@ type
     FKeepAfter: Boolean;
     FCloseAfter: Boolean;
     FLost: Boolean;
+    /// the connection closes without waiting for the queued octets
+    FAbort: Boolean;
     /// when the first octet of the request in progress arrived; 0 when none
     FHeadStartMs: QWord;
     procedure Enqueue(const AData: TBytes);
@@ -113,6 +118,8 @@ type
     function CheckDeadlines(const ANowMs: QWord; const AHeadTimeoutMs: Integer): Boolean;
     /// a request is being read or served
     property Busy: Boolean read GetBusy;
+    /// a writer asked for the connection to close without waiting
+    function AbortRequested: Boolean;
 
     // TH1Host: the exchange calls these through the link
     procedure EnqueueOutput(const AData: TBytes); override;
@@ -120,6 +127,7 @@ type
     procedure RequestContinue; override;
     procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean); override;
     procedure WatchDrain(const ALowWater: Int64; const ASink: IChannelSink); override;
+    procedure AbortConnection; override;
   end;
 
 implementation
@@ -252,6 +260,29 @@ begin
   end;
 end;
 
+function TH1Core.AbortRequested: Boolean;
+begin
+  FLock.Acquire;
+  try
+    Result := FAbort;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TH1Core.AbortConnection;
+begin
+  FLock.Acquire;
+  try
+    FAbort := True;
+    FCloseAfter := True;
+  finally
+    FLock.Release;
+  end;
+  if FWaker <> nil then
+    FWaker.Signal;
+end;
+
 procedure TH1Core.WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
 begin
   FOutLock.Acquire;
@@ -337,6 +368,7 @@ begin
   Options.Scheme := FOptions.Scheme;
   Options.OutboundLimit := FOptions.OutboundLimit;
   Options.BodyDeadlineMs := FOptions.Limits.BodyDeadlineMs;
+  Options.WriteStallMs := FOptions.WriteStallMs;
   Exchange := TH1Exchange.Create(FLink, AHead, Options, FOrdinal - 1);
   Ref := Exchange;
   FCurrentRef := Ref;

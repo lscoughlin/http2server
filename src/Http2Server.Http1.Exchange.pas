@@ -42,6 +42,8 @@ type
     OutboundLimit: Int64;
     /// the greatest wait between two arrivals of body octets, in milliseconds
     BodyDeadlineMs: Integer;
+    /// a write that sees no progress for this time aborts the connection
+    WriteStallMs: Integer;
   end;
 
   TH1Exchange = class(TInterfacedObject, IServerRequest, IServerResponse,
@@ -425,14 +427,35 @@ begin
 end;
 
 procedure TH1Exchange.WaitForRoom;
+var
+  Backlog, Least: Int64;
+  Since: QWord;
 begin
   // a write waits while the socket holds a backlog; a peer that reads slowly
-  // slows the handler and does not grow the memory of the connection
-  while FLink.Alive and (FLink.OutputBacklog > FOptions.OutboundLimit) do
+  // slows the handler and does not grow the memory of the connection. A peer that
+  // reads nothing for the stall time loses the connection, or the handler thread
+  // would wait for it for ever: mORMot2 counts a retried write as activity, so
+  // the idle check of the connection cannot see this peer
+  Least := High(Int64);
+  Since := GetTickCount64;
+  Backlog := FLink.OutputBacklog;
+  while FLink.Alive and (Backlog > FOptions.OutboundLimit) do
   begin
     if IsCancelled then
       raise EStreamCancelled.Create('the connection ended during a write');
+    if Backlog < Least then
+    begin
+      Least := Backlog;
+      Since := GetTickCount64;
+    end
+    else if (FOptions.WriteStallMs > 0) and
+            (GetTickCount64 - Since > QWord(FOptions.WriteStallMs)) then
+    begin
+      FLink.AbortConnection;
+      raise EStreamCancelled.Create('the peer stopped reading');
+    end;
     RTLEventWaitFor(FRoomEv, cWaitSliceMs);
+    Backlog := FLink.OutputBacklog;
   end;
   if (not FLink.Alive) or IsCancelled then
     raise EStreamCancelled.Create('the connection ended');
@@ -712,6 +735,9 @@ begin
     FKeep := False;
   FChannel := nil;
   CompleteExchange(not AGraceful);
+  // an abort drops the connection at once, with the octets that wait
+  if not AGraceful then
+    FLink.AbortConnection;
 end;
 
 procedure TH1Exchange.OwnerWatchDrain(const ALowWater: Int64; const ASink: IChannelSink);

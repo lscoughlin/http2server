@@ -179,9 +179,17 @@ a close. A connection that has sent no octet closes silently at the idle timeout
 
 The request body is held in memory until the handler reads it. The parser checks the
 body limit before it delivers any octet, so the memory of one request is bounded by
-`MaxBodySize`. The body of a request is not streamed past that limit. The parser of
-mORMot2 cannot pause the reads of a connection, so the server does not apply read
-back-pressure to a request body.
+`MaxBodySize`. A request body is not streamed past that limit.
+
+HTTP/2 bounds the unread request body with flow control, because the server sends
+`WINDOW_UPDATE` only when the handler reads. HTTP/1.1 has no such mechanism in this
+server. The async layer of mORMot2 has no supported call that pauses the reads of
+one connection. The result of `OnRead` is checked for `soClose` only, and the poller
+subscribes the connection for reads again after every read. A pause would need the
+private state of the poller. So the server reads the body as it arrives and holds it,
+and the bound is `MaxBodySize` for each connection. This is a deviation from HTTP/2:
+a handler that streams a very large upload needs a larger `MaxBodySize` on HTTP/1.1,
+and the memory of the server then grows with the number of such uploads.
 
 A client that stops reading a response cannot make the memory of the connection
 grow. A handler write waits while the backlog is above `ChannelQueueLimit`. The
@@ -223,7 +231,14 @@ and [sse](sse.md) describe the channel and the event stream.
 
 ## Known limits
 
-- The request body is bounded by `MaxBodySize` and is not streamed past it.
+- The request body is bounded by `MaxBodySize` and is not streamed past it. HTTP/2
+  applies flow control to the unread body; HTTP/1.1 does not (see the section on
+  memory).
+- A client that stops reading a response loses its connection after the idle
+  timeout without progress, so its handler thread is not held for ever. The same
+  case on HTTP/2 holds the handler thread until the stream or the connection ends.
+- `Stop` does not wait for a running HTTP/1.1 request. The pool cancels it after the
+  graceful stop timeout, and the connection closes.
 - Cancel hooks do not run, as on HTTP/2.
 - `Upgrade: h2c` is ignored, and `CONNECT` is answered with 501.
 - The server does not rate-limit rejected requests with a token bucket. Each

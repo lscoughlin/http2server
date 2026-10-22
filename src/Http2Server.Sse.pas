@@ -253,7 +253,11 @@ begin
   if FSource <> nil then
     FSource.Close;
   if Chan <> nil then
+  begin
     Chan.Close(AMode);
+    // the channel holds this stream as its sink; the cut ends the reference cycle
+    Chan.SetSink(nil);
+  end;
 end;
 
 function TSseStream.Send(const AEvent: TSseEvent): TSendResult;
@@ -315,6 +319,8 @@ begin
   end;
   if FSource <> nil then
     FSource.Close;
+  // the peer is gone: the channel needs no sink, and the cycle ends here
+  FChannel.SetSink(nil);
 end;
 
 procedure TSseStream.WriteDrained;
