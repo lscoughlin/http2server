@@ -49,7 +49,7 @@ flowchart TD
     IO["IO pool: Http2Server.Async"]
     TLS["TLS: Http2Server.Tls, Alpn"]
     ADM["admission: Http2Server.Admission"]
-    CORE["connection: Http2Server.Connection, HpackConnection"]
+    CORE["connection: Http2Server.Connection, Connection.Core, HpackConnection"]
     OUT["output: Http2Server.Output"]
     STREAM["streams: Http2Server.Stream, Waiter"]
     CFG["configuration: Config, Limits, Seam"]
@@ -108,7 +108,7 @@ The path shows how the layers cooperate.
 
 1. An IO thread accepts the socket and the connection core consumes the
    preface. The core sends the server SETTINGS frame
-   (`src/Http2Server.Connection.pas:363`).
+   (`src/Http2Server.Connection.pas:109`).
 2. A `HEADERS` frame starts a header block and `CONTINUATION` frames extend
    it. The HPACK decoder runs on the IO thread under the connection lock.
 3. The core validates the request fields against RFC 9113 section 8.1. An
@@ -138,7 +138,8 @@ together with no name clash.
 | `Http2Server.Tls.pas` | 176 | TLS | the `INetTls` plug-in of a connection |
 | `Http2Server.Alpn.pas` | 276 | TLS | the `SSL_CTX_set_alpn_select_cb` binding and callback |
 | `Http2Server.Admission.pas` | 897 | admission | the bounded queue and the handler pool |
-| `Http2Server.Connection.pas` | 1193 | connection | the connection core |
+| `Http2Server.Connection.Core.pas` | 703 | connection | the base of the connection core: fields, locks, output queue, write wake-up and stream table |
+| `Http2Server.Connection.pas` | 617 | connection | the connection core: `Feed` and the frame handlers |
 | `Http2Server.HpackConnection.pas` | 229 | connection | the HPACK encoder and decoder of one connection |
 | `Http2Server.Output.pas` | 283 | output | the response path and the drain |
 | `Http2Server.Stream.pas` | 869 | streams | the stream state, the buffers and the reference count |

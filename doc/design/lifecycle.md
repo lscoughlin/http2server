@@ -102,7 +102,7 @@ and the queue and pool flags cover the two pools.
 ## The GOAWAY of a stop
 
 The core sends one GOAWAY frame per connection, and no second frame
-(`src/Http2Server.Connection.pas:444`). A connection that already sent GOAWAY,
+(`src/Http2Server.Connection.Core.pas:415`). A connection that already sent GOAWAY,
 because of a protocol error, keeps its first frame.
 
 The last stream identifier is truthful. A frame that names a higher identifier

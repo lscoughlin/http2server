@@ -30,10 +30,19 @@ invariants:
 
 # The connection core
 
-The unit `src/Http2Server.Connection.pas` holds one connection. The class
-`TServerConnectionCore` consumes the bytes of one socket and produces the
-bytes of one socket. It holds no socket and it runs no socket call, so a test
-drives it without a network.
+Two units hold one connection. A class cannot span two units, so the core is
+a base class and a derived class. The unit `src/Http2Server.Connection.Core.pas`
+holds the base class `TConnectionCoreBase`: the fields, the locks, the output
+queue, the write wake-up, the stream table and the connection-level frames
+(`GOAWAY`, `RST_STREAM`). The unit `src/Http2Server.Connection.pas` holds the
+class `TServerConnectionCore`, which derives from the base and adds `Feed` and
+the frame handlers. That unit also declares aliases for the public types of the
+base unit, so a caller that uses `Http2Server.Connection` sees the names it saw
+before the split.
+
+The class `TServerConnectionCore` consumes the bytes of one socket and produces
+the bytes of one socket. It holds no socket and it runs no socket call, so a
+test drives it without a network.
 
 The IO side calls `Feed` with the bytes a read produced and calls `TakeOutput`
 for the bytes to write. The class `THttp2AsyncConnection`
@@ -41,21 +50,21 @@ for the bytes to write. The class `THttp2AsyncConnection`
 
 ## The input path
 
-`Feed` (`src/Http2Server.Connection.pas:321`) adds the new bytes to the input
+`Feed` (`src/Http2Server.Connection.pas:68`) adds the new bytes to the input
 buffer and then walks the frames.
 
 1. The client connection preface comes first. The preface may arrive in
    pieces, so `Feed` copies the bytes into a preface buffer and waits until
    the buffer holds `ClientPrefaceSize` bytes. It then calls
-   `CheckClientPreface` (`:355`). A mismatch sends GOAWAY with
+   `CheckClientPreface` (`:102`). A mismatch sends GOAWAY with
    `PROTOCOL_ERROR`. The server SETTINGS frame is the first frame the server
-   sends (`src/Http2Server.Connection.pas:362`).
+   sends (`src/Http2Server.Connection.pas:109`).
 2. A frame header is nine bytes. A partial frame stays in the input buffer
    and waits for the next call.
 3. A frame whose length is above `SETTINGS_MAX_FRAME_SIZE` is a connection
    error of type `FRAME_SIZE_ERROR`, and the core removes no payload for it
-   (`src/Http2Server.Connection.pas:373-376`; RFC 9113 section 4.2).
-4. `ProcessFrame` (`src/Http2Server.Connection.pas:672`) dispatches on the
+   (`src/Http2Server.Connection.pas:121-124`; RFC 9113 section 4.2).
+4. `ProcessFrame` (`src/Http2Server.Connection.pas:169`) dispatches on the
    frame type.
 
 The input buffer never grows without a bound. `TConnectionCoreOptions`
@@ -159,7 +168,7 @@ transition from "no output" to "output" (`:494`). The document
 ## The connection events
 
 The core reports each state change through the interface `IConnectionEvents`
-(`src/Http2Server.Connection.pas:52`): a stream that opens, a stream that is
+(`src/Http2Server.Connection.Core.pas:56`): a stream that opens, a stream that is
 refused, a stream that resets, a stream that completes, a connection that
 closes and a bucket that trips. The class `THttp2ConnectionEvents`
 (`src/Http2Server.Async.pas:270`) turns each call into an observer event. The
