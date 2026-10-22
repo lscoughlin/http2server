@@ -27,3 +27,6 @@ __pycache__/
 
 # the self-signed certificate that the validation script creates
 test/certs/
+
+# Obsidian vault settings
+.obsidian/

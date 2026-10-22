@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -25,7 +24,6 @@ invariants:
   - The queue is the only admission point of a request.
   - The HPACK codec runs only on an IO thread, so a response header block is queued, not encoded, on the handler side.
 ---
-}
 
 # Admission and the handler pool
 
@@ -91,7 +89,7 @@ The handler side never encodes a header block. The HPACK encoder is connection
 state and runs on an IO thread only, so a 503 refusal becomes a
 `QueueResponseHeaders` call on the stream and the IO side encodes the block
 later. This rule follows the seam note in
-`doc/design/seam.md`.
+[seam](seam.md).
 
 ## Reset before dispatch
 

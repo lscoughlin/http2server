@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -15,12 +14,10 @@ invariants:
   - The pinned compiler is Free Pascal 3.2.4.
   - OpenSSL 3 is a run-time dependency and is not linked into the binary.
 ---
-}
 
 # Toolchain and environment
 
-Locked toolchain facts for the HTTP/2 server library. A later change corrects
-this file in the same change and notes the correction.
+Locked toolchain facts for the HTTP/2 server library.
 
 ## Compiler and platform
 
@@ -62,7 +59,7 @@ The `Makefile` exports the variable, so a test binary inherits it
 (`Makefile:33`, `Taskfile.yaml:66-67`).
 
 The server library uses mORMot2 for the TLS and ALPN layer. The language and
-TLS facts are recorded in `doc/design/fpc-runtime.md`.
+TLS facts are recorded in [fpc-runtime](../design/fpc-runtime.md).
 
 ## Dependency bootstrap
 
@@ -84,8 +81,8 @@ authority for the dependency, not the directory contents.
 with `consoletestrunner` (`test/Http2Server.RunTests.pas:18`). The
 registration unit `Http2Server.TestRunner` exposes `RegisterTests`, which adds
 one named suite to the global test registry
-(`test/Http2Server.TestRunner.pas:35-41`). The suite holds no test case until
-the server units exist. An empty suite exits with code 0.
+(`test/Http2Server.TestRunner.pas:35-41`). The suite holds the test cases of
+the units of the library.
 
 The runner registration order is important. `RegisterTests` adds a named
 `TTestSuite` to `GetTestRegistry` before `TTestRunner.Run` reads the registry
@@ -139,12 +136,11 @@ No amd64 FPC 3.2.4 toolchain is available here for a quick run:
 The Linux amd64 run is therefore a recorded gap, not a completed task, and
 the gap has two halves: no host, and no published toolchain for a host.
 
-A future run needs an amd64 host (or an amd64 emulator that starts an FPC
+A Linux amd64 run needs an amd64 host (or an amd64 emulator that starts an FPC
 3.2.4 toolchain) with FPC 3.2.4 and OpenSSL 3. The unit directory is then
 `/usr/lib/fpc/3.2.4/units/x86_64-linux` for a distribution package. The Linux
 defaults in the `Makefile` and `Taskfile.yaml` (`Makefile:23-25`,
-`Taskfile.yaml:42-50`, `Taskfile.yaml:54-62`) are unverified on hardware until
-that run happens.
+`Taskfile.yaml:42-50`, `Taskfile.yaml:54-62`) are unverified on hardware.
 
 ## Reproduce commands
 

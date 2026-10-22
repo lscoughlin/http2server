@@ -1,12 +1,11 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, tls, alpn, openssl
 notes:
   - The TLS route and the ALPN binding of the server.
-  - The route is option A: the mORMot2 INetTls interface plus one ALPN
-    select callback, installed on the server context after the socket binds.
+  - "The route is option A: the mORMot2 INetTls interface plus one ALPN
+    select callback, installed on the server context after the socket binds."
 scope: How the server reaches ALPN, the TLS plug-in of a connection, and the mORMot2 TLS facts the route rests on.
 primary_types:
   - TAlpnSelectCb
@@ -25,7 +24,6 @@ invariants:
   - A TLS connection that did not negotiate h2 is refused after the handshake.
   - The handshake deadline of the factory never exceeds the mORMot2 bound.
 ---
-}
 # TLS and ALPN
 
 A TLS connection carries an ALPN extension. The server selects `h2` from the
@@ -180,11 +178,11 @@ of `test/Http2Server.Alpn.Test.pas`, which run in the normal test suite. The
 pure TLS decisions and the h2c loopback are verified by
 `test/Http2Server.Async.Test.pas`.
 
-**Open gap.** A live TLS handshake loopback is not yet part of the suite. It
+**Open gap.** The suite holds no live TLS handshake loopback. It
 needs a self-signed certificate, generated at test time, and a client that
 offers the `h2` ALPN name. The ALPN select rule, the negotiated-name check and
 the handshake deadline each carry unit tests, and the h2c loopback proves the
-IO pool end to end, but no test yet drives `h2` through a real OpenSSL
+IO pool end to end, but no test drives `h2` through a real OpenSSL
 handshake on this server. The platform run on Linux amd64 is also open, because
 this host is macOS aarch64.
 

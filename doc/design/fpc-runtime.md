@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -15,7 +14,6 @@ invariants:
   - The library compiles in the Delphi mode.
   - The thread manager comes from mORMot2 and not from a program unit.
 ---
-}
 
 # FPC runtime and language facts
 
@@ -97,10 +95,9 @@ one unit is visible to the other.
 ## The facade unit
 
 `src/Http2Server.pas` is the public facade of the library
-(`src/Http2Server.pas:12-18`). The unit declares no type and no routine yet,
-because the server surface does not exist. The unit exists so that the build
-line and the test runner link a real library unit from the first change. The
-planned units of the library are recorded in `doc/design/` as they arrive.
+(`src/Http2Server.pas:12-18`). The unit declares type aliases for the public types of the library and the
+helper that turns a factory into a server. The build line and the test runner
+link this unit. The units of the library are recorded in `doc/design/`.
 
 ## File headers
 

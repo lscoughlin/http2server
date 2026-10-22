@@ -5,8 +5,9 @@ copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, server, protocol, test
 notes:
   - Tests for the server-side additions to Http2Server.Frames and
-    Http2Server.Errors: the received-frame size check, the server SETTINGS
-    builder, the client connection preface, and the server exceptions.
+    Http2Server.Errors. The tests cover the received-frame size check, the
+    server SETTINGS builder, the client connection preface and the server
+    exceptions.
   - The received-frame size check, the server SETTINGS builder and the
     preface parser follow RFC 9113 sections 3.4, 6.5 and 4.2.
 ---

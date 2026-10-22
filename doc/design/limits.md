@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -21,7 +20,6 @@ invariants:
   - A bucket tripped sends GOAWAY with ENHANCE_YOUR_CALM.
   - Every bucket reads the clock through one interface.
 ---
-}
 
 # Per-connection abuse limits
 
@@ -115,7 +113,7 @@ A shared bucket of one capacity does not serve these kinds. The legitimate
 rates are far apart. A peer sends one `WINDOW_UPDATE` frame for each window
 that it refills, so a large body needs thousands of them: a measurement of
 a 100 MB body sent 6102 such frames, at a steady rate of 2450 frames in
-one second (`doc/verification/validation.md`). A `CONTINUATION` frame,
+one second ([validation](../verification/validation.md)). A `CONTINUATION` frame,
 by contrast, follows only a header block that already passed the frame
 size. One shared bucket of the least capacity closes a healthy connection
 that streams a large body.
@@ -160,7 +158,7 @@ burst of a few megabytes, and the refill rate sits above the measured
 rate of 2450 frames a second with headroom. A small bucket of 100 tokens
 closed a healthy connection on a body of less than two megabytes: 107
 control frames arrived before the body ended. The measurement is in
-`doc/verification/validation.md`.
+[validation](../verification/validation.md).
 
 The queue depth of 64 (`src/Http2Server.Config.pas:369`) and the IO thread
 count of 4 (`src/Http2Server.Config.pas:409`) come from the same seam

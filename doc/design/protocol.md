@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -7,7 +6,7 @@ notes:
   - This document describes the wire protocol units of the server.
   - The units are copies of the sibling HTTP/2 client units, renamed into
     the Http2Server namespace and reviewed for server use.
-scope: The five protocol units and the server-side changes to them.
+scope: The five protocol units and the server-specific parts of them.
 primary_types:
   - THttp2ErrorCode
   - TFrameHeader
@@ -25,14 +24,13 @@ invariants:
   - A decoded header list never exceeds SETTINGS_MAX_HEADER_LIST_SIZE.
   - A flow-control window never exceeds 2^31-1 octets.
 ---
-}
 # HTTP/2 Protocol Units
 
 The server carries five protocol units. Each unit holds one concern, uses no
-socket and no thread, and is free of the mORMot2 dependency. The units are
-copies of the sibling HTTP/2 client units at a recorded revision. The pasdoc
-header of every copied file names its source file and its source revision, so
-a later merge shows the difference between the copy and its origin.
+socket and no thread, and is free of the mORMot2 dependency. The units
+derive from the sibling HTTP/2 client units at a recorded revision. The
+pasdoc header of every such file names its source file and its source
+revision.
 
 ## Errors
 
@@ -41,7 +39,7 @@ a later merge shows the difference between the copy and its origin.
 `EHttpError` carries an `ErrorCode` value, which the connection places in a
 `RST_STREAM` or `GOAWAY` frame.
 
-The server adds four classes to the copy:
+The server adds four classes to the client set:
 
 | Class | Base | Meaning |
 |---|---|---|

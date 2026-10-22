@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -144,7 +143,7 @@ runs at the first read of each connection
 when the factory names a certificate (`src/Http2Server.Async.pas:435-436`), and
 it installs the server context and the ALPN callback in `Start`
 (`src/Http2Server.Async.pas:529-541`). The route itself is the subject of
-`doc/design/tls.md`.
+[tls](tls.md).
 
 The handshake blocks the IO thread that runs it. mORMot2 bounds the
 `SSL_accept` loop with a 5000 ms deadline
@@ -201,13 +200,13 @@ own tests. The idle close and the first-header-block close each have a test
 that a raw client drives by sleeping, and both checks fail when the timeout
 wiring is mutated, so they prove the behaviour and not the timing.
 
-**Open gap.** A live TLS handshake loopback is not yet part of the suite. It
+**Open gap.** The suite holds no live TLS handshake loopback. It
 needs a self-signed certificate, generated at test time, and a client that
 offers the `h2` ALPN name. The ALPN select rule and the negotiated-name check
-carry unit tests, and the h2c loopback proves the pool, but no test yet drives
+carry unit tests, and the h2c loopback proves the pool, but no test drives
 `h2` through a real OpenSSL handshake on this server. The platform run on
 Linux amd64 is also open: this host is macOS aarch64, so the Linux result is a
-measured gap of a later validation stage.
+measured gap.
 
 ## Sources
 

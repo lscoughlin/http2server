@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -16,7 +15,6 @@ invariants:
   - The third-party components are named in the file NOTICE.
 ---
 
-}
 # The HTTP/2 server documentation
 
 This file is the route map of the documentation. The library is an HTTP/2
@@ -64,6 +62,11 @@ The verification documents record what ran and what did not run.
 | --- | --- |
 | [toolchain](verification/toolchain.md) | The compiler, the platform, the build flags, the dependency bootstrap and the deliberate gaps. |
 | [validation](verification/validation.md) | The conformance runs, the comparison with the C and FreePascal implementations, and the recorded gaps. |
+
+## References
+
+The directory `doc/references/` holds plain-text copies of the RFCs that the
+library follows. The index is [references](references/README.md).
 
 ## The example programs
 

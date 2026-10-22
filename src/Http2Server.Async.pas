@@ -11,8 +11,8 @@ notes:
   - THttp2AsyncServer builds the connection class, applies the factory values
     for the IO thread count, the backlog and the timeouts, and starts and
     stops the pools.
-  - The wake-up follows the mORMot2 pattern: one edge-triggered flag and one
-    retry after a failed acquisition, so a wake-up is never lost.
+  - The wake-up follows the mORMot2 pattern. It uses one edge-triggered flag
+    and one retry after a failed acquisition, so a wake-up is never lost.
   - The IO callbacks mark their thread, so a handler that runs on an IO
     thread fails at once.
 ---

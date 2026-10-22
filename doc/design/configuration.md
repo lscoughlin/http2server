@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -26,7 +25,6 @@ invariants:
     records.
   - Validate reports every problem in one call.
 ---
-}
 # Configuration
 
 Every setting of the HTTP/2 server passes through one object: the server
@@ -68,13 +66,11 @@ connection core states for `TConnectionCoreOptions`
 
 The test `TestDefaultsOnlyInCreate` reads the source of this unit and fails on
 a numeric literal of two digits or more outside a `Create` body
-(`test/Http2Server.Config.Test.pas:754`). The same rule for the other units is
-not yet testable: `Http2Server.Stream.pas`, `Http2Server.Connection.pas` and
-`Http2Server.Waiter.pas` still hold their own constants (`DefaultReadTimeoutMs`,
+(`test/Http2Server.Config.Test.pas:754`). The test covers this unit only.
+`Http2Server.Stream.pas` holds its own constants (`DefaultReadTimeoutMs`,
 `DefaultWriteTimeoutMs` and `DefaultUpdateThreshold` in
-`src/Http2Server.Stream.pas:290-294`). Those constants move into the factory
-as each unit starts to read the factory. A whole-tree sweep is the check for
-that later state.
+`src/Http2Server.Stream.pas:290-294`), which a stream uses until the factory
+sets a value.
 
 ### The listener settings
 
@@ -102,7 +98,7 @@ record whole (`src/Http2Server.Config.pas:466`).
 | `HandshakeTimeoutMs` | `WithHandshakeTimeoutMs` | the time a handshake may take |
 
 The default ALPN list holds the single name `h2`
-(`src/Http2Server.Config.pas:314-321`). `doc/design/tls.md` describes how the
+(`src/Http2Server.Config.pas:314-321`). [tls](tls.md) describes how the
 ALPN name reaches OpenSSL.
 
 ### The pool settings
@@ -163,7 +159,7 @@ The factory holds one `TTokenBucketOptions` per limited client action: the
 reset bucket and one bucket per control frame kind
 (`src/Http2Server.Config.pas:134-139`). Each bucket has its own `WithX`
 method (`src/Http2Server.Config.pas:557-600`). `TTokenBucketOptions` is the
-fluent record of `src/Http2Server.Limits.pas:71`; `doc/design/limits.md`
+fluent record of `src/Http2Server.Limits.pas:71`; [limits](limits.md)
 describes the bucket itself.
 
 | Bucket | `WithX` | The client action it bounds |
@@ -241,7 +237,7 @@ problem list, so one exception names every problem.
 ## Default values
 
 The defaults of the buckets, the queue depth and the IO thread count come
-from the load runs, and `doc/design/limits.md` names the measurement of each
+from the load runs, and [limits](limits.md) names the measurement of each
 one. The remaining values are the chosen protocol and operational bounds.
 The values are:
 
@@ -258,12 +254,12 @@ The values are:
 
 ## What the factory does not hold
 
-The factory holds no `Build` method in this release. `Build` returns an
-`IHttp2Server`, and the server interface arrives with the server lifecycle
-unit. The factory holds the settings that `Build` reads.
+The factory holds no `Build` method. The helper `THttp2ServerFactoryHelper`
+in `src/Http2Server.pas` adds `Build`, which reads the settings of the factory
+and returns an `IHttp2Server`.
 
-The factory holds no observer. The observer interface arrives with the
-observer unit, and the factory refers to it once that unit exists.
+The factory holds no observer. A caller passes an `IHttp2ServerObserver` to
+`Build`, or passes none.
 
 ## Verification
 

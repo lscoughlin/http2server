@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -21,7 +20,6 @@ invariants:
   - One HPACK encoder serves one connection.
   - No handler thread runs drain code.
 ---
-}
 
 # Outbound path
 
@@ -88,9 +86,9 @@ handler.
 
 ## See also
 
-- `doc/design/connection.md` states how the core feeds and drains one
+- [connection](connection.md) states how the core feeds and drains one
   connection.
-- `doc/design/seam.md` states the boundary between the IO thread and a
+- [seam](seam.md) states the boundary between the IO thread and a
   handler thread.
-- `doc/design/configuration.md` states the factory values that reach this
+- [configuration](configuration.md) states the factory values that reach this
   unit.

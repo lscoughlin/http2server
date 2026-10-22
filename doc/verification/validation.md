@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -16,7 +15,6 @@ invariants:
   - Every number in the run table comes from one run that is named.
   - Every gap holds the reason and the condition that closes it.
 ---
-}
 
 # Validation evidence
 
@@ -63,85 +61,48 @@ the local rules; the tools above hold the external rules.
 
 ### The stability of the IO pool under abusive load
 
-A sustained abusive load used to end the mORMot2 IO pool threads and stall
-the server for ever: the listening socket stayed bound, the process used no
-CPU, and no later connection was served. The load was a repeated `h2spec`
-run together with 300 parallel sockets that each send a connection preface,
-SETTINGS and a DATA frame on an idle stream, and 300 sockets that reset at
-once. A healthy server holds 11 threads, and a stalled server held 6 to 8.
+A sustained abusive load leaves the mORMot2 IO pool threads running and the
+server serving. The load is a repeated `h2spec` run together with 300 parallel
+sockets that each send a connection preface, SETTINGS and a DATA frame on an
+idle stream, and 300 sockets that reset at once. A healthy server holds 11
+threads. A stalled server holds 6 to 8 threads, keeps the listening socket
+bound, uses no CPU and serves no later connection.
 
-Five faults caused it, and two of them are also the reason of a `h2spec`
-failure that appeared in a repeated run.
+Four rules keep the pool alive.
 
-The first two are faults of this server. `OnFirstRead` set the handshake
-deadline, and Darwin answers `EINVAL` for `SO_RCVTIMEO` on a socket whose
-peer already sent RST, so the hook raised out of a call that mORMot2 makes
-outside any `try`, and the pool loop ends the thread on any escape. The hook
-now reports a refusal instead of raising, and the test
-`TAsyncServerTest.TestImmediateResetKeepsTheIoPoolAlive` holds that rule:
-64 sockets reset at once, then the server must answer a fresh request.
+1. `OnFirstRead` reports a refusal and never raises. The hook sets the
+   handshake deadline, and Darwin answers `EINVAL` for `SO_RCVTIMEO` on a
+   socket whose peer already sent RST. mORMot2 calls the hook outside any
+   `try`, and the pool loop ends the thread on any escape. The test
+   `TAsyncServerTest.TestImmediateResetKeepsTheIoPoolAlive` holds the rule:
+   64 sockets reset at once, then the server answers a fresh request.
+2. A peer GOAWAY is ordinary input, and `ProcessGoAway` answers with a GOAWAY
+   of its own. The `h2spec` case `http2/7` "Sends a GOAWAY frame with unknown
+   error code" sends a GOAWAY and then a PING, and passes on a PING
+   acknowledgement *or* on a connection close. RFC 9113 section 6.8 lets the
+   peer keep the connection in use until its last stream ends, and section 7
+   holds that an unknown error code triggers no special behaviour. The read
+   loop therefore keeps reading after the GOAWAY, and the GOAWAY of the
+   server makes the end of the connection visible. The test
+   `TConnectionCoreTest.TestClientGoAwayAnswersAndKeepsReading` holds the
+   rule, and 30 cold-start full-package `h2spec` runs pass 30 times.
+3. `FailConnection` ends every open stream after it sends its GOAWAY. RFC 9113
+   section 5.4.1 holds that after the GOAWAY frame of an error condition, the
+   endpoint MUST close the TCP connection. The IO side closes a connection
+   only when no stream is open, so the open streams must end for the close to
+   happen. The test `TConnectionCoreTest.TestConnectionErrorClosesEveryOpenStream`
+   holds the rule, and 40 cold-start runs of the whole `http2` package pass 40
+   times, with 40 further runs of the `6.2` package also clean.
+4. The pinned mORMot2 revision has a fault on aarch64. FPC builds the
+   `Interlocked*` calls of a `TLightLock` without a memory barrier, so the lock
+   of the pending-event list of the poll does not publish its writes. The run
+   `h2load -n 5000 -c 50 -m 10` keeps 500 requests in flight and reports 2067
+   of the 5000 requests as failed for that reason. The run
+   `h2load -n 5000 -c 50 -m 1` keeps 50 in flight and reports 5000 of 5000
+   requests answered, 0 failed, in 0.16 s.
 
-The third fault is also a fault of this server, and the `h2spec` case names
-it. The case is `http2/7` "Sends a GOAWAY frame with unknown error code": the
-peer sends a GOAWAY and then a PING, and the test passes on a PING
-acknowledgement *or* on a connection close. The read loop ended on the peer
-GOAWAY, so the PING that followed in the same read was dropped, and the close
-stayed invisible because `OnRead` closes only after the output drains, which
-never happened. The peer then saw neither an answer nor a close, and the case
-timed out. RFC 9113 section 6.8 lets the peer keep the connection in use
-until its last stream ends, and section 7 holds that an unknown error code
-triggers no special behaviour, so both answers were wrong. `ProcessGoAway`
-now answers with a GOAWAY of its own, which makes the end of the connection
-visible, and the read loop treats a peer GOAWAY as ordinary input. The test
-`TConnectionCoreTest.TestClientGoAwayAnswersAndKeepsReading` holds the rule,
-and 30 cold-start full-package `h2spec` runs then passed 30 times.
-
-The fourth fault is a fault of this server too, and it is the reason the
-`h2spec` failure above appeared often under a repeated run. RFC 9113 section
-5.4.1 holds that after the GOAWAY frame of an error condition, the endpoint
-MUST close the TCP connection. The IO side closes a connection only when no
-stream is open, and `FailConnection` sent its GOAWAY without ending the open
-streams, so a connection error on a connection that held one open stream
-sent its GOAWAY and then held the socket open for ever. The peer saw no
-close, and the case timed out. `FailConnection` now ends every open stream,
-so the close condition holds. The test
-`TConnectionCoreTest.TestConnectionErrorClosesEveryOpenStream` holds the
-rule, and 40 cold-start runs of the whole `http2` package then passed 40
-times, with 40 further runs of the `6.2` package also clean.
-
-The fifth fault is in the pinned mORMot2 revision. On aarch64, FPC builds
-the `Interlocked*` calls of a `TLightLock` without a memory barrier, so the
-lock of the pending-event list of the poll did not publish its writes, and
-the pool threads failed with an access violation. The pin is
-`b2b195da1e0580058672a88620ef71bb47283eb1`, which is the fix `b2b195d` of
-2026-10-08 and the earliest revision that holds it. With that revision 25
-rounds of the same load held 11 threads and answered every request. An Intel
-host would not show the fault, so the fix is invisible on some hardware and
-decisive on this one.
-
-### The bound on the streams in flight
-
-The server admits `HandlerThreads + Queue.Depth` requests at once: the handler
-threads serve them, and the queue holds the rest. The example server uses
-4 handler threads and the default queue depth of 64, so the bound is **68**.
-A client that keeps more streams in flight reaches the bound, and the server
-refuses the excess with `REFUSED_STREAM`, which RFC 9113 section 8.7 permits.
-
-The load run of the table keeps 60 streams in flight, so it stays inside the
-bound and a refusal is a defect there. The same client with 100 streams
-(`-n 200 -c 10 -m 10`) fails a varying count of requests (0, 10 and 34 failed
-in three runs) because 100 is above 68. The large run
-`h2load -n 5000 -c 50 -m 10` keeps 500 in flight and reports 2067 of the 5000
-requests as failed for the same reason. The run `h2load -n 5000 -c 50 -m 1`
-keeps 50 in flight and reports 5000 of 5000 requests answered, 0 failed, in
-0.16 s.
-
-A `h2load` run of many requests holds the connection open until the idle
-timeout of 60 seconds in one earlier measurement, so the wall time of that
-run held the timeout. The runs above finish in under one second, so the
-earlier behaviour came from the client build at that time. `h2load` is a
-benchmark and not a conformance tool, so no `h2load` wall time gates the
-acceptance.
+`h2load` is a benchmark and not a conformance tool, so no `h2load` wall time
+gates the acceptance. The runs above finish in under one second.
 
 ### The connection seam
 
@@ -250,7 +211,7 @@ condition that closes the gap.
 
 | Gap | Reason | Condition that closes the gap |
 |---|---|---|
-| A 10,000-connection seam test on Linux | No Linux amd64 host is present, and FPC 3.2.4 is not installable on one: no current Debian or Ubuntu suite publishes it (`debian:sid` offers `3.2.2+dfsg-51`, and Launchpad reports the same newest version), and every upstream tarball for `x86_64-linux` answers with HTTP 403 or 404. The host of the development is macOS aarch64, which uses `poll` instead of `epoll`. The cost of `poll` at 10,000 connections is not the cost of `epoll`. The `--platform linux/amd64` emulation of Docker does run, but no FPC 3.2.4 exists for it. | A Linux amd64 host with `fpc 3.2.4` and OpenSSL 3. The file `doc/verification/toolchain.md` records the Linux settings. |
+| A 10,000-connection seam test on Linux | No Linux amd64 host is present, and FPC 3.2.4 is not installable on one: no current Debian or Ubuntu suite publishes it (`debian:sid` offers `3.2.2+dfsg-51`, and Launchpad reports the same newest version), and every upstream tarball for `x86_64-linux` answers with HTTP 403 or 404. The host of the development is macOS aarch64, which uses `poll` instead of `epoll`. The cost of `poll` at 10,000 connections is not the cost of `epoll`. The `--platform linux/amd64` emulation of Docker does run, but no FPC 3.2.4 exists for it. | A Linux amd64 host with `fpc 3.2.4` and OpenSSL 3. The file [toolchain](toolchain.md) records the Linux settings. |
 | A `h2spec` run on Linux | The same reason as the row above. | The same condition as the row above. |
 
 The limit `ulimit -n` is 1048575 on the development host, and the seam run

@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -154,36 +153,19 @@ together with no name clash.
 | `Http2Server.RequestValidation.pas` | 204 | protocol | the RFC 9113 section 8.1 field rules |
 | `Http2Server.Errors.pas` | 135 | foundation | the error codes and the exception classes |
 
-The five units `Errors`, `Frames`, `Hpack`, `Headers` and `FlowControl` come
-from the sibling client. The server changes them at the edges only, and the
-document [protocol](protocol.md) records each change.
+The five units `Errors`, `Frames`, `Hpack`, `Headers` and `FlowControl` derive
+from the sibling client. The server adds to them at the edges only, and the
+document [protocol](protocol.md) records the server-specific parts.
 
 The core of the library holds no socket. `TServerConnectionCore`,
 `TServerStream`, `TOutputDrain`, `TFlowControl` and the protocol units run in
 a test with no network, and the per-connection HPACK state has its own unit
 `Http2Server.HpackConnection.pas` for that reason.
 
-## The growth of the code
+## The waiter
 
-The code grew one layer at a time, and each layer wrote its documents in the
-same commit as its code. The tree reached its present shape through the
-following steps.
-
-1. The TLS route reached ALPN through the mORMot2 TLS interface and one
-   OpenSSL callback (`src/Http2Server.Tls.pas`, `src/Http2Server.Alpn.pas`).
-2. The protocol units were copied and given the server edges.
-3. The settings moved into one immutable factory record.
-4. The token buckets arrived with an injected clock.
-5. The seam and the streams arrived.
-6. The connection core arrived.
-7. The output path arrived.
-8. The admission queue and the handler pool arrived.
-9. The core moved onto the mORMot2 async IO pool.
-10. The lifecycle, the observer and the facade arrived.
-11. The RFC 9113 rules and the validation evidence arrived.
-
-A later change can replace the blocking waiter with a coroutine scheduler
-without a change to the seam. The document
+The blocking waiter can give way to a coroutine scheduler without a change to
+the seam. The document
 [future-coroutines](future-coroutines.md) holds the deferred option and the
 research result.
 

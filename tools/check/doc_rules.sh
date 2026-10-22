@@ -8,7 +8,9 @@
 #   - a document never refers to a file in plan/,
 #   - a document never refers to a file in .ai/,
 #   - a document never names a story,
-#   - a document carries the pasdoc YAML front matter.
+#   - a document carries the YAML front matter.
+# The directory doc/references/ holds verbatim copies of specifications. Rules
+# 1 and 5 and the index rule skip it. The front matter rules cover its .md files.
 set -u
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -26,30 +28,29 @@ report() {
 }
 
 # 1. No reference to plan/, .ai/ or a story number.
-hits=$(grep -rn 'plan/\|\.ai/\|[Ss]tory' doc/ 2>/dev/null)
+hits=$(grep -rn --exclude-dir=references 'plan/\|\.ai/\|[Ss]tory' doc/ 2>/dev/null)
 if [ -n "$hits" ]; then
   report "doc/ refers to plan/, .ai/ or a story" "$hits"
 else
   echo "PASS no document refers to plan/, .ai/ or a story"
 fi
 
-# 2. Every document starts with the pasdoc YAML front matter.
+# 2. Every document starts with the YAML front matter.
 licence='LGPL-2.1-only WITH Independent-modules-exception'
 bad=""
 for f in $(find doc -name '*.md' | sort); do
   first=$(sed -n '1p' "$f")
   second=$(sed -n '2p' "$f")
-  zero=$(sed -n '3p' "$f")
   last=$(awk 'NR>2 && $0=="---"{print "yes"; exit}' "$f")
-  if [ "$first" != '{**' ] || [ "$second" != '---' ] ||
-     [ "$zero" != "license: $licence" ] || [ "$last" != 'yes' ]; then
+  if [ "$first" != '---' ] || [ "$second" != "license: $licence" ] ||
+     [ "$last" != 'yes' ]; then
     bad="$bad $f"
   fi
 done
 if [ -n "$bad" ]; then
-  report "the front matter is not the pasdoc YAML form" "$bad"
+  report "the front matter is not the YAML form" "$bad"
 else
-  echo "PASS every document carries the pasdoc YAML front matter"
+  echo "PASS every document carries the YAML front matter"
 fi
 
 # 2a. No placeholder licence survives anywhere.
@@ -90,7 +91,7 @@ fi
 
 # 4. Every document is reachable from the index.
 notinindex=""
-for f in $(find doc -name '*.md' -not -name README.md | sed 's|^doc/||' | sort); do
+for f in $(find doc -name '*.md' -not -name README.md -not -path 'doc/references/*' | sed 's|^doc/||' | sort); do
   grep -q "$f" doc/README.md || notinindex="$notinindex $f"
 done
 if [ -n "$notinindex" ]; then
@@ -101,7 +102,7 @@ fi
 
 # 5. A sentence-initial verb is a rough test for the imperative mood. The
 #    check reports the hits and lets a reader judge each one.
-hits=$(grep -rnoE '(^|[.!?] )(Add|Write|Use|Set|Call|Read|Make|Check|Keep|Put|Run|Build|Hold|Avoid|See|Take|Give|Move|Remove|Ensure|Replace|Change|Report|Fix|Do not) [a-z]' doc/ 2>/dev/null | grep -v '\.md:[0-9]*:---')
+hits=$(grep -rnoE --exclude-dir=references '(^|[.!?] )(Add|Write|Use|Set|Call|Read|Make|Check|Keep|Put|Run|Build|Hold|Avoid|See|Take|Give|Move|Remove|Ensure|Replace|Change|Report|Fix|Do not) [a-z]' doc/ 2>/dev/null | grep -v '\.md:[0-9]*:---')
 if [ -n "$hits" ]; then
   report "a document may hold an imperative sentence" "$hits"
 else

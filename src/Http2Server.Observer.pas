@@ -8,7 +8,7 @@ notes:
     server.
   - An observer runs on the thread that raised the event, so a slow observer
     slows that thread.  The default observer does nothing.
-  - The counters are truthful: every total counts a real event and no number
+  - The counters are truthful. Every total counts a real event and no number
     is guessed.
 ---
 }

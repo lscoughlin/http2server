@@ -1,4 +1,3 @@
-{**
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
@@ -183,7 +182,7 @@ thread needs the head swap.
 
 ## The decision
 
-The library keeps the blocking waiter for now. The seam, the interface
+The library uses the blocking waiter. The seam, the interface
 `IStreamWaiter` and the single place where a stream sleeps are the parts that
-make a later change possible. A later change replaces `TBlockingWaiter` and
-changes no other unit.
+keep a coroutine option open. A replacement of `TBlockingWaiter` changes no
+other unit.
