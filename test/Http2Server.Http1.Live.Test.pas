@@ -63,6 +63,7 @@ type
     procedure TestFallbackOffClosesAnHttp1Request;
     procedure TestOneListenerServesBothProtocols;
     procedure TestLargeResponseIsDelivered;
+    procedure TestAClientThatNeverReadsBlocksTheHandlerInsteadOfGrowingMemory;
   end;
 
 implementation
@@ -593,6 +594,31 @@ begin
     C.Send('GET /big HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
     AssertTrue(C.ReadResponse(False, 20000, R));
     AssertEquals(16 * 65536, Length(R.Body));
+  finally
+    C.Free;
+  end;
+end;
+
+procedure THttp1LiveTest.TestAClientThatNeverReadsBlocksTheHandlerInsteadOfGrowingMemory;
+var
+  C: TRawHttp;
+  R: TRawResponse;
+  Deadline: QWord;
+begin
+  StartServer(LiveFactory(FHandlerRef));
+  C := TRawHttp.Create(FServer.Port);
+  try
+    C.Send('GET /huge HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
+    // 8 MiB is far above the queue limit and the buffers of the socket, so a
+    // handler that nobody slows down would finish at once
+    Sleep(1500);
+    AssertEquals('the handler waits for the reader', 0, FHandler.HugeDone);
+    AssertTrue('and the client reads all of it', C.ReadResponse(False, 20000, R));
+    AssertEquals(128 * 65536, Length(R.Body));
+    Deadline := GetTickCount64 + ResponseMs;
+    while (FHandler.HugeDone = 0) and (GetTickCount64 < Deadline) do
+      Sleep(5);
+    AssertEquals(1, FHandler.HugeDone);
   finally
     C.Free;
   end;

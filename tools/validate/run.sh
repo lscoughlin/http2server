@@ -125,6 +125,25 @@ fi
 # the checks above used the clear-text server; the TLS check starts its own
 stop_interop_server
 
+# --- HTTP/1.1 fallback, clear text ---
+# The conformance run above used a server with the fallback off. This server
+# keeps the fallback on, and one listener must give the same body on both
+# protocols.
+if command -v curl >/dev/null 2>&1; then
+  if start_interop_server "$root/bin/interop_server"; then
+    body1=$(curl -s --http1.1 "http://127.0.0.1:$INTEROP_PORT/" </dev/null)
+    body2=$(curl -s --http2-prior-knowledge "http://127.0.0.1:$INTEROP_PORT/" </dev/null)
+    if [ -n "$body1" ] && [ "$body1" = "$body2" ]; then
+      report_pass "curl --http1.1 and --http2 give the same body (clear text)"
+    else
+      report_fail "curl --http1.1 and --http2 differ on clear text ('$body1' / '$body2')"
+    fi
+    stop_interop_server
+  else
+    report_fail "the fallback server did not report a port"
+  fi
+fi
+
 # --- TLS and ALPN ---
 # One listener serves one transport, so the TLS checks start a second server
 # with a certificate.  A certificate that is absent is created here.
@@ -141,7 +160,29 @@ if command -v openssl >/dev/null 2>&1; then
       else
         report_fail "openssl s_client ALPN result ($alpn)"
       fi
+      if command -v curl >/dev/null 2>&1; then
+        tbody1=$(curl -sk --http1.1 "https://127.0.0.1:$tls_port/" </dev/null)
+        tbody2=$(curl -sk --http2 "https://127.0.0.1:$tls_port/" </dev/null)
+        if [ -n "$tbody1" ] && [ "$tbody1" = "$tbody2" ]; then
+          report_pass "curl --http1.1 and --http2 give the same body (TLS)"
+        else
+          report_fail "curl --http1.1 and --http2 differ over TLS ('$tbody1' / '$tbody2')"
+        fi
+      fi
       stop_interop_server
+      # with the fallback off, a client that offers only http/1.1 is refused
+      if command -v curl >/dev/null 2>&1 &&
+         start_interop_server "$root/bin/interop_server" no-http11 \
+           --cert="$cert_dir/localhost.crt" --key="$cert_dir/localhost.key"; then
+        if curl -sk --http1.1 "https://127.0.0.1:$INTEROP_PORT/" </dev/null >/dev/null 2>&1; then
+          report_fail "TLS with the fallback off still served HTTP/1.1"
+        elif curl -sk --http2 "https://127.0.0.1:$INTEROP_PORT/" </dev/null >/dev/null 2>&1; then
+          report_pass "TLS with the fallback off refuses http/1.1 and serves h2"
+        else
+          report_fail "TLS with the fallback off refused h2 too"
+        fi
+        stop_interop_server
+      fi
     else
       report_fail "the TLS server did not report a port"
     fi

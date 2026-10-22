@@ -33,6 +33,9 @@ uses
   Http2Server.Http1.Host, Http2Server.Http1.ResponseHead, Http2Server.Http1.Exchange;
 
 type
+  /// the octets that the socket holds back, beyond the queue of the core
+  TH1PendingProbe = function: Int64 of object;
+
   /// what the core needs from the server
   IH1Events = interface
     ['{7E1F0C11-00A1-4A11-9C72-000000000D01}']
@@ -62,6 +65,7 @@ type
     /// the writer of a detached stream that waits for the backlog to fall
     FDrainWatcher: IChannelSink;
     FDrainLow: Int64;
+    FPendingProbe: TH1PendingProbe;
     FWaker: IWriteWaker;
     FCurrent: TH1Exchange;
     FCurrentRef: IInterface;
@@ -90,6 +94,10 @@ type
     constructor Create(const AOptions: TH1CoreOptions; const AEvents: IH1Events);
     destructor Destroy; override;
     procedure SetWriteWaker(const AWaker: IWriteWaker);
+    /// the octets that the socket holds back count in the backlog of a writer
+    procedure SetPendingProbe(const AProbe: TH1PendingProbe);
+    /// tell a refused writer that the backlog fell; call after the socket wrote
+    procedure NotifyDrain;
 
     /// the octets that arrived on the socket; the call runs on an IO thread
     procedure Feed(const AData: TBytes);
@@ -195,14 +203,41 @@ begin
   finally
     FOutLock.Release;
   end;
+  // the octets that left the queue but not the socket count as well, or a client
+  // that never reads would make the memory of the connection grow
+  if Assigned(FPendingProbe) then
+    Inc(Result, FPendingProbe());
+end;
+
+procedure TH1Core.SetPendingProbe(const AProbe: TH1PendingProbe);
+begin
+  FPendingProbe := AProbe;
+end;
+
+procedure TH1Core.NotifyDrain;
+var
+  Watcher: IChannelSink;
+  Backlog: Int64;
+begin
+  Backlog := OutputBacklog;
+  Watcher := nil;
+  FOutLock.Acquire;
+  try
+    if (FDrainWatcher <> nil) and (Backlog <= FDrainLow) then
+    begin
+      Watcher := FDrainWatcher;
+      FDrainWatcher := nil;
+    end;
+  finally
+    FOutLock.Release;
+  end;
+  if Watcher <> nil then
+    Watcher.WriteDrained;
 end;
 
 function TH1Core.TakeOutput(out AData: TBytes): Boolean;
-var
-  Watcher: IChannelSink;
 begin
   AData := nil;
-  Watcher := nil;
   FOutLock.Acquire;
   try
     Result := FOut.Count > 0;
@@ -211,18 +246,10 @@ begin
       AData := FOut[0];
       FOut.Delete(0);
       Dec(FOutBytes, Length(AData));
-      if (FDrainWatcher <> nil) and (FOutBytes <= FDrainLow) then
-      begin
-        Watcher := FDrainWatcher;
-        FDrainWatcher := nil;
-      end;
     end;
   finally
     FOutLock.Release;
   end;
-  // the writer hears of the drain with no lock of the core held
-  if Watcher <> nil then
-    Watcher.WriteDrained;
 end;
 
 procedure TH1Core.WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);

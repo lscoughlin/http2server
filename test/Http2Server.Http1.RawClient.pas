@@ -76,12 +76,15 @@ type
     FLock: TCriticalSection;
     FCalls: Integer;
     FSlowMs: Integer;
+    FHugeDone: Integer;
   public
     constructor Create;
     destructor Destroy; override;
     procedure Handle(const ARequest: IServerRequest;
       const AResponse: IServerResponse);
     function Calls: Integer;
+    /// how many /huge responses the handler wrote to the end
+    function HugeDone: Integer;
     property SlowMs: Integer read FSlowMs write FSlowMs;
   end;
 
@@ -350,6 +353,16 @@ begin
   inherited Destroy;
 end;
 
+function TTestHandler.HugeDone: Integer;
+begin
+  FLock.Acquire;
+  try
+    Result := FHugeDone;
+  finally
+    FLock.Release;
+  end;
+end;
+
 function TTestHandler.Calls: Integer;
 begin
   FLock.Acquire;
@@ -461,6 +474,21 @@ begin
     for I := 1 to 16 do
       AResponse.Write(Part);
     AResponse.Finish;
+  end
+  else if Path = '/huge' then
+  begin
+    SetLength(Part, 65536);
+    FillChar(Part[0], Length(Part), Ord('y'));
+    AResponse.SendHeaders(200, Len(128 * 65536), False);
+    for I := 1 to 128 do
+      AResponse.Write(Part);
+    AResponse.Finish;
+    FLock.Acquire;
+    try
+      Inc(FHugeDone);
+    finally
+      FLock.Release;
+    end;
   end
   else if Path = '/own-date' then
   begin

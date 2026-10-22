@@ -57,6 +57,7 @@ uses
   Http2Server.Http1.Live.Test,
   Http2Server.Http1.Config.Test,
   Http2Server.Http1.Detach.Test,
+  Http2Server.Http1.Fuzz.Test,
   Http2Server.Output.Test,
   Http2Server.Licence.Test,
   Http2Server.Encoding.Test,

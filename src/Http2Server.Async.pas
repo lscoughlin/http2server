@@ -58,6 +58,7 @@ uses
   Http2Server.Http1.Limits,
   Http2Server.Http1.Select,
   Http2Server.Http1.Core,
+  Http2Server.Http1.Driver,
   Http2Server.Async.Events;
 
 const
@@ -102,10 +103,9 @@ type
     /// the protocol of the connection; undecided until the first octets
     FMode: TConnectionMode;
     /// the HTTP/1.1 core; nil on an HTTP/2 connection
-    FH1: TH1Core;
+    FH1: TH1Driver;
     FH1Events: IH1Events;
     /// the second at which a staged close ends; 0 while the connection serves
-    FDrainUntilSec: TAsyncConnectionSec;
     /// the monotonic second at which the first header block must have ended
     // - zero once the first request reached the core
     FHeaderDeadlineSec: TAsyncConnectionSec;
@@ -125,11 +125,10 @@ type
     procedure StartHttp2;
     procedure StartHttp1;
     function OnReadHttp1: TPollAsyncSocketOnReadWrite;
-    function SendPendingHttp1: Boolean;
-    function Http1WantsClose: Boolean;
+    function PendingWriteBytes: Int64;
     function PullOutput(out AData: TBytes): Boolean;
     function OutputPending: Boolean;
-    procedure BeginDrain;
+    procedure ApplyClosePhase;
   protected
     procedure AfterCreate; override;
     procedure BeforeDestroy; override;
@@ -323,6 +322,7 @@ end;
 procedure THttp2AsyncConnection.StartHttp1;
 var
   Options: TH1CoreOptions;
+  Core: TH1Core;
 begin
   Options.Limits := FServer.Factory.Http11;
   if fSecure <> nil then
@@ -331,9 +331,12 @@ begin
     Options.Scheme := 'http';
   Options.OutboundLimit := FServer.Factory.ChannelQueueLimit;
   FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers);
-  FH1 := TH1Core.Create(Options, FH1Events);
+  Core := TH1Core.Create(Options, FH1Events);
   FWaker := THttp2ConnectionWaker.Create(Self);
-  FH1.SetWriteWaker(FWaker);
+  Core.SetWriteWaker(FWaker);
+  Core.SetPendingProbe(PendingWriteBytes);
+  // a TLS connection cannot close its write side alone, so it closes at once
+  FH1 := TH1Driver.Create(Core, fSecure = nil);
   FMode := cmHttp1;
 end;
 
@@ -481,8 +484,8 @@ begin
     result := soContinue;
     if FMode = cmHttp1 then
     begin
-      if Http1WantsClose and (PendingWrite = 0) then
-        BeginDrain;
+      FH1.Core.NotifyDrain;
+      ApplyClosePhase;
       exit;
     end;
     if FCore = nil then
@@ -575,8 +578,11 @@ begin
   end;
   // the close decision of an HTTP/1.1 exchange can come after the last write,
   // so the end of every send loop looks at it too
-  if (FMode = cmHttp1) and Http1WantsClose and (PendingWrite = 0) then
-    BeginDrain;
+  if FMode = cmHttp1 then
+  begin
+    FH1.Core.NotifyDrain;
+    ApplyClosePhase;
+  end;
 end;
 
 function THttp2AsyncConnection.OnLastOperationIdle(
@@ -585,21 +591,15 @@ begin
   result := false;
   if FMode = cmHttp1 then
   begin
-    // a staged close ends when its drain time has passed
-    if (FDrainUntilSec <> 0) and (nowsec >= FDrainUntilSec) then
-    begin
-      fOwner.ConnectionRemove(Handle);
-      exit(True);
-    end;
-    // a request half read past the header deadline gets a 408 and a close
-    if FH1.CheckDeadlines(GetTickCount64, FServer.Factory.HeaderTimeoutMs) then
-      SendPendingOutput;
-    // an idle connection holds no request; a stalled writer sends nothing
-    if (FIdleSeconds <> 0) and (nowsec - fLastOperation >= FIdleSeconds) and
-       ((not FH1.Busy) or FH1.HasOutput) then
-    begin
-      fOwner.ConnectionRemove(Handle);
-      exit(True);
+    case FH1.IdleAction(nowsec, fLastOperation, FIdleSeconds, GetTickCount64,
+      FServer.Factory.HeaderTimeoutMs) of
+      iaFlush:
+        SendPendingOutput;
+      iaClose:
+        begin
+          fOwner.ConnectionRemove(Handle);
+          exit(True);
+        end;
     end;
     exit;
   end;
@@ -644,14 +644,14 @@ begin
   if FCore <> nil then
     FCore.ConnectionLost;
   if FH1 <> nil then
-    FH1.ConnectionLost;
+    FH1.Core.ConnectionLost;
   inherited OnClose;
 end;
 
 function THttp2AsyncConnection.PullOutput(out AData: TBytes): Boolean;
 begin
   if FH1 <> nil then
-    Result := FH1.TakeOutput(AData)
+    Result := FH1.Core.TakeOutput(AData)
   else
     Result := FCore.TakeOutput(AData);
 end;
@@ -659,37 +659,31 @@ end;
 function THttp2AsyncConnection.OutputPending: Boolean;
 begin
   if FH1 <> nil then
-    Result := FH1.HasOutput
+    Result := FH1.Core.HasOutput
   else
     Result := FCore.HasOutput;
 end;
 
-function THttp2AsyncConnection.Http1WantsClose: Boolean;
+function THttp2AsyncConnection.PendingWriteBytes: Int64;
 begin
-  Result := (FH1 <> nil) and FH1.WantsClose;
+  Result := PendingWrite;
 end;
 
-function THttp2AsyncConnection.SendPendingHttp1: Boolean;
+procedure THttp2AsyncConnection.ApplyClosePhase;
 begin
-  Result := SendPendingOutput;
-end;
-
-procedure THttp2AsyncConnection.BeginDrain;
-begin
-  // The response left the socket. A close that follows while the peer still
-  // sends would reset the connection and could destroy the response in the
-  // peer's buffer, so the write side closes first (RFC 9112 section 9.6) and
-  // the octets that still arrive are dropped until the peer closes or the drain
-  // time passes
-  if FDrainUntilSec <> 0 then
-    exit;
-  if (fSecure <> nil) or (fSocket = nil) then
-  begin
-    fOwner.ConnectionRemove(Handle);
-    exit;
+  case FH1.ClosePhase(PendingWrite, TAsyncConnectionSec(GetTickCount64 div 1000),
+    cDrainSeconds) of
+    cpHalfClose:
+      begin
+        // The response left the socket. A close while the peer still sends would
+        // reset the connection and could destroy the response in the buffer of
+        // the peer, so the write side closes first and the octets that still
+        // arrive are dropped (RFC 9112 section 9.6)
+        {$IFDEF UNIX}Sockets.fpshutdown(LongInt(fSocket.Socket), cShutWrite);{$ENDIF}
+      end;
+    cpCloseNow:
+      fOwner.ConnectionRemove(Handle);
   end;
-  {$IFDEF UNIX}Sockets.fpshutdown(LongInt(fSocket.Socket), cShutWrite);{$ENDIF}
-  FDrainUntilSec := TAsyncConnectionSec(GetTickCount64 div 1000) + cDrainSeconds;
 end;
 
 function THttp2AsyncConnection.OnReadHttp1: TPollAsyncSocketOnReadWrite;
@@ -697,20 +691,16 @@ var
   Data: TBytes;
 begin
   result := soContinue;
+  Data := nil;
   if fRd.Len > 0 then
   begin
     SetLength(Data, fRd.Len);
     Move(fRd.Buffer^, Data[0], fRd.Len);
     fRd.Reset;
-    // while a staged close drains, the octets are dropped
-    if FDrainUntilSec = 0 then
-      FH1.Feed(Data);
   end;
-  if FH1.CheckDeadlines(GetTickCount64, FServer.Factory.HeaderTimeoutMs) then
-    ;   // the 408 answer is queued
-  SendPendingHttp1;
-  if Http1WantsClose and (PendingWrite = 0) then
-    BeginDrain;
+  FH1.Received(Data, FServer.Factory.HeaderTimeoutMs);
+  SendPendingOutput;
+  ApplyClosePhase;
 end;
 
 { THttp2AsyncServer }
