@@ -122,6 +122,18 @@ const
   seBucketTripped = Http2Server.Observer.seBucketTripped;
   seGoAwaySent = Http2Server.Observer.seGoAwaySent;
   seHandlerException = Http2Server.Observer.seHandlerException;
+  seStreamDetached = Http2Server.Observer.seStreamDetached;
+  seStreamDetachRefused = Http2Server.Observer.seStreamDetachRefused;
+
+  /// the constants of the channel types
+  srQueued = Http2Server.Duplex.srQueued;
+  srFull = Http2Server.Duplex.srFull;
+  srClosed = Http2Server.Duplex.srClosed;
+  ccGraceful = Http2Server.Duplex.ccGraceful;
+  ccAbort = Http2Server.Duplex.ccAbort;
+  csPending = Http2Server.Duplex.csPending;
+  csActive = Http2Server.Duplex.csActive;
+  csClosed = Http2Server.Duplex.csClosed;
 
 /// the coding to answer a request with, given its `accept-encoding` value
 /// - an absent or empty value yields ceIdentity, so a peer that offered no

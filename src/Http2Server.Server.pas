@@ -31,6 +31,7 @@ uses
   SysUtils,
   Http2Server.Errors,
   Http2Server.Observer,
+  Http2Server.Duplex,
   Http2Server.Config,
   Http2Server.Async;
 
@@ -138,6 +139,9 @@ begin
   // the GOAWAY tells every peer that no new stream is served, the bounded
   // wait drains the open streams, and the pool stop cancels the rest
   FAsync.BroadcastGoAway(ecNoError);
+  // a detached stream never ends by itself, so its owner is told to close it;
+  // the queued bytes and END_STREAM still leave within the bounded wait
+  FAsync.CloseChannels(ccGraceful);
   WaitForStreams;
   FAsync.Stop;
 end;
@@ -159,6 +163,7 @@ begin
   Result.TimedOutTotal := 0;
   Result.ResetTotal := 0;
   Result.TrippedTotal := 0;
+  Result.DetachedStreams := 0;
   if FAsync = nil then
     Exit;
   if FAsync.Handlers <> nil then
@@ -172,6 +177,8 @@ begin
   Result.OpenStreams := FAsync.OpenStreamTotal;
   Result.ResetTotal := FAsync.ResetTotal;
   Result.TrippedTotal := FAsync.TrippedTotal;
+  if FAsync.Channels <> nil then
+    Result.DetachedStreams := FAsync.Channels.Count;
 end;
 
 function THttp2Server.IsRunning: Boolean;

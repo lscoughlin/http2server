@@ -82,12 +82,26 @@ The handler runs on a handler-pool thread. A handler that runs on an IO thread
 would hold the connection lock and stall the pool, so the pool checks the rule
 at dispatch (`src/Http2Server.Admission.pas:614`).
 
+## Detached streams
+
+`IServerResponse.Detach` ends the synchronous life of a handler and answers an
+`IDuplexChannel` (`src/Http2Server.Duplex.pas`). The handler returns, and the
+server keeps the stream open. A caller sends from any thread with `Send`, receives
+through an `IChannelSink`, and closes the channel with `Close`. The document
+[seam](seam.md) describes the channel. The factory settings `StreamPoolSize`,
+`MaxDetachedStreams`, `ChannelQueueLimit` and `ChannelLowWater` configure the
+part of the server that serves detached streams (see
+[configuration](configuration.md)). `Detach` raises `EDetachRefused` when the
+server holds `MaxDetachedStreams` channels. The facade `Http2Server` re-exports
+`IDuplexChannel`, `IChannelSink`, `TSendResult`, `TChannelClose`,
+`TChannelState` and `EDetachRefused`.
+
 ## The observation events
 
 `IHttp2ServerObserver` (`src/Http2Server.Observer.pas:78-82`) holds one
 method, `OnEvent(const AEvent: TServerEvent)`. The server raises one event per
 state change that a caller acts on. `TServerEventKind`
-(`src/Http2Server.Observer.pas:34-58`) names eleven kinds:
+(`src/Http2Server.Observer.pas:34-58`) names thirteen kinds:
 
 | Kind | Raised when |
 | --- | --- |
@@ -102,6 +116,8 @@ state change that a caller acts on. `TServerEventKind`
 | `seBucketTripped` | a token bucket tripped |
 | `seGoAwaySent` | the core sent GOAWAY |
 | `seHandlerException` | a handler raised |
+| `seStreamDetached` | a handler detached its stream into a channel |
+| `seStreamDetachRefused` | a detach was refused because the limit of detached streams was reached |
 
 `OnEvent` runs on the thread that raised the event. That thread is an IO
 thread, a handler-pool thread, or the caller of `Start` and `Stop`. A slow
@@ -117,11 +133,11 @@ The connection events come from `THttp2ConnectionEvents`
 
 ## The statistics
 
-`TServerStats` (`src/Http2Server.Observer.pas:93`) holds four gauges and four
+`TServerStats` (`src/Http2Server.Observer.pas:93`) holds five gauges and four
 totals.
 
 The gauges count what the server holds now: `BusyHandlers`, `QueueLength`,
-`OpenConnections` and `OpenStreams`. The totals count every event since the
+`OpenConnections`, `OpenStreams` and `DetachedStreams`. The totals count every event since the
 build and never decrease: `RefusedTotal`, `TimedOutTotal`, `ResetTotal` and
 `TrippedTotal`.
 

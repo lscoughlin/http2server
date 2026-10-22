@@ -56,6 +56,8 @@ type
     procedure TestDefaultListener;
     procedure TestDefaultPoolSizes;
     procedure TestDefaultQueue;
+    procedure TestDefaultDetachSettings;
+    procedure TestValidateDetachSettings;
     procedure TestDefaultStreams;
     procedure TestDefaultBuckets;
     procedure TestDefaultTimeouts;
@@ -155,6 +157,49 @@ begin
   AssertEquals('the default maximum queue wait', 5000, F.Queue.MaxWaitMs);
   AssertTrue('the default refusal mode resets the stream',
     F.Queue.RefusalMode = rmRefuseStream);
+end;
+
+procedure TFactoryTest.TestDefaultDetachSettings;
+var
+  F: THttp2ServerFactory;
+begin
+  F := THttp2ServerFactory.Create;
+  AssertEquals('the default streaming pool size', 1, F.StreamPoolSize);
+  AssertEquals('the default detached stream limit', 10000,
+    F.MaxDetachedStreams);
+  AssertEquals('the default channel queue limit', 262144, F.ChannelQueueLimit);
+  AssertEquals('the default channel low-water mark', 65536,
+    F.ChannelLowWater);
+  F := F.WithStreamPoolSize(4).WithMaxDetachedStreams(7)
+    .WithChannelQueueLimit(1000).WithChannelLowWater(10);
+  AssertEquals(4, F.StreamPoolSize);
+  AssertEquals(7, F.MaxDetachedStreams);
+  AssertEquals(1000, F.ChannelQueueLimit);
+  AssertEquals(10, F.ChannelLowWater);
+end;
+
+procedure TFactoryTest.TestValidateDetachSettings;
+var
+  Problems: TArray<string>;
+  Base: THttp2ServerFactory;
+begin
+  Base := THttp2ServerFactory.Create.WithHandler(FHandler)
+    .WithClearTextAllowed(True);
+  AssertTrue('the defaults are valid', Base.Validate(Problems));
+  Base.WithStreamPoolSize(0).Validate(Problems);
+  AssertTrue('a pool size below one is reported: ' + ProblemText(Problems),
+    HasProblem(Problems, 'streaming pool'));
+  Base.WithMaxDetachedStreams(-1).Validate(Problems);
+  AssertTrue('a negative detached limit is reported: ' + ProblemText(Problems),
+    HasProblem(Problems, 'detached stream'));
+  AssertTrue('a limit of 0 is valid and refuses every detach',
+    Base.WithMaxDetachedStreams(0).Validate(Problems));
+  Base.WithChannelQueueLimit(0).Validate(Problems);
+  AssertTrue('a queue limit below one is reported: ' + ProblemText(Problems),
+    HasProblem(Problems, 'channel queue'));
+  Base.WithChannelQueueLimit(100).WithChannelLowWater(100).Validate(Problems);
+  AssertTrue('a low-water mark at the limit is reported: ' + ProblemText(Problems),
+    HasProblem(Problems, 'low-water'));
 end;
 
 procedure TFactoryTest.TestDefaultStreams;

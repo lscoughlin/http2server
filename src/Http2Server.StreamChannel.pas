@@ -108,6 +108,12 @@ begin
     Channel.FState := csActive;
   // the channel owns one reference to the stream until it ends
   AStream.AddRef;
+  // a detached stream has its own queue limit, apart from the ordinary streams
+  if (ARegistry <> nil) and (ARegistry.QueueLimit > 0) then
+  begin
+    AStream.OutboundLimit := ARegistry.QueueLimit;
+    AStream.DrainLowWater := ARegistry.LowWater;
+  end;
   // the interface reference below keeps the channel alive from here on
   Result := Channel;
   AStream.SetSink(Channel as IChannelSink);

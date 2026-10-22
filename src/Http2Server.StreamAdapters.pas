@@ -32,6 +32,10 @@ uses
   Http2Server.StreamChannel;
 
 type
+  /// the report of a detach: the stream, and True when the registry refused it
+  TDetachNotify = procedure(const AStream: TServerStream;
+    const ARefused: Boolean) of object;
+
   /// The request as one handler sees it, backed by one TServerStream.
   ///
   /// The adapter is byte-oriented, as the seam requires.  The pseudo-headers
@@ -65,6 +69,7 @@ type
     FHeadersSent: Boolean;
     FRegistry: IChannelRegistry;
     FDetached: Boolean;
+    FOnDetach: TDetachNotify;
     procedure CheckNotDetached;
   public
     /// ARegistry limits and lists the detached streams of the server; a nil
@@ -81,6 +86,8 @@ type
     function IsCancelled: Boolean;
     function StreamId: LongWord;
     function Detach: IDuplexChannel;
+    /// the report of a detach, for the observer of the server
+    property OnDetach: TDetachNotify read FOnDetach write FOnDetach;
     /// true once the handler sent the response headers
     property HeadersSent: Boolean read FHeadersSent;
   end;
@@ -192,8 +199,19 @@ function TServerStreamResponse.Detach: IDuplexChannel;
 begin
   CheckNotDetached;
   // before SendHeaders the channel is pending: no response has left yet
-  Result := THttp2StreamChannel.Attach(FStream, FRegistry, not FHeadersSent);
+  try
+    Result := THttp2StreamChannel.Attach(FStream, FRegistry, not FHeadersSent);
+  except
+    on EDetachRefused do
+    begin
+      if Assigned(FOnDetach) then
+        FOnDetach(FStream, True);
+      raise;
+    end;
+  end;
   FDetached := True;
+  if Assigned(FOnDetach) then
+    FOnDetach(FStream, False);
 end;
 
 procedure TServerStreamResponse.SendHeaders(const AStatus: Integer;

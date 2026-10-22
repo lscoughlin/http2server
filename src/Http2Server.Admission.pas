@@ -161,6 +161,7 @@ type
     FObserver: IHttp2ServerObserver;
     procedure Notify(const AKind: TServerEventKind;
       const AStream: TServerStream; const ADetail: string);
+    procedure DetachNotify(const AStream: TServerStream; const ARefused: Boolean);
     function TakeOne: Boolean;
     procedure AnswerRefusal(const AStream: TServerStream);
     procedure ReportError(const AStream: TServerStream;
@@ -563,6 +564,16 @@ begin
   FObserver.OnEvent(Event);
 end;
 
+procedure THandlerPool.DetachNotify(const AStream: TServerStream;
+  const ARefused: Boolean);
+begin
+  if ARefused then
+    Notify(seStreamDetachRefused, AStream,
+      'the limit of detached streams is reached')
+  else
+    Notify(seStreamDetached, AStream, 'the handler detached the stream');
+end;
+
 function THandlerPool.TakeOne: Boolean;
 var
   Stream: TServerStream;
@@ -613,6 +624,7 @@ begin
   MarkBusy(Stream);
   Req := TServerStreamRequest.Create(Stream);
   Res := TServerStreamResponse.Create(Stream, FChannelRegistry);
+  Res.OnDetach := DetachNotify;
   try
     try
       // a handler must never run on an IO thread: it would hold the connection

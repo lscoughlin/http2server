@@ -54,7 +54,11 @@ type
     /// the core sent a GOAWAY frame
     seGoAwaySent,
     /// a handler raised an exception
-    seHandlerException);
+    seHandlerException,
+    /// a handler detached its stream into a channel
+    seStreamDetached,
+    /// a detach was refused because the limit of detached streams is reached
+    seStreamDetachRefused);
 
   /// one event of the server
   TServerEvent = record
@@ -107,6 +111,8 @@ type
     ResetTotal: Int64;
     /// bucket trips
     TrippedTotal: Int64;
+    /// detached streams that are open now
+    DetachedStreams: Integer;
   end;
 
 implementation

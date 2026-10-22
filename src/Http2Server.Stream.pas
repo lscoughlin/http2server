@@ -253,7 +253,7 @@ type
     /// the inbound limit of this stream
     property InboundLimit: Integer read FInboundLimit;
     /// the outbound limit of this stream
-    property OutboundLimit: Integer read FOutboundLimit;
+    property OutboundLimit: Integer read FOutboundLimit write FOutboundLimit;
     /// inbound bytes the handler consumed since the last WINDOW_UPDATE
     function ConsumedSinceUpdate: LongWord;
     /// clear the consumed counter, as an emitted WINDOW_UPDATE does

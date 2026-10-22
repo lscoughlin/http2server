@@ -108,6 +108,10 @@ ALPN name reaches OpenSSL.
 | `IOThreads` | `WithIOThreads` | the number of IO pool threads |
 | `HandlerThreads` | `WithHandlerThreads` | the number of handler pool threads |
 | `CancelWorkerThreads` | `WithCancelWorkerThreads` | the number of threads that run the cancel hooks |
+| `StreamPoolSize` | `WithStreamPoolSize` | the number of threads of the streaming pool, which runs the application work for detached streams; the default is 1 |
+| `MaxDetachedStreams` | `WithMaxDetachedStreams` | the greatest number of detached streams of the whole server; 0 refuses every detach; the default is 10000 |
+| `ChannelQueueLimit` | `WithChannelQueueLimit` | the outbound queue limit of a detached stream, in bytes; the default is 262144 |
+| `ChannelLowWater` | `WithChannelLowWater` | the queued byte count at or below which a refused writer is told that the queue drained; the default is 65536 |
 
 A cancel hook runs at most once, never on the thread that called `Cancel`
 (`src/Http2Server.Seam.pas:64-70`). The count of cancel workers decides how many

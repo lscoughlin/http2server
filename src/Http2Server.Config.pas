@@ -125,6 +125,10 @@ type
     FIOThreads: Integer;
     FHandlerThreads: Integer;
     FCancelWorkerThreads: Integer;
+    FStreamPoolSize: Integer;
+    FMaxDetachedStreams: Integer;
+    FChannelQueueLimit: Integer;
+    FChannelLowWater: Integer;
     FQueue: TQueueOptions;
     FMaxConcurrentStreams: LongWord;
     FInitialStreamWindow: LongWord;
@@ -178,6 +182,19 @@ type
     /// the number of cancel-worker threads that run the cancel hooks
     function WithCancelWorkerThreads(
       const AValue: Integer): THttp2ServerFactory;
+
+    // ---- detached streams ----
+
+    /// the number of threads of the streaming pool, which runs the application
+    /// work for detached streams (at least 1)
+    function WithStreamPoolSize(const AValue: Integer): THttp2ServerFactory;
+    /// the greatest number of detached streams of the whole server; 0 refuses
+    /// every detach
+    function WithMaxDetachedStreams(const AValue: Integer): THttp2ServerFactory;
+    /// the outbound queue limit of a detached stream, in bytes
+    function WithChannelQueueLimit(const AValue: Integer): THttp2ServerFactory;
+    /// the queued byte count at or below which a refused writer is told
+    function WithChannelLowWater(const AValue: Integer): THttp2ServerFactory;
 
     // ---- queue ----
 
@@ -271,6 +288,13 @@ type
 
     property HandlerThreads: Integer read FHandlerThreads;
     property CancelWorkerThreads: Integer read FCancelWorkerThreads;
+
+    // ---- detached streams ----
+
+    property StreamPoolSize: Integer read FStreamPoolSize;
+    property MaxDetachedStreams: Integer read FMaxDetachedStreams;
+    property ChannelQueueLimit: Integer read FChannelQueueLimit;
+    property ChannelLowWater: Integer read FChannelLowWater;
 
     // ---- queue ----
 
@@ -409,6 +433,10 @@ begin
   Result.FIOThreads := 4;
   Result.FHandlerThreads := 8;
   Result.FCancelWorkerThreads := 2;
+  Result.FStreamPoolSize := 1;
+  Result.FMaxDetachedStreams := 10000;
+  Result.FChannelQueueLimit := 262144;
+  Result.FChannelLowWater := 65536;
   Result.FQueue := TQueueOptions.Create;
   Result.FMaxConcurrentStreams := 100;
   Result.FInitialStreamWindow := 65535;
@@ -504,6 +532,34 @@ function THttp2ServerFactory.WithCancelWorkerThreads(
 begin
   Result := Self;
   Result.FCancelWorkerThreads := AValue;
+end;
+
+function THttp2ServerFactory.WithStreamPoolSize(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FStreamPoolSize := AValue;
+end;
+
+function THttp2ServerFactory.WithMaxDetachedStreams(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FMaxDetachedStreams := AValue;
+end;
+
+function THttp2ServerFactory.WithChannelQueueLimit(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FChannelQueueLimit := AValue;
+end;
+
+function THttp2ServerFactory.WithChannelLowWater(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FChannelLowWater := AValue;
 end;
 
 function THttp2ServerFactory.WithQueue(
@@ -666,6 +722,14 @@ begin
     Add('the handler thread count is below 1');
   if FCancelWorkerThreads < 1 then
     Add('the cancel worker thread count is below 1');
+  if FStreamPoolSize < 1 then
+    Add('the streaming pool size is below 1');
+  if FMaxDetachedStreams < 0 then
+    Add('the detached stream limit is below 0');
+  if FChannelQueueLimit < 1 then
+    Add('the channel queue limit is below 1');
+  if (FChannelLowWater < 0) or (FChannelLowWater >= FChannelQueueLimit) then
+    Add('the channel low-water mark is outside 0 to the queue limit minus 1');
   if FQueue.Depth < 0 then
     Add('the queue depth is below 0');
   if FQueue.MaxWaitMs < 0 then

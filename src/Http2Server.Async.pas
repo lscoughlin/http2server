@@ -49,6 +49,8 @@ uses
   Http2Server.Observer,
   Http2Server.Output,
   Http2Server.Seam,
+  Http2Server.Duplex,
+  Http2Server.StreamPool,
   Http2Server.Stream,
   Http2Server.Tls,
   Http2Server.Admission;
@@ -145,6 +147,10 @@ type
   private
     FFactory: THttp2ServerFactory;
     FHandlers: THandlerPool;
+    /// the registry of detached streams: the limit, the list, the queue sizes
+    FChannels: IChannelRegistry;
+    /// the streaming pool: the application work of detached streams
+    FStreamPool: TStreamPool;
     FPolicy: TTlsPolicy;
     FCoreOptions: TConnectionCoreOptions;
     FControlBucket: TTokenBucketOptions;
@@ -182,6 +188,10 @@ type
 
     /// the handler pool that serves every connection
     property Handlers: THandlerPool read FHandlers;
+    /// the registry of the detached streams of the server
+    property Channels: IChannelRegistry read FChannels;
+    /// the streaming pool
+    property StreamPool: TStreamPool read FStreamPool;
     /// the TLS policy the server applies to the listening socket
     property Policy: TTlsPolicy read FPolicy;
     /// the core options every connection uses
@@ -210,6 +220,9 @@ type
     // - the last stream identifier that the core processed goes into the
     //   frame, so a peer keeps the streams below it
     procedure BroadcastGoAway(const AErrorCode: THttp2ErrorCode);
+    /// close every detached stream: the graceful form sends the queued bytes
+    /// and END_STREAM, the abort form resets the stream
+    procedure CloseChannels(const AMode: TChannelClose);
     /// the streams that are open on every connection now
     function OpenStreamTotal: Integer;
     /// count one stream reset, on the thread that saw it
@@ -571,6 +584,10 @@ begin
   FCoreOptions := BuildCoreOptions;
   FControlBucket := LeastControlBucket;
   FHandlers := THandlerPool.Create(AFactory);
+  FChannels := TChannelRegistry.Create(AFactory.MaxDetachedStreams,
+    AFactory.ChannelQueueLimit, AFactory.ChannelLowWater);
+  FHandlers.ChannelRegistry := FChannels;
+  FStreamPool := TStreamPool.Create(AFactory.StreamPoolSize);
   FConnectionLock := TCriticalSection.Create;
   FObserver := nil;
   FConnectionCount := 0;
@@ -592,6 +609,9 @@ begin
   Stop;
   FHandlers.Free;
   FHandlers := nil;
+  FStreamPool.Free;
+  FStreamPool := nil;
+  FChannels := nil;
   FConnectionLock.Free;
   FConnectionLock := nil;
   inherited Destroy;
@@ -798,11 +818,23 @@ begin
   FStarted := True;
 end;
 
+procedure THttp2AsyncServer.CloseChannels(const AMode: TChannelClose);
+begin
+  if FChannels <> nil then
+    FChannels.CloseAll(AMode);
+end;
+
 procedure THttp2AsyncServer.Stop;
 begin
+  // the channels that are still open end first, so no stream outlives its
+  // handler pool; a channel that already ended is not touched twice
+  if FChannels <> nil then
+    FChannels.CloseAll(ccAbort);
   if FHandlers <> nil then
     FHandlers.Stop;
   Shutdown;
+  if FStreamPool <> nil then
+    FStreamPool.Stop;
 end;
 
 function THttp2AsyncServer.BoundPort: Integer;

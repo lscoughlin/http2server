@@ -120,6 +120,11 @@ type
     /// the number of reserved slots
     function Count: Integer;
     function Limit: Integer;
+    /// the outbound queue limit of a detached stream, in bytes; 0 keeps the
+    /// limit that the stream already has
+    function QueueLimit: Integer;
+    /// the queued byte count at or below which a refused writer is told
+    function LowWater: Integer;
   end;
 
   /// the registry of one server
@@ -127,11 +132,14 @@ type
   private
     FLock: TCriticalSection;
     FLimit: Integer;
+    FQueueLimit: Integer;
+    FLowWater: Integer;
     FCount: Integer;
     FChannels: TList<IDuplexChannel>;
   public
     /// ALimit is the greatest number of live channels; 0 refuses every detach
-    constructor Create(const ALimit: Integer);
+    constructor Create(const ALimit: Integer; const AQueueLimit: Integer = 0;
+      const ALowWater: Integer = 0);
     destructor Destroy; override;
     function TryAcquire: Boolean;
     procedure Release;
@@ -140,17 +148,21 @@ type
     procedure CloseAll(const AMode: TChannelClose);
     function Count: Integer;
     function Limit: Integer;
+    function QueueLimit: Integer;
+    function LowWater: Integer;
   end;
 
 implementation
 
 { TChannelRegistry }
 
-constructor TChannelRegistry.Create(const ALimit: Integer);
+constructor TChannelRegistry.Create(const ALimit, AQueueLimit, ALowWater: Integer);
 begin
   inherited Create;
   FLock := TCriticalSection.Create;
   FLimit := ALimit;
+  FQueueLimit := AQueueLimit;
+  FLowWater := ALowWater;
   FChannels := TList<IDuplexChannel>.Create;
 end;
 
@@ -233,6 +245,16 @@ end;
 function TChannelRegistry.Limit: Integer;
 begin
   Result := FLimit;
+end;
+
+function TChannelRegistry.QueueLimit: Integer;
+begin
+  Result := FQueueLimit;
+end;
+
+function TChannelRegistry.LowWater: Integer;
+begin
+  Result := FLowWater;
 end;
 
 end.

@@ -74,7 +74,7 @@ applies both rules and asks the IO side to remove the connection.
 
 ## Stop
 
-`THttp2Server.Stop` (`src/Http2Server.Server.pas:131`) runs four steps in
+`THttp2Server.Stop` (`src/Http2Server.Server.pas:131`) runs five steps in
 order.
 
 1. The stop flag is set, so a second call returns at once.
@@ -83,12 +83,16 @@ order.
    identifier in the frame is the highest identifier that the core accepted, so
    a peer keeps the streams below it and expects no new stream. The waker then
    pushes the frame to the socket.
-3. `WaitForStreams` (`src/Http2Server.Server.pas:118`) polls the open stream
+3. `CloseChannels` (`src/Http2Server.Async.pas`) closes every detached stream
+   gracefully. The queued bytes and END_STREAM leave, so a detached stream does
+   not hold the wait of the next step until the timeout.
+4. `WaitForStreams` (`src/Http2Server.Server.pas:118`) polls the open stream
    total every twenty milliseconds until it reaches zero or the graceful stop
    timeout passes. A quiet server stops at once, and a busy server gets the
    full period.
-4. `THttp2AsyncServer.Stop` (`src/Http2Server.Async.pas:731`) stops the handler
-   pool and then shuts the IO pools down.
+5. `THttp2AsyncServer.Stop` (`src/Http2Server.Async.pas`) aborts the channels that
+   are still open, stops the handler pool, shuts the IO pools down, and stops
+   the streaming pool.
 
 The order matters. The handler pool stops first, so a handler never writes to a
 connection that the IO side already released. `THandlerPool.Stop`

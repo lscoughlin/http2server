@@ -29,7 +29,7 @@ invariants:
 
 # Threads
 
-The server runs three kinds of thread. Each kind owns one part of the work, and
+The server runs four kinds of thread. Each kind owns one part of the work, and
 the seam is the only place where the kinds meet.
 
 | Role | Count | Responsibility |
@@ -37,6 +37,7 @@ the seam is the only place where the kinds meet.
 | IO thread | one per IO pool thread | sweeps connections, reads and writes frames, runs HPACK |
 | handler thread | one per handler pool thread | runs one synchronous handler per request |
 | cancel worker | one per cancel pool thread | runs the cancel hooks of cancelled streams |
+| streaming thread | one per streaming pool thread (default 1) | runs the application work of detached streams |
 
 The IO pool threads come from the async server of mORMot2. That server owns its
 own poller — `epoll` on Linux and `poll` on macOS — and it calls the connection
