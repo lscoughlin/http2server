@@ -116,6 +116,15 @@ decisions that depend on time: the staged close, the head deadline and the idle
 close. The core of HTTP/1.1 reports the octets that the socket layer holds back
 (`PendingWrite`), so a handler write waits for a client that does not read.
 
+## The reuse of connection objects
+
+mORMot2 keeps the object of a closed connection in a pool and gives it to a later
+connection (`TAsyncConnections.ConnectionCreate`). It then calls `Recycle` and
+`AfterCreate`, and it does not call `BeforeDestroy`. The class `THttp2AsyncConnection`
+releases the cores, the waker, the events and the send lock in `ReleaseState`, which
+`BeforeDestroy` and `Recycle` both call. A reused object that kept the HTTP/1.1 core of
+its last connection sent no output on a new HTTP/2 connection.
+
 ## The write wake-up
 
 The write wake-up follows the mORMot2 pattern. A handler write reaches the

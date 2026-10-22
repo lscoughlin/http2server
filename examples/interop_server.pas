@@ -55,6 +55,11 @@ type
     function NextChunk(out ABuffer: TBytes): Boolean;
   end;
 
+  /// writes every server event to the standard error stream, for a trace run
+  TTraceObserver = class(TInterfacedObject, IHttp2ServerObserver)
+    procedure OnEvent(const AEvent: TServerEvent);
+  end;
+
   /// the handler of the validation server
   TInteropHandler = class(TInterfacedObject, IHttp2Handler)
   private
@@ -94,6 +99,15 @@ begin
   SetLength(ABuffer, Count);
   Move(FChunk[0], ABuffer[0], Count);
   Dec(FLeft, Count);
+end;
+
+{ TTraceObserver }
+
+procedure TTraceObserver.OnEvent(const AEvent: TServerEvent);
+begin
+  WriteLn(StdErr, FormatDateTime('hh:nn:ss.zzz', Now), ' event ', Ord(AEvent.Kind),
+    ' stream ', AEvent.StreamId, ' ', AEvent.Detail);
+  Flush(StdErr);
 end;
 
 { TInteropHandler }
@@ -238,7 +252,7 @@ var
   Line, Arg, CertFile, KeyFile: string;
   I: Integer;
   BigBucket, StrictBucket: TTokenBucketOptions;
-  Strict, NoHttp11: Boolean;
+  Strict, NoHttp11, Trace: Boolean;
   Factory: THttp2ServerFactory;
 begin
   // the validation runs drive a large body, so the control-frame rate limits
@@ -259,11 +273,14 @@ begin
   KeyFile := '';
   Strict := False;
   NoHttp11 := False;
+  Trace := False;
   for I := 1 to ParamCount do
   begin
     Arg := ParamStr(I);
     if Arg = 'no-http11' then
       NoHttp11 := True
+    else if Arg = 'trace' then
+      Trace := True
     else if Arg = 'strict' then
       Strict := True
     else if Pos('--cert=', Arg) = 1 then
@@ -298,7 +315,10 @@ begin
       .WithContinuationBucket(StrictBucket)
       .WithMaxHeaderListSize(8192)
       .WithHeaderTimeout(2000);
-  Server := Factory.Build;
+  if Trace then
+    Server := Factory.Build(TTraceObserver.Create)
+  else
+    Server := Factory.Build;
   Server.Start;
   // one listener serves one transport: a certificate turns it into TLS, and
   // the label tells the driver which one to expect

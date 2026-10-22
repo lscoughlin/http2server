@@ -22,7 +22,7 @@ start_interop_server() {
   interop_out="${TMPDIR:-/tmp}/http2_interop_out.$$"
   # a long sleep holds the standard input of the server open; the pipe ends
   # when the sleep ends or when the process group is killed
-  ( sleep 3600 | "$interop_bin" 0 "$@" >"$interop_out" 2>/dev/null ) &
+  ( sleep 3600 | "$interop_bin" 0 "$@" >"$interop_out" 2>"${INTEROP_ERR:-/dev/null}" ) &
   INTEROP_PID=$!
   # wait for the port line, at most ten seconds
   i=0

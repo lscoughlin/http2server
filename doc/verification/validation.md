@@ -196,7 +196,6 @@ messages, checks 50 matching echoes, closes with 1000 and reads the clean close.
 check ran against `examples/ws_echo` on 2026-10-22 and passed. `tools/validate/run.sh`
 runs it when the packages are present.
 
-  sub(s, "Known intermittent issue:", <<'T' + "\nKnown intermittent issue:")
 ### The release run
 
 The runs below ran on 2026-10-22 on the final build, on the development host (macOS
@@ -261,12 +260,21 @@ interface of its own, for example with `Supports`, released the last reference o
 request or the response object and destroyed it, and the pool then freed it a second
 time. The pool now holds an interface reference of each object across the call.
 
-Known intermittent issue: in the TLS leg of `tools/validate/run.sh`, a `curl --http2`
-request to a freshly started server sometimes gets no answer, and the server is idle
-while it waits. The issue appears in about 2 of 8 runs of the script. It also appears on
-the commit before this work, so it is older than WebSocket over HTTP/2. A loop of 40
-fresh servers outside the script showed no hang. The cause is open. The curl calls of the
-script have a time limit of 10 seconds, so the script reports FAIL and does not wait.
+A defect of the connection pool surfaced as an intermittent hang in the TLS leg of
+`tools/validate/run.sh`: a `curl --http2` request to a freshly started server got no
+answer while the server was idle. It appeared in about 2 of 8 runs of the script, and in
+5 of 30 runs of a loop that starts a server, opens a connection with `openssl s_client`,
+makes an HTTP/1.1 request and then an HTTP/2 request, while eight processes keep the CPU
+busy. The cause is in `THttp2AsyncConnection`. mORMot2 reuses the object of a closed
+connection for the next connection and calls `Recycle`, not `BeforeDestroy`. The class did
+not override `Recycle`, so the new connection kept the HTTP/1.1 core of the old one.
+`PullOutput` reads that core when it exists, so the output of the new HTTP/2 connection,
+the server `SETTINGS` frame included, never left. A trace of the connection objects showed
+one object address serving both connections, with `StartHttp1` and then `StartHttp2` on
+it. The class now releases the state of the old connection in `Recycle` (`ReleaseState`,
+shared with `BeforeDestroy`). After the change the loop ran 40 times with no hang, and
+`run.sh` ran 8 times under the same CPU load with no hang. The curl calls of the script
+keep a time limit of 10 seconds, so a failure reports FAIL and does not wait.
 
 Gaps of this record: the Autobahn run covers HTTP/1.1 only, and a WebSocket in a
 browser over HTTP/2 has no record.

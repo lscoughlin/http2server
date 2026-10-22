@@ -129,9 +129,14 @@ type
     function PullOutput(out AData: TBytes): Boolean;
     function OutputPending: Boolean;
     procedure ApplyClosePhase;
+    /// drop the state of the connection that ended: both cores, the waker and the lock
+    procedure ReleaseState;
   protected
     procedure AfterCreate; override;
     procedure BeforeDestroy; override;
+    /// mORMot2 reuses the instance of a closed connection and calls this method, not
+    /// BeforeDestroy, so the state of the old connection must go here
+    procedure Recycle(const aRemoteIP: TNetAddr); override;
     /// run the TLS handshake with the factory deadline on the accepted socket
     function OnFirstRead(aOwner: TPollAsyncSockets): boolean; override;
     function OnRead: TPollAsyncSocketOnReadWrite; override;
@@ -341,21 +346,37 @@ begin
   FMode := cmHttp1;
 end;
 
-procedure THttp2AsyncConnection.BeforeDestroy;
+procedure THttp2AsyncConnection.ReleaseState;
 begin
   // a handler thread must not call into this connection while it is freed
   if FCore <> nil then
     FCore.ReleaseHost;
   if FServer <> nil then
     FServer.ConnectionClosed;
-  FSendLock.Free;
-  FCore.Free;
-  FCore := nil;
-  FH1.Free;
-  FH1 := nil;
+  FreeAndNil(FSendLock);
+  FreeAndNil(FCore);
+  FreeAndNil(FH1);
   FH1Events := nil;
   FWaker := nil;
   FEvents := nil;
+  FInSend := False;
+  FSendRequested := False;
+  FMode := cmUndecided;
+  FServer := nil;
+end;
+
+procedure THttp2AsyncConnection.BeforeDestroy;
+begin
+  ReleaseState;
+end;
+
+procedure THttp2AsyncConnection.Recycle(const aRemoteIP: TNetAddr);
+begin
+  // the instance of a closed connection serves the next one. Without this reset the
+  // new connection keeps the HTTP/1.1 core of the old one, PullOutput reads that
+  // core, and the output of the new connection never leaves
+  ReleaseState;
+  inherited Recycle(aRemoteIP);
 end;
 
 function THttp2AsyncConnection.OnFirstRead(aOwner: TPollAsyncSockets): boolean;
