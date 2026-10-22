@@ -34,7 +34,7 @@ uses
   SysUtils, Classes, SyncObjs,
   mormot.core.base, mormot.core.os,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter,
-  Http2Server.Hpack;
+  Http2Server.Hpack, Http2Server.Duplex, Http2Server.StreamHost;
 
 type
   /// the RFC 9113 section 5.1 state of one stream, as the server sees it
@@ -51,39 +51,6 @@ type
     ssClosed,
     /// the peer or the connection reset the stream
     ssResetting);
-
-  /// The IO side of the connection, as one stream needs it.
-  ///
-  /// TServerStream calls WindowUpdatePending when a handler read has consumed
-  /// inbound bytes.  The connection sums the pending credit of a stream and
-  /// emits one WINDOW_UPDATE, so the wait interface of a handler carries no
-  /// flow-control knowledge.
-  ///
-  /// TServerStream calls OutputPending when a handler write has added bytes
-  /// to the outbound buffer.  The connection then asks its write waker to
-  /// signal the IO thread, so output that appears while no client byte is in
-  /// flight still reaches the socket.
-  IStreamHost = interface
-    ['{7E1F0C11-0006-4A11-9C72-000000000506}']
-    /// the handler consumed AIncrement inbound bytes of AStreamId
-    procedure WindowUpdatePending(const AStreamId: LongWord;
-      const AIncrement: LongWord);
-    /// a handler added outbound bytes to AStreamId
-    procedure OutputPending(const AStreamId: LongWord);
-  end;
-
-  /// The connection side of a refusal.
-  ///
-  /// The handler pool runs on its own threads, so a refusal cannot touch the
-  /// outbound queue directly.  Refuse marks the stream and then calls this
-  /// host method, and the connection queues the RST_STREAM under its own
-  /// lock, which is the same lock the IO thread holds while it flushes.
-  IRefusalHost = interface
-    ['{7E1F0C11-0007-4A11-9C72-000000000507}']
-    /// the local side refused AStreamId and owes the peer an RST_STREAM
-    procedure QueueRefusal(const AStreamId: LongWord;
-      const AErrorCode: THttp2ErrorCode);
-  end;
 
   /// The bounded buffers and the wait state of one stream.
   ///
@@ -140,6 +107,13 @@ type
     FPendingEndStream: Boolean;
     FHasPendingHeaders: Boolean;
     FFinishRequested: Boolean;
+    /// the receiver of a detached stream; nil for an ordinary stream
+    // - with a sink set, inbound DATA goes to the sink and not into the buffer
+    FSink: IChannelSink;
+    /// true after a write was refused for a full buffer, until the drain
+    FWriteBlocked: Boolean;
+    /// the outbound byte count at or below which a blocked writer is told
+    FDrainLowWater: Integer;
 
     function DoRead(var ABuffer; const ACount: Integer): Integer;
     function DoWrite(const ABuffer; const ACount: Integer): Boolean;
@@ -250,6 +224,23 @@ type
     /// true once the stream is cancelled
     function IsCancelled: Boolean;
 
+    // ---- the detached side (see Http2Server.Duplex) ----
+
+    /// set the receiver of the inbound bytes; nil returns the stream to the
+    /// buffered mode
+    // - the IO thread delivers to the sink under the connection lock
+    procedure SetSink(const ASink: IChannelSink);
+    /// append bytes to the outbound buffer without blocking
+    // - False when the buffer holds bytes and the write would pass its limit;
+    //   the sink then hears WriteDrained after the buffer falls to the low mark
+    function TryWrite(const AData: TBytes): Boolean;
+    /// add receive credit for ACount inbound bytes and wake the IO side
+    procedure AddCredit(const ACount: LongWord);
+    /// true once the peer ended its half of the stream
+    function HasRemoteEnded: Boolean;
+    /// the outbound byte count at or below which a refused writer is told
+    property DrainLowWater: Integer read FDrainLowWater write FDrainLowWater;
+
     // ---- state ----
 
     property StreamId: LongWord read FStreamId;
@@ -309,6 +300,7 @@ begin
   FReadTimeoutMs := DefaultReadTimeoutMs;
   FWriteTimeoutMs := DefaultWriteTimeoutMs;
   FUpdateThreshold := DefaultUpdateThreshold;
+  FDrainLowWater := AOutboundLimit div 2;
   // the core holds the first reference
   FRefCount := 1;
 end;
@@ -450,28 +442,49 @@ procedure TServerStream.DeliverData(const AData: TBytes;
 var
   N: Integer;
   Woke: Boolean;
+  Sink: IChannelSink;
 begin
   N := Length(AData);
   Woke := False;
+  Sink := nil;
   LockStream;
   try
     if FReset then
       Exit;
-    if N > 0 then
+    Sink := FSink;
+    if Sink <> nil then
     begin
-      CompactInbound;
-      SetLength(FInbound, FInboundCount + N);
-      Move(AData[0], FInbound[FInboundCount], N);
-      Inc(FInboundCount, N);
-      Woke := True;
-    end;
-    if AEndStream then
+      // a detached stream keeps no inbound buffer: the bytes go to the sink
+      if AEndStream then
+        FRemoteEnded := True;
+    end
+    else
     begin
-      FRemoteEnded := True;
-      Woke := True;
+      if N > 0 then
+      begin
+        CompactInbound;
+        SetLength(FInbound, FInboundCount + N);
+        Move(AData[0], FInbound[FInboundCount], N);
+        Inc(FInboundCount, N);
+        Woke := True;
+      end;
+      if AEndStream then
+      begin
+        FRemoteEnded := True;
+        Woke := True;
+      end;
     end;
   finally
     UnlockStream;
+  end;
+  if Sink <> nil then
+  begin
+    // the caller holds the connection lock, so the sink runs on the IO thread
+    if N > 0 then
+      Sink.BytesReceived(AData[0], N);
+    if AEndStream then
+      Sink.PeerClosed(True);
+    Exit;
   end;
   // the signal runs outside the stream lock; the waiter has its own lock
   if Woke then
@@ -482,9 +495,11 @@ function TServerStream.TakeOutbound(out AData: TBytes;
   const AMaxBytes: Integer): Boolean;
 var
   N: Integer;
+  Told: IChannelSink;
 begin
   AData := nil;
   N := 0;
+  Told := nil;
   LockStream;
   try
     if FOutboundCount = 0 then
@@ -497,11 +512,19 @@ begin
     Inc(FOutboundStart, N);
     Dec(FOutboundCount, N);
     CompactOutbound;
+    // a writer that was refused hears once that the buffer fell to the low mark
+    if FWriteBlocked and (FOutboundCount <= FDrainLowWater) then
+    begin
+      FWriteBlocked := False;
+      Told := FSink;
+    end;
   finally
     UnlockStream;
   end;
   // a handler blocked on a full outbound buffer wakes on this drain
   FWaiter.Signal;
+  if Told <> nil then
+    Told.WriteDrained;
   Result := True;
 end;
 
@@ -687,8 +710,11 @@ begin
 end;
 
 function TServerStream.Cancel(const AErrorCode: THttp2ErrorCode): Boolean;
+var
+  Sink: IChannelSink;
 begin
   Result := False;
+  Sink := nil;
   LockStream;
   try
     if FReset then
@@ -696,6 +722,7 @@ begin
     FReset := True;
     FResetCode := AErrorCode;
     FRemoteEnded := True;
+    Sink := FSink;
     Result := True;
   finally
     UnlockStream;
@@ -704,6 +731,9 @@ begin
   // cancel-worker thread; no exception crosses a thread boundary here
   FWaiter.Cancel;
   FWaiter.Signal;
+  // a detached stream ended without END_STREAM: tell the sink once
+  if Sink <> nil then
+    Sink.PeerClosed(False);
 end;
 
 procedure TServerStream.Refuse(const AErrorCode: THttp2ErrorCode);
@@ -877,7 +907,10 @@ begin
     // limit plus the one write that found it empty.
     if (FOutboundLimit > 0) and (FOutboundCount > 0) and
        (FOutboundCount + ACount > FOutboundLimit) then
+    begin
+      FWriteBlocked := True;
       Exit(False);
+    end;
     CompactOutbound;
     SetLength(FOutbound, FOutboundCount + ACount);
     if ACount > 0 then
@@ -912,6 +945,49 @@ begin
   if Length(AData) = 0 then
     Exit;
   Write(AData[0], Length(AData));
+end;
+
+procedure TServerStream.SetSink(const ASink: IChannelSink);
+begin
+  LockStream;
+  try
+    FSink := ASink;
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TServerStream.TryWrite(const AData: TBytes): Boolean;
+begin
+  if Length(AData) = 0 then
+    Exit(True);
+  Result := DoWrite(AData[0], Length(AData));
+end;
+
+procedure TServerStream.AddCredit(const ACount: LongWord);
+begin
+  if ACount = 0 then
+    Exit;
+  LockStream;
+  try
+    Inc(FConsumedSinceUpdate, ACount);
+  finally
+    UnlockStream;
+  end;
+  // the IO side emits the WINDOW_UPDATE when it next flushes; the wake-up makes
+  // that happen although the peer may be silent while it waits for credit
+  if Assigned(FHost) then
+    FHost.OutputPending(FStreamId);
+end;
+
+function TServerStream.HasRemoteEnded: Boolean;
+begin
+  LockStream;
+  try
+    Result := FRemoteEnded;
+  finally
+    UnlockStream;
+  end;
 end;
 
 end.

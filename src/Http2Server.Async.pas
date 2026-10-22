@@ -553,6 +553,10 @@ end;
 
 procedure THttp2AsyncConnection.OnClose;
 begin
+  // the socket is gone: cancel the streams, so that a waiting handler and the
+  // sink of a detached stream learn it now and not at their next timeout
+  if FCore <> nil then
+    FCore.ConnectionLost;
   inherited OnClose;
 end;
 

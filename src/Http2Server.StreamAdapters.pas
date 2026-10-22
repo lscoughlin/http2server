@@ -27,7 +27,9 @@ uses
   Http2Server.Headers,
   Http2Server.Seam,
   Http2Server.Waiter,
-  Http2Server.Stream;
+  Http2Server.Stream,
+  Http2Server.Duplex,
+  Http2Server.StreamChannel;
 
 type
   /// The request as one handler sees it, backed by one TServerStream.
@@ -61,8 +63,14 @@ type
     FStream: TServerStream;
     FBodyWriter: IBodyWriter;
     FHeadersSent: Boolean;
+    FRegistry: IChannelRegistry;
+    FDetached: Boolean;
+    procedure CheckNotDetached;
   public
-    constructor Create(const AStream: TServerStream);
+    /// ARegistry limits and lists the detached streams of the server; a nil
+    /// registry detaches without a limit
+    constructor Create(const AStream: TServerStream;
+      const ARegistry: IChannelRegistry = nil);
     procedure SendHeaders(const AStatus: Integer; const AHeaders: THeaderBlock;
       const AEndStream: Boolean = False);
     procedure Write(const AData: TBytes); overload;
@@ -72,6 +80,7 @@ type
     procedure RegisterCancelHook(const AHook: TCancelHook);
     function IsCancelled: Boolean;
     function StreamId: LongWord;
+    function Detach: IDuplexChannel;
     /// true once the handler sent the response headers
     property HeadersSent: Boolean read FHeadersSent;
   end;
@@ -164,31 +173,52 @@ end;
 
 { TServerStreamResponse }
 
-constructor TServerStreamResponse.Create(const AStream: TServerStream);
+constructor TServerStreamResponse.Create(const AStream: TServerStream;
+  const ARegistry: IChannelRegistry);
 begin
   inherited Create;
   FStream := AStream;
+  FRegistry := ARegistry;
+end;
+
+procedure TServerStreamResponse.CheckNotDetached;
+begin
+  if FDetached then
+    raise EHttpError.Create(
+      'the response is detached: use the channel that Detach returned');
+end;
+
+function TServerStreamResponse.Detach: IDuplexChannel;
+begin
+  CheckNotDetached;
+  // before SendHeaders the channel is pending: no response has left yet
+  Result := THttp2StreamChannel.Attach(FStream, FRegistry, not FHeadersSent);
+  FDetached := True;
 end;
 
 procedure TServerStreamResponse.SendHeaders(const AStatus: Integer;
   const AHeaders: THeaderBlock; const AEndStream: Boolean);
 begin
+  CheckNotDetached;
   FHeadersSent := True;
   FStream.QueueResponseHeaders(AStatus, AHeaders, AEndStream);
 end;
 
 procedure TServerStreamResponse.Write(const AData: TBytes);
 begin
+  CheckNotDetached;
   FStream.Write(AData);
 end;
 
 procedure TServerStreamResponse.Write(const ABuffer; const ACount: Integer);
 begin
+  CheckNotDetached;
   FStream.Write(ABuffer, ACount);
 end;
 
 procedure TServerStreamResponse.SetBodyWriter(const AWriter: IBodyWriter);
 begin
+  CheckNotDetached;
   FBodyWriter := AWriter;
 end;
 
@@ -196,6 +226,7 @@ procedure TServerStreamResponse.Finish;
 var
   Chunk: TBytes;
 begin
+  CheckNotDetached;
   if FBodyWriter <> nil then
     while FBodyWriter.NextChunk(Chunk) do
       FStream.Write(Chunk);

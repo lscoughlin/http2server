@@ -29,6 +29,7 @@ uses
   Http2Server.Errors,
   Http2Server.Frames,
   Http2Server.Hpack,
+  Http2Server.Duplex,
   Http2Server.Limits,
   Http2Server.Observer,
   Http2Server.Seam,
@@ -60,6 +61,14 @@ type
   IStreamWaiter = Http2Server.Seam.IStreamWaiter;
   TCancelHook = Http2Server.Seam.TCancelHook;
   TWaitResult = Http2Server.Seam.TWaitResult;
+
+  /// the detached stream: bytes in both directions without a handler thread
+  IDuplexChannel = Http2Server.Duplex.IDuplexChannel;
+  IChannelSink = Http2Server.Duplex.IChannelSink;
+  TSendResult = Http2Server.Duplex.TSendResult;
+  TChannelClose = Http2Server.Duplex.TChannelClose;
+  TChannelState = Http2Server.Duplex.TChannelState;
+  EDetachRefused = Http2Server.Duplex.EDetachRefused;
 
   /// the observation contract and the counters
   IHttp2ServerObserver = Http2Server.Observer.IHttp2ServerObserver;

@@ -29,6 +29,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs, Generics.Collections, fpcunit, testregistry,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Stream,
+  Http2Server.StreamHost,
   Http2Server.Limits, Http2Server.Config, Http2Server.Hpack,
   Http2Server.Admission, Http2Server.StreamAdapters;
 

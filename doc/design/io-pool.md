@@ -108,7 +108,7 @@ leaves in the same IO turn as the request.
 ## The write wake-up
 
 The write wake-up follows the mORMot2 pattern. A handler write reaches the
-stream host callback (`src/Http2Server.Stream.pas:745`), the core raises one
+stream host callback (`src/Http2Server.Stream.pas:924`), the core raises one
 edge-triggered flag per transition from "no output" to "output"
 (`src/Http2Server.Connection.Core.pas:426-440`), and the waker drains the core and
 calls the mORMot2 write path (`src/Http2Server.Async.pas:194-200`).

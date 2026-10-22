@@ -27,7 +27,8 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs, fpcunit, testregistry,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter,
-  Http2Server.Stream, Http2Server.FlowControl, Http2Server.Hpack;
+  Http2Server.Stream, Http2Server.StreamHost, Http2Server.FlowControl,
+  Http2Server.Hpack;
 
 type
   /// the connection lock, with a count of the holds for the lock probe

@@ -31,7 +31,7 @@ unit Http2Server.Seam;
 interface
 
 uses
-  SysUtils, Http2Server.Errors, Http2Server.Hpack;
+  SysUtils, Http2Server.Errors, Http2Server.Hpack, Http2Server.Duplex;
 
 type
   /// the outcome of one IStreamWaiter.Wait call
@@ -140,6 +140,15 @@ type
     function IsCancelled: Boolean;
     /// the stream id of the response
     function StreamId: LongWord;
+    /// detach the stream from the handler thread
+    // - the handler may call Detach before SendHeaders (the channel is then
+    //   pending and the response is sent through the channel) or after
+    //   SendHeaders and before Finish (the channel is then active)
+    // - the handler returns afterwards. The server keeps the stream open and
+    //   sends no END_STREAM until the channel closes
+    // - every other method of the response raises once the stream is detached
+    // - raises EDetachRefused when the server holds its limit of detached streams
+    function Detach: IDuplexChannel;
   end;
 
   /// The handler contract.

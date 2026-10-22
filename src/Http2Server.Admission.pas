@@ -41,6 +41,7 @@ uses
   Http2Server.Limits,
   Http2Server.Seam,
   Http2Server.Stream,
+  Http2Server.Duplex,
   Http2Server.StreamAdapters,
   Http2Server.Waiter,
   Http2Server.Config,
@@ -153,6 +154,8 @@ type
     FPoolStopped: Boolean;
     FGracefulTimeoutMs: Integer;
     FOnHandlerError: THandlerErrorEvent;
+    /// the registry of detached streams; nil detaches without a limit
+    FChannelRegistry: IChannelRegistry;
     /// the observer of the server; nil when the server set none
     // - every event runs on the worker thread that raised it
     FObserver: IHttp2ServerObserver;
@@ -201,6 +204,9 @@ type
     /// the number of worker threads
     function HandlerThreadCount: Integer;
     /// the report of a handler that raised
+    /// the registry that limits and lists the detached streams of the server
+    property ChannelRegistry: IChannelRegistry read FChannelRegistry
+      write FChannelRegistry;
     property OnHandlerError: THandlerErrorEvent read FOnHandlerError
       write FOnHandlerError;
     /// the observer of the server (test and wire-up seam)
@@ -606,7 +612,7 @@ begin
   end;
   MarkBusy(Stream);
   Req := TServerStreamRequest.Create(Stream);
-  Res := TServerStreamResponse.Create(Stream);
+  Res := TServerStreamResponse.Create(Stream, FChannelRegistry);
   try
     try
       // a handler must never run on an IO thread: it would hold the connection

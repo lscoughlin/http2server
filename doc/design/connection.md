@@ -174,6 +174,16 @@ closes and a bucket that trips. The class `THttp2ConnectionEvents`
 (`src/Http2Server.Async.pas:270`) turns each call into an observer event. The
 document [public-api](public-api.md) holds the event list.
 
+## Detached streams
+
+A stream with a sink delivers its DATA payload to the sink on the IO thread, under
+the connection lock, and keeps no inbound buffer (`TServerStream.DeliverData`,
+`src/Http2Server.Stream.pas`). A reset, a connection error and the loss of the
+socket call `Cancel` on the stream, and `Cancel` tells the sink once. The core
+raises the loss of the socket through `ConnectionLost`, which the async
+connection calls from `OnClose` and the destructor of the core calls again as a
+safety net. The document [seam](seam.md) describes the channel and its rules.
+
 ## Test seams
 
 The core holds no socket, no thread and no clock of its own. A test builds a

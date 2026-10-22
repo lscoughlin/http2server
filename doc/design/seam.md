@@ -21,6 +21,10 @@ primary_types:
   - TCancelWorkerPool
   - TStreamState
   - TServerStream
+  - IDuplexChannel
+  - IChannelSink
+  - IChannelRegistry
+  - THttp2StreamChannel
 db_tables: None.
 related_docs:
   - doc/design/protocol.md
@@ -30,6 +34,9 @@ invariants:
   - The wait result names a signal, a timeout or a cancellation, and never a mixture.
   - A handler call holds no lock across a wait.
   - A cancellation raises its exception in the handler thread.
+  - A detached stream returns receive credit only when its owner calls ReturnCredit.
+  - A sink runs on an IO thread under the connection lock and never blocks.
+  - A pending channel sends no DATA frame before its HEADERS frame.
 ---
 
 # The seam
@@ -114,6 +121,92 @@ The hooks are a best effort. A handler that blocks with no hook registered
 runs on to completion, and the response is discarded after it returns. This
 limit is stated in the interface comment and in this document, because the
 server cannot interrupt arbitrary handler code.
+
+## Detached streams
+
+A synchronous handler owns a thread from the dispatch to the return of `Handle`.
+A stream that lives for minutes, such as an event stream or a WebSocket, cannot
+afford that thread. `IServerResponse.Detach` (`src/Http2Server.Seam.pas`) ends the
+synchronous life of the handler and gives the stream to an `IDuplexChannel`
+(`src/Http2Server.Duplex.pas`). The handler returns. The server keeps the stream
+open and moves bytes in both directions without a thread for the stream.
+
+A handler that never calls `Detach` sees no difference.
+
+```pascal
+IDuplexChannel = interface
+  function  Send(const AData: TBytes): TSendResult;      // never blocks
+  procedure Close(const AMode: TChannelClose);           // ccGraceful, ccAbort
+  function  IsOpen: Boolean;
+  function  State: TChannelState;                        // csPending, csActive, csClosed
+  function  QueuedBytes: Int64;
+  procedure SetSink(const ASink: IChannelSink);
+  procedure ReturnCredit(const ACount: Int64);
+  procedure Complete(const AStatus: Integer; const AHeaders: THeaderBlock;
+    const ABody: TBytes);
+  procedure Activate(const AStatus: Integer; const AHeaders: THeaderBlock);
+end;
+
+IChannelSink = interface
+  procedure BytesReceived(const AData; const ACount: Integer);
+  procedure PeerClosed(const AClean: Boolean);
+  procedure WriteDrained;
+end;
+```
+
+The HTTP/2 implementation is `THttp2StreamChannel`
+(`src/Http2Server.StreamChannel.pas`). It wraps one `TServerStream` and holds
+one reference to the stream until the channel is destroyed.
+
+**Sending.** `Send` appends to the outbound buffer of the stream and wakes the IO
+side through the stream host. It never blocks. `srFull` means that the buffer
+holds bytes and the write would pass its limit; the bytes did not join the queue.
+The sink then hears `WriteDrained` once the buffer falls to the low-water mark
+(half the limit by default). `srClosed` means that the channel is closed or the
+stream ended. A producer on any thread may call `Send`.
+
+**Receiving.** With a sink set, the IO thread delivers the DATA payload to the
+sink and keeps no copy in the inbound buffer of the stream. The call runs on the
+IO thread while the connection lock is held, so the sink does its work quickly,
+never blocks, and queues any real work on a work source of the streaming pool.
+Bytes that arrive before `SetSink` wait in a small buffer of the channel, and
+`SetSink` delivers them first, in order. `PeerClosed(True)` reports END_STREAM
+from the peer. `PeerClosed(False)` reports that the stream ended without it: a
+reset, a connection error, the loss of the socket, or the abort of the owner.
+A GET that arrived with END_STREAM counts as closed by the peer at once.
+
+**Credit.** The connection window returns when the bytes are buffered, as for
+every stream. The stream window returns only when the owner calls
+`ReturnCredit`, which adds to the consumed counter of the stream and wakes the IO
+side, so a `WINDOW_UPDATE` leaves although the peer is silent while it waits. A
+consumer that is slow to call `ReturnCredit` slows its peer and no other stream.
+
+**Pending and active.** A handler that calls `Detach` before `SendHeaders`
+receives a pending channel. No response has left yet. `Send` holds the bytes in
+the channel, so no DATA frame can leave before the HEADERS frame. `Activate`
+sends the headers and then the held bytes. `Complete` answers with an ordinary
+response (status, headers, body) and ends the channel, and the connection serves
+its other streams. A handler that calls `Detach` after `SendHeaders` receives an
+active channel.
+
+**Closing.** `ccGraceful` queues END_STREAM after the buffered bytes. The channel
+ends when the peer has ended its half too. `ccAbort` resets the stream with
+`RST_STREAM` and `CANCEL`. A pending channel always aborts, because it has no
+response to finish. After `Detach`, every other method of the response raises.
+
+**The registry.** `IChannelRegistry` (`TChannelRegistry`) counts the live
+channels against a limit and keeps a list. `Detach` raises `EDetachRefused` when
+the limit is reached. The slot returns when the channel ends. `CloseAll` closes
+every registered channel, which the stop of the server uses.
+
+**Connection loss.** When the socket closes, the connection core cancels every
+open stream (`ConnectionLost`, `src/Http2Server.Connection.Core.pas`). A handler
+that waits on a stream wakes with `EStreamCancelled`, the cancel hooks run, and
+the sink of a detached stream hears `PeerClosed(False)`.
+
+**Lock order.** The connection lock comes first and the channel lock second. The
+channel never calls a stream method while it holds its own lock, because a
+stream method takes the connection lock.
 
 ## Stream buffers
 

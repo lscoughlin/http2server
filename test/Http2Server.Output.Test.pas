@@ -544,6 +544,7 @@ var
   Stream: TServerStream;
   Data, Out1: TBytes;
   Frames: TArray<TFrame>;
+  Text: AnsiString;
 begin
   Build;
   Stream := StreamFor(7);
@@ -560,8 +561,9 @@ begin
   AssertEquals('a small write makes one DATA frame', 1,
     CountOf(Frames, ftData));
   AssertEquals('the frame names the stream', 7, Frames[0].Header.StreamId);
-  AssertEquals('the payload survives', 'hello',
-    string(PChar(@Frames[0].Payload[0])));
+  // the payload is a byte array without a terminator, so the length is explicit
+  SetString(Text, PAnsiChar(@Frames[0].Payload[0]), Length(Frames[0].Payload));
+  AssertEquals('the payload survives', 'hello', string(Text));
   AssertFalse('a write without a finish does not end the stream',
     Frames[0].IsEndStream);
 end;

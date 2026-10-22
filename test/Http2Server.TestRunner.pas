@@ -43,6 +43,7 @@ uses
   Http2Server.Stream.Test,
   Http2Server.Limits.Test,
   Http2Server.StreamPool.Test,
+  Http2Server.Detach.Test,
   Http2Server.Output.Test,
   Http2Server.Licence.Test,
   Http2Server.Encoding.Test,

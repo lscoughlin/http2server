@@ -69,7 +69,7 @@ a numeric literal of two digits or more outside a `Create` body
 (`test/Http2Server.Config.Test.pas:754`). The test covers this unit only.
 `Http2Server.Stream.pas` holds its own constants (`DefaultReadTimeoutMs`,
 `DefaultWriteTimeoutMs` and `DefaultUpdateThreshold` in
-`src/Http2Server.Stream.pas:290-294`), which a stream uses until the factory
+`src/Http2Server.Stream.pas:281-285`), which a stream uses until the factory
 sets a value.
 
 ### The listener settings

@@ -30,7 +30,8 @@ uses
   SysUtils, Classes, SyncObjs, Generics.Collections,
   Http2Server.Errors, Http2Server.Frames, Http2Server.Hpack,
   Http2Server.FlowControl, Http2Server.Limits, Http2Server.Seam,
-  Http2Server.Stream, Http2Server.Headers, Http2Server.Output,
+  Http2Server.Stream, Http2Server.StreamHost, Http2Server.Headers,
+  Http2Server.Output,
   Http2Server.HpackConnection;
 
 type
@@ -191,6 +192,11 @@ type
     /// queue a GOAWAY frame and wake the write side
     // - the graceful stop of the server calls this on every open connection;
     //   the core sends no second GOAWAY
+    /// cancel every open stream because the socket closed
+    // - a handler that waits on a stream wakes with EStreamCancelled, the cancel
+    //   hooks run, and the sink of a detached stream hears PeerClosed(False)
+    // - the call is safe to repeat; a cancelled stream stays cancelled
+    procedure ConnectionLost;
     procedure GracefulGoAway(const ALastStreamId: LongWord;
       const AErrorCode: THttp2ErrorCode);
 
@@ -313,10 +319,30 @@ begin
   end;
 end;
 
+procedure TConnectionCoreBase.ConnectionLost;
+var
+  Open: TArray<TServerStream>;
+  I: Integer;
+begin
+  LockConn;
+  try
+    FClosing := True;
+    // Cancel runs the sink of a detached stream, so the list is copied first
+    Open := FStreams.ToArray;
+    for I := 0 to High(Open) do
+      Open[I].Cancel(ecCancel);
+  finally
+    UnlockConn;
+  end;
+end;
+
 destructor TConnectionCoreBase.Destroy;
 var
   I: Integer;
 begin
+  // a stream that a handler or a channel still holds must learn that the
+  // connection is gone
+  ConnectionLost;
   FHost := nil;
   FRefusalHost := nil;
   FWakeLock.Free;
