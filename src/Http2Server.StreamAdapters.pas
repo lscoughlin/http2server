@@ -88,6 +88,8 @@ type
     function Detach: IDuplexChannel;
     /// the report of a detach, for the observer of the server
     property OnDetach: TDetachNotify read FOnDetach write FOnDetach;
+    /// true once the handler detached the stream
+    property Detached: Boolean read FDetached;
     /// true once the handler sent the response headers
     property HeadersSent: Boolean read FHeadersSent;
   end;

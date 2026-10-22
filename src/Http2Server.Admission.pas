@@ -635,7 +635,12 @@ begin
       on E: EStreamCancelled do
         ; // the cancellation ends the handler quietly
       on E: Exception do
-        ReportError(Stream, not Res.HeadersSent);
+        if Res.Detached then
+          // the channel owns the stream: an error answer here would put a second
+          // HEADERS block on the wire, or reset a stream the owner means to keep
+          Notify(seHandlerException, Stream, 'the handler raised after Detach')
+        else
+          ReportError(Stream, not Res.HeadersSent);
     end;
   finally
     Res.Free;

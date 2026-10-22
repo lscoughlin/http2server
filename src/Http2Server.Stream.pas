@@ -62,6 +62,8 @@ type
   private
     /// the connection lock, shared by every stream of one connection
     FConnLock: TCriticalSection;
+    /// keeps the connection lock alive
+    FLockOwner: IInterface;
     /// the per-stream lock; a handler takes it together with the connection
     /// lock for one buffer operation and never holds either across a wait, so
     /// a blocked handler read leaves the connection open to the IO thread
@@ -226,13 +228,12 @@ type
 
     // ---- the detached side (see Http2Server.Duplex) ----
 
-    /// set the receiver of the inbound bytes; nil returns the stream to the
-    /// buffered mode
-    // - the IO thread delivers to the sink under the connection lock
+    /// hold a reference that keeps the connection lock alive
+    procedure SetLockOwner(const AOwner: IInterface);
+    /// set the receiver of the inbound bytes; nil restores the buffered mode
     procedure SetSink(const ASink: IChannelSink);
-    /// append bytes to the outbound buffer without blocking
-    // - False when the buffer holds bytes and the write would pass its limit;
-    //   the sink then hears WriteDrained after the buffer falls to the low mark
+    /// append bytes to the outbound buffer without blocking; False when the
+    /// buffer is over its limit (the sink then hears WriteDrained later)
     function TryWrite(const AData: TBytes): Boolean;
     /// add receive credit for ACount inbound bytes and wake the IO side
     procedure AddCredit(const ACount: LongWord);
@@ -945,6 +946,11 @@ begin
   if Length(AData) = 0 then
     Exit;
   Write(AData[0], Length(AData));
+end;
+
+procedure TServerStream.SetLockOwner(const AOwner: IInterface);
+begin
+  FLockOwner := AOwner;
 end;
 
 procedure TServerStream.SetSink(const ASink: IChannelSink);

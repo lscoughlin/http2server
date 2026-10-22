@@ -76,8 +76,20 @@ type
   TCoreStreamHost = class(TInterfacedObject, IStreamHost, IRefusalHost)
   private
     FCore: TConnectionCoreBase;   // weak reference; the core owns this
+    /// guards the read of FCore; no call into the core runs under it, because a
+    /// call takes the connection lock and the lock order is connection first
+    FHostLock: TCriticalSection;
+    /// the calls into the core that run now; Orphan waits for them to end
+    FInFlight: Integer;
+    function Enter: TConnectionCoreBase;
+    procedure Leave;
   public
     constructor Create(const ACore: TConnectionCoreBase);
+    destructor Destroy; override;
+    /// forget the core; later calls do nothing
+    // - the core calls this before it frees anything a stream callback uses. A
+    //   detached stream can outlive its core, and its owner may still write
+    procedure Orphan;
     procedure WindowUpdatePending(const AStreamId: LongWord;
       const AIncrement: LongWord);
     procedure OutputPending(const AStreamId: LongWord);
@@ -134,6 +146,10 @@ type
     /// the lock the caller holds; every stream the core creates takes it too,
     /// so a handler buffer operation never races the IO thread
     FConnLock: TCriticalSection;
+    /// owns the connection lock; the streams hold a reference too
+    FLockOwner: IInterface;
+    /// the host adapter, kept as a class so that the destructor can orphan it
+    FHostImpl: TCoreStreamHost;
 
     procedure HandleTrip(const AKind: TLimitKind);
     procedure LockConn;
@@ -197,6 +213,10 @@ type
     //   hooks run, and the sink of a detached stream hears PeerClosed(False)
     // - the call is safe to repeat; a cancelled stream stays cancelled
     procedure ConnectionLost;
+    /// cut the stream callbacks from this core
+    // - a call in flight finishes first, and every later call does nothing. The
+    //   async connection calls this before it frees what a callback reaches
+    procedure ReleaseHost;
     procedure GracefulGoAway(const ALastStreamId: LongWord;
       const AErrorCode: THttp2ErrorCode);
 
@@ -222,12 +242,62 @@ type
 
 implementation
 
+const
+  /// the longest wait of Orphan for a call in flight, in milliseconds
+  cOrphanWaitMs = 10000;
+
 { TCoreStreamHost }
 
 constructor TCoreStreamHost.Create(const ACore: TConnectionCoreBase);
 begin
   inherited Create;
+  FHostLock := TCriticalSection.Create;
   FCore := ACore;
+end;
+
+destructor TCoreStreamHost.Destroy;
+begin
+  FHostLock.Free;
+  inherited Destroy;
+end;
+
+function TCoreStreamHost.Enter: TConnectionCoreBase;
+begin
+  FHostLock.Acquire;
+  try
+    Result := FCore;
+    if Result <> nil then
+      InterlockedIncrement(FInFlight);
+  finally
+    FHostLock.Release;
+  end;
+end;
+
+procedure TCoreStreamHost.Leave;
+begin
+  InterlockedDecrement(FInFlight);
+end;
+
+procedure TCoreStreamHost.Orphan;
+var
+  Waited: Integer;
+begin
+  FHostLock.Acquire;
+  try
+    FCore := nil;
+  finally
+    FHostLock.Release;
+  end;
+  // a call that entered before this point finishes; none starts after it. The
+  // caller holds no connection lock, so a call that waits for that lock ends.
+  // The wait is bounded, so a destructor never hangs on a stuck caller
+  Waited := 0;
+  while (InterlockedCompareExchange(FInFlight, 0, 0) <> 0) and
+        (Waited < cOrphanWaitMs) do
+  begin
+    Sleep(1);
+    Inc(Waited);
+  end;
 end;
 
 procedure TCoreStreamHost.WindowUpdatePending(const AStreamId: LongWord;
@@ -239,18 +309,34 @@ begin
 end;
 
 procedure TCoreStreamHost.OutputPending(const AStreamId: LongWord);
+var
+  Core: TConnectionCoreBase;
 begin
-  if FCore <> nil then
-    FCore.NotifyWantsWrite;
+  Core := Enter;
+  if Core = nil then
+    Exit;
+  try
+    Core.NotifyWantsWrite;
+  finally
+    Leave;
+  end;
 end;
 
 procedure TCoreStreamHost.QueueRefusal(const AStreamId: LongWord;
   const AErrorCode: THttp2ErrorCode);
+var
+  Core: TConnectionCoreBase;
 begin
   // the pool calls this from a worker thread, so the frame enters the queue
   // under the connection lock and the write waker carries it to the IO thread
-  if FCore <> nil then
-    FCore.QueueRefusalFrame(AStreamId, AErrorCode);
+  Core := Enter;
+  if Core = nil then
+    Exit;
+  try
+    Core.QueueRefusalFrame(AStreamId, AErrorCode);
+  finally
+    Leave;
+  end;
 end;
 
 { TConnectionCoreBase }
@@ -259,13 +345,16 @@ constructor TConnectionCoreBase.Create(const AOptions: TConnectionCoreOptions;
   const AEvents: IConnectionEvents; const ALimits: TConnectionLimits;
   const AClock: IMonotonicClock);
 var
+  Holder: TConnectionLock;
   OutOptions: TOutputDrainOptions;
 begin
   inherited Create;
   FOptions := AOptions;
   FEvents := AEvents;
   FLimits := ALimits;
-  FConnLock := TCriticalSection.Create;
+  Holder := TConnectionLock.Create;
+  FLockOwner := Holder;
+  FConnLock := Holder.Lock;
   FFlow := TFlowControl.Create(FOptions.ConnectionWindow,
     FOptions.InitialStreamWindow);
   // the drain turns the handler buffers into DATA frames; the core carries a
@@ -276,7 +365,8 @@ begin
   FWakeLock := TCriticalSection.Create;
   // the host adapter is a borrowed reference to this core, so it forms no
   // reference cycle and its lifetime is the core lifetime
-  FHost := TCoreStreamHost.Create(Self);
+  FHostImpl := TCoreStreamHost.Create(Self);
+  FHost := FHostImpl;
   FRefusalHost := FHost as IRefusalHost;
   FStreams := TObjectList<TServerStream>.Create(False);
   FById := TDictionary<LongWord, TServerStream>.Create;
@@ -319,6 +409,12 @@ begin
   end;
 end;
 
+procedure TConnectionCoreBase.ReleaseHost;
+begin
+  if FHostImpl <> nil then
+    FHostImpl.Orphan;
+end;
+
 procedure TConnectionCoreBase.ConnectionLost;
 var
   Open: TArray<TServerStream>;
@@ -343,8 +439,12 @@ begin
   // a stream that a handler or a channel still holds must learn that the
   // connection is gone
   ConnectionLost;
+  // a detached stream outlives this core, and its owner may still write: cut
+  // the callbacks first, then free what they reach
+  ReleaseHost;
   FHost := nil;
   FRefusalHost := nil;
+  FHostImpl := nil;
   FWakeLock.Free;
   FOut.Free;
   FById.Free;
@@ -355,7 +455,9 @@ begin
   FStreams.Free;
   FFlow.Free;
   FHpack.Free;
-  FConnLock.Free;
+  // the lock lives on while a stream holds the owner
+  FConnLock := nil;
+  FLockOwner := nil;
   inherited Destroy;
 end;
 
@@ -637,6 +739,7 @@ begin
   Result := TServerStream.Create(AStreamId, FConnLock, FHost,
     FOptions.InboundBufferLimit, FOptions.OutboundBufferLimit);
   Result.SetRefusalHost(FRefusalHost);
+  Result.SetLockOwner(FLockOwner);
   Result.UpdateThreshold := FOptions.StreamUpdateThreshold;
   FStreams.Add(Result);
   FById.Add(AStreamId, Result);

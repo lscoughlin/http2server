@@ -41,18 +41,6 @@ type
       const AResponse: IServerResponse);
   end;
 
-  /// a handler that detaches its stream and keeps the channel
-  // - a refused detach answers 503, as an application would
-  TDetachingHandler = class(TInterfacedObject, IHttp2Handler)
-  public
-    Channels: TList<IDuplexChannel>;
-    Refused: Integer;
-    constructor Create;
-    destructor Destroy; override;
-    procedure Handle(const ARequest: IServerRequest;
-      const AResponse: IServerResponse);
-  end;
-
   /// an observer that keeps every event it receives
   TCollectObserver = class(TInterfacedObject, IHttp2ServerObserver)
   private
@@ -115,10 +103,6 @@ type
     procedure TestBuildWithInvalidSettingsRaises;
     /// a stopped server raises on a second Start
     procedure TestStartAfterStopRaises;
-    /// a detached stream serves bytes, counts in the stats, and Stop ends it
-    procedure TestDetachedStreamIsServedAndStopEndsIt;
-    /// the limit of detached streams refuses the next detach
-    procedure TestDetachLimitRefusesAndTheObserverSeesIt;
   end;
 
 implementation
@@ -174,44 +158,6 @@ begin
 end;
 
 { TCollectObserver }
-{ TDetachingHandler }
-
-constructor TDetachingHandler.Create;
-begin
-  inherited Create;
-  Channels := TList<IDuplexChannel>.Create;
-end;
-
-destructor TDetachingHandler.Destroy;
-begin
-  Channels.Free;
-  inherited Destroy;
-end;
-
-procedure TDetachingHandler.Handle(const ARequest: IServerRequest;
-  const AResponse: IServerResponse);
-var
-  Channel: IDuplexChannel;
-begin
-  try
-    Channel := AResponse.Detach;
-  except
-    on EDetachRefused do
-    begin
-      Inc(Refused);
-      AResponse.SendHeaders(503, nil, False);
-      AResponse.Write(BytesOf('busy'));
-      AResponse.Finish;
-      Exit;
-    end;
-  end;
-  // the channel is pending; the headers and the first bytes follow
-  Channel.Activate(200, nil);
-  Channel.Send(BytesOf('first'));
-  Channels.Add(Channel);
-end;
-
-
 constructor TCollectObserver.Create;
 begin
   inherited Create;
@@ -630,95 +576,6 @@ begin
   AssertEquals('no stream is open after a stop', 0, Stats.OpenStreams);
   AssertEquals('no handler runs after a stop', 0, Stats.BusyHandlers);
   AssertEquals('the queue is empty after a stop', 0, Stats.QueueLength);
-end;
-
-procedure TServerLifecycleTest.TestDetachedStreamIsServedAndStopEndsIt;
-var
-  Handler: TDetachingHandler;
-  HandlerRef: IHttp2Handler;
-  Observer: TCollectObserver;
-  ObserverRef: IHttp2ServerObserver;
-  Server: IHttp2Server;
-  Client: TLifecycleClient;
-  Body: TBytes;
-  Ended: Boolean;
-  Stats: TServerStats;
-begin
-  Handler := TDetachingHandler.Create;
-  HandlerRef := Handler;
-  Observer := TCollectObserver.Create;
-  ObserverRef := Observer;
-  Server := CleartextFactory(HandlerRef).Build(ObserverRef);
-  Server.Start;
-  Client := TLifecycleClient.Create(Server.Port);
-  try
-    Client.SendGet(1, '/detach');
-    Client.CollectStream(1, 5, ResponseTimeoutMs, Body, Ended);
-    AssertEquals('the first bytes of the detached stream arrive', 'first',
-      TextOf(Body));
-    AssertFalse('the stream is still open', Ended);
-    Stats := Server.Stats;
-    AssertEquals('one stream is detached', 1, Stats.DetachedStreams);
-    AssertEquals('the observer saw the detach', 1,
-      Observer.CountOf(seStreamDetached));
-    // the owner sends more bytes from this thread, with no handler thread
-    AssertTrue(Handler.Channels[0].Send(BytesOf('second')) = srQueued);
-    Client.CollectStream(1, 6, ResponseTimeoutMs, Body, Ended);
-    AssertEquals('later bytes arrive without a handler thread', 'second',
-      TextOf(Body));
-    // Stop closes the channel gracefully, so END_STREAM reaches the client
-    Server.Stop;
-    Client.CollectStream(1, 0, ResponseTimeoutMs, Body, Ended);
-    AssertTrue('Stop ended the detached stream with END_STREAM', Ended);
-  finally
-    Client.Free;
-  end;
-  Stats := Server.Stats;
-  AssertEquals('no stream is detached after a stop', 0, Stats.DetachedStreams);
-  AssertFalse('the channel is closed', Handler.Channels[0].IsOpen);
-end;
-
-procedure TServerLifecycleTest.TestDetachLimitRefusesAndTheObserverSeesIt;
-var
-  Handler: TDetachingHandler;
-  HandlerRef: IHttp2Handler;
-  Observer: TCollectObserver;
-  ObserverRef: IHttp2ServerObserver;
-  Server: IHttp2Server;
-  Client, Second: TLifecycleClient;
-  Body: TBytes;
-  Ended: Boolean;
-begin
-  Handler := TDetachingHandler.Create;
-  HandlerRef := Handler;
-  Observer := TCollectObserver.Create;
-  ObserverRef := Observer;
-  Server := CleartextFactory(HandlerRef).WithMaxDetachedStreams(1).Build(
-    ObserverRef);
-  Server.Start;
-  Client := TLifecycleClient.Create(Server.Port);
-  Second := TLifecycleClient.Create(Server.Port);
-  try
-    Client.SendGet(1, '/one');
-    Client.CollectStream(1, 5, ResponseTimeoutMs, Body, Ended);
-    AssertEquals('first', TextOf(Body));
-    // the limit counts the detached streams of the whole server, so the
-    // second connection meets it
-    Second.SendGet(1, '/two');
-    Second.CollectStream(1, 4, ResponseTimeoutMs, Body, Ended);
-    AssertEquals('the handler saw one refusal', 1, Handler.Refused);
-    AssertEquals('the second detach was refused and answered 503 with a body',
-      'busy', TextOf(Body));
-    AssertEquals('the handler saw one refusal', 1, Handler.Refused);
-    AssertEquals('the observer saw one detach', 1,
-      Observer.CountOf(seStreamDetached));
-    AssertEquals('the observer saw one refusal', 1,
-      Observer.CountOf(seStreamDetachRefused));
-  finally
-    Client.Free;
-    Second.Free;
-  end;
-  Server.Stop;
 end;
 
 procedure TServerLifecycleTest.TestBuildWithInvalidSettingsRaises;

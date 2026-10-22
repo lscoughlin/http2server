@@ -87,8 +87,8 @@ server and an unresponsive one.
 
 ## Cancellation
 
-A reset, a client `GOAWAY` and a server shutdown all cancel streams. The cancel
-path sets a flag on the stream and wakes the waiter. The parked call returns
+A reset, a client `GOAWAY`, the loss of the socket and a server shutdown all
+cancel streams. The cancel path sets a flag on the stream and wakes the waiter. The parked call returns
 `wrCancelled`, and the handler thread raises `EStreamCancelled` on its own
 stack. No other thread raises into a handler thread, because a raised exception
 on a foreign stack leaves the handler with no chance to release what it holds.
@@ -101,6 +101,12 @@ hook is a rare event.
 The hooks are a best effort. A handler blocked inside a database call with no
 registered hook runs on to completion, and the server discards the response
 after it returns.
+
+**Known limit.** The running server does not create a `TCancelWorkerPool` and
+attaches none to the waiter of a stream, although the factory holds the setting
+`CancelWorkerThreads`. A hook that a handler registers through
+`RegisterCancelHook` therefore does not run in the server today. A test attaches
+a pool to a waiter by hand and shows the hook behaviour of the unit.
 
 ## The streaming pool
 

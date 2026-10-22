@@ -35,7 +35,7 @@ invariants:
   - A handler call holds no lock across a wait.
   - A cancellation raises its exception in the handler thread.
   - A detached stream returns receive credit only when its owner calls ReturnCredit.
-  - A sink runs on an IO thread under the connection lock and never blocks.
+  - A sink never blocks. Its data calls run on an IO thread under the connection lock, and PeerClosed can run on any thread.
   - A pending channel sends no DATA frame before its HEADERS frame.
 ---
 
@@ -131,7 +131,14 @@ synchronous life of the handler and gives the stream to an `IDuplexChannel`
 (`src/Http2Server.Duplex.pas`). The handler returns. The server keeps the stream
 open and moves bytes in both directions without a thread for the stream.
 
-A handler that never calls `Detach` sees no difference.
+A handler that never calls `Detach` keeps the synchronous contract, with one change
+that comes from the loss of the socket. When the socket closes, the connection
+core cancels every open stream (see "Connection loss" below), so a handler that
+waits on a stream wakes with `EStreamCancelled` at once and not at its next
+timeout. This is the cancellation on connection loss that the design always
+described. The response object belongs to the handler call and is gone when
+`Handle` returns, so a caller that wants to act later keeps the channel and not
+the response.
 
 ```pascal
 IDuplexChannel = interface
@@ -162,13 +169,17 @@ one reference to the stream until the channel is destroyed.
 side through the stream host. It never blocks. `srFull` means that the buffer
 holds bytes and the write would pass its limit; the bytes did not join the queue.
 The sink then hears `WriteDrained` once the buffer falls to the low-water mark
-(half the limit by default). `srClosed` means that the channel is closed or the
+(a detached stream takes the factory setting `ChannelLowWater`, 65536 bytes by
+default; an ordinary stream takes half of its limit). `srClosed` means that the channel is closed or the
 stream ended. A producer on any thread may call `Send`.
 
 **Receiving.** With a sink set, the IO thread delivers the DATA payload to the
-sink and keeps no copy in the inbound buffer of the stream. The call runs on the
-IO thread while the connection lock is held, so the sink does its work quickly,
-never blocks, and queues any real work on a work source of the streaming pool.
+sink and keeps no copy in the inbound buffer of the stream. The data call runs on
+the IO thread while the connection lock is held, so the sink does its work
+quickly, never blocks, and queues any real work on a work source of the streaming
+pool. `PeerClosed` can run on any thread: the IO thread, the owner thread that
+aborts the channel, a handler-pool thread that refuses the stream, or the thread
+that frees the connection.
 Bytes that arrive before `SetSink` wait in a small buffer of the channel, and
 `SetSink` delivers them first, in order. `PeerClosed(True)` reports END_STREAM
 from the peer. `PeerClosed(False)` reports that the stream ended without it: a
@@ -203,6 +214,17 @@ every registered channel, which the stop of the server uses.
 open stream (`ConnectionLost`, `src/Http2Server.Connection.Core.pas`). A handler
 that waits on a stream wakes with `EStreamCancelled`, the cancel hooks run, and
 the sink of a detached stream hears `PeerClosed(False)`.
+
+**Lifetime.** A detached stream can outlive its connection. The stream and the
+core therefore share the connection lock through a reference count
+(`TConnectionLock`, `src/Http2Server.StreamHost.pas`), and the core cuts the
+stream callbacks (`ReleaseHost`) before it frees anything they reach. A call on a
+channel after the connection ended finds a live lock, a callback that does
+nothing, and a channel that reports itself closed. The
+adapter never holds a lock while it calls into the core: it counts the calls in
+flight, and `ReleaseHost` waits (for a bounded time) until the count is zero. A
+lock held across the call would invert the lock order, because a call takes the
+connection lock and the connection lock is taken first.
 
 **Lock order.** The connection lock comes first and the channel lock second. The
 channel never calls a stream method while it holds its own lock, because a

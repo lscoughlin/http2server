@@ -19,6 +19,7 @@ unit Http2Server.StreamHost;
 interface
 
 uses
+  SysUtils, Classes, SyncObjs,
   Http2Server.Errors;
 
 type
@@ -55,6 +56,34 @@ type
       const AErrorCode: THttp2ErrorCode);
   end;
 
+  /// The connection lock, with a reference count.
+  ///
+  /// The core and every stream hold a reference. A detached stream can outlive
+  /// its core, and a stream takes this lock in every buffer operation, so the
+  /// lock lives until the last holder lets it go.
+  TConnectionLock = class(TInterfacedObject)
+  private
+    FLock: TCriticalSection;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    property Lock: TCriticalSection read FLock;
+  end;
+
 implementation
+
+{ TConnectionLock }
+
+constructor TConnectionLock.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TConnectionLock.Destroy;
+begin
+  FLock.Free;
+  inherited Destroy;
+end;
 
 end.

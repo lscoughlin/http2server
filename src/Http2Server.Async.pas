@@ -353,6 +353,9 @@ end;
 
 procedure THttp2AsyncConnection.BeforeDestroy;
 begin
+  // a handler thread must not call into this connection while it is freed
+  if FCore <> nil then
+    FCore.ReleaseHost;
   if FServer <> nil then
     FServer.ConnectionClosed;
   FSendLock.Free;

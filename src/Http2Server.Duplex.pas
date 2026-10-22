@@ -16,7 +16,8 @@ notes:
 }
 /// The duplex channel of a detached stream
 // - Send never blocks. A producer thread can call it at any time.
-// - The sink runs on an IO thread under the connection lock and never blocks.
+// - The sink never blocks. Its data calls run on an IO thread under the connection
+//   lock, and PeerClosed can run on any thread.
 // - ReturnCredit is the only source of receive credit for a detached stream: the
 //   channel returns no credit by itself, so a slow consumer slows its peer.
 unit Http2Server.Duplex;
@@ -59,9 +60,12 @@ type
 
   /// The receiver of the inbound bytes of a channel.
   ///
-  /// Every call runs on an IO thread while the connection lock is held, so the
-  /// sink does its work quickly and never blocks. A sink that needs application
-  /// work queues a task on a work source of the streaming pool.
+  /// BytesReceived and WriteDrained run on an IO thread while the connection lock
+  /// is held. PeerClosed can run on any thread: the IO thread, the owner thread
+  /// that aborts the channel, a handler-pool thread that refuses the stream, or
+  /// the thread that frees the connection. No call blocks, so the sink does its
+  /// work quickly. A sink that needs application work queues a task on a work
+  /// source of the streaming pool.
   IChannelSink = interface
     ['{7E1F0C11-0051-4A11-9C72-000000000801}']
     /// ACount bytes arrived; the bytes are valid for the length of the call

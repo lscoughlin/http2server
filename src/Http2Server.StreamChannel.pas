@@ -313,8 +313,19 @@ begin
 end;
 
 procedure THttp2StreamChannel.ReturnCredit(const ACount: Int64);
+var
+  Ended: Boolean;
 begin
   if ACount <= 0 then
+    Exit;
+  FLock.Acquire;
+  try
+    Ended := FReleased;
+  finally
+    FLock.Release;
+  end;
+  // an ended channel has nothing left to credit
+  if Ended then
     Exit;
   if ACount > High(Cardinal) then
     FStream.AddCredit(High(Cardinal))

@@ -107,6 +107,9 @@ type
     procedure TestCloseAllClosesEveryChannel;
     procedure TestDetachedResponseRefusesOtherCalls;
     procedure TestSendAfterCloseIsRefused;
+    procedure TestChannelOutlivesItsCore;
+    procedure TestPeerResetWhilePendingEndsTheChannel;
+    procedure TestConnectionServesOnAfterComplete;
   end;
 
 implementation
@@ -820,6 +823,86 @@ begin
   Ch.Close(ccGraceful);
   AssertTrue(Ch.Send(Bytes('late')) = srClosed);
   AssertTrue(Ch.State = csClosed);
+end;
+
+procedure TDetachTest.TestChannelOutlivesItsCore;
+var
+  H: TServerResponseHolder;
+  Ch: IDuplexChannel;
+begin
+  MakeCore;
+  Start;
+  H := Open(1, False);
+  H.Response.SendHeaders(200, Hdrs);
+  Ch := H.Response.Detach;
+  Ch.SetSink(FSinkRef);
+  // the connection ends and its core is freed while the owner holds the channel
+  FCore := nil;
+  FCoreRef := nil;
+  AssertEquals('the sink heard the loss', 1, FSink.Closed);
+  AssertFalse(FSink.LastClean);
+  // every call below meets the lock, the host and the stream of a dead core
+  Ch.ReturnCredit(1000);
+  AssertTrue(Ch.Send(Bytes('late')) = srClosed);
+  AssertEquals(0, Integer(Ch.QueuedBytes));
+  AssertFalse(Ch.IsOpen);
+  AssertTrue(Ch.State = csClosed);
+  Ch.Close(ccGraceful);
+  Ch.Close(ccAbort);
+  Ch.ReturnCredit(1);
+  Ch := nil;
+end;
+
+procedure TDetachTest.TestPeerResetWhilePendingEndsTheChannel;
+var
+  H: TServerResponseHolder;
+  Ch: IDuplexChannel;
+  Rst: TBytes;
+  Raised: Boolean;
+begin
+  MakeCore;
+  Start;
+  H := Open(1, False);
+  Ch := H.Response.Detach;
+  AssertTrue(Ch.State = csPending);
+  Ch.SetSink(FSinkRef);
+  SetLength(Rst, 4);
+  Rst[3] := Ord(ecCancel);
+  FCore.Feed(Pack([TFrame.Create(ftRstStream, [], 1, Rst)]));
+  AssertEquals('the sink hears the reset', 1, FSink.Closed);
+  AssertTrue(Ch.State = csClosed);
+  AssertTrue(Ch.Send(Bytes('x')) = srClosed);
+  // the pending phase is over, so Activate and Complete are refused
+  Raised := False;
+  try Ch.Activate(200, Hdrs); except on EHttpError do Raised := True; end;
+  AssertTrue('Activate on an ended channel raises', Raised);
+  Raised := False;
+  try Ch.Complete(401, nil, nil); except on EHttpError do Raised := True; end;
+  AssertTrue('Complete on an ended channel raises', Raised);
+  AssertEquals('the slot is free again', 0, FRegistry.Count);
+end;
+
+procedure TDetachTest.TestConnectionServesOnAfterComplete;
+var
+  H: TServerResponseHolder;
+  Ch: IDuplexChannel;
+  F: TArray<TFrame>;
+begin
+  MakeCore;
+  Start;
+  H := Open(1, True);
+  Ch := H.Response.Detach;
+  Ch.Complete(403, nil, Bytes('no'));
+  Frames;
+  // the connection is intact: a new request on it is accepted and answered
+  FCore.Feed(Pack([Request(3, True)]));
+  AssertTrue('the next stream exists', FCore.StreamById(3) <> nil);
+  F := Frames;
+  AssertEquals('no GOAWAY and no RST_STREAM', 0,
+    CountOf(F, ftGoAway) + CountOf(F, ftRstStream));
+  FCore.StreamById(3).QueueResponseHeaders(200, nil, True);
+  F := Frames;
+  AssertEquals('200', StatusOf(F[IndexOf(F, ftHeaders)]));
 end;
 
 initialization
