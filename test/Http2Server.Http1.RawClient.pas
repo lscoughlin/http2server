@@ -56,6 +56,11 @@ type
     /// read one final response; a 100 Continue before it is skipped and counted
     function ReadResponse(const AHeadOnly: Boolean; const ATimeoutMs: Integer;
       out AResponse: TRawResponse): Boolean;
+    /// read the status line and the header lines only
+    function ReadHead(const ATimeoutMs: Integer; out AResponse: TRawResponse): Boolean;
+    /// read one chunk of a chunked body; ALast is true for the last chunk
+    function ReadChunk(const ATimeoutMs: Integer; out AData: string;
+      out ALast: Boolean): Boolean;
     /// read an interim 1xx response head
     function ReadInterim(const ATimeoutMs: Integer; out AHead: string): Boolean;
     /// true once the peer closed the connection within ATimeoutMs
@@ -272,6 +277,41 @@ begin
   AResponse.Body := Rest;
   AResponse.Closed := FClosed;
   Result := FClosed;
+end;
+
+function TRawHttp.ReadHead(const ATimeoutMs: Integer;
+  out AResponse: TRawResponse): Boolean;
+var
+  Head: string;
+begin
+  AResponse := Default(TRawResponse);
+  Result := TakeUntil(CRLF + CRLF, ATimeoutMs, Head);
+  if not Result then
+    Exit;
+  AResponse.Head := Head;
+  AResponse.Status := StrToIntDef(Copy(Head, 10, 3), 0);
+  AResponse.Chunked := SameText(AResponse.Header('transfer-encoding'), 'chunked');
+end;
+
+function TRawHttp.ReadChunk(const ATimeoutMs: Integer; out AData: string;
+  out ALast: Boolean): Boolean;
+var
+  SizeLine, Piece: string;
+  Size: Integer;
+begin
+  Result := False;
+  AData := '';
+  ALast := False;
+  if not TakeUntil(CRLF, ATimeoutMs, SizeLine) then
+    Exit;
+  Size := StrToIntDef('$' + Trim(SizeLine), -1);
+  if Size < 0 then
+    Exit;
+  if not TakeBytes(Size + 2, ATimeoutMs, Piece) then
+    Exit;
+  AData := Copy(Piece, 1, Size);
+  ALast := Size = 0;
+  Result := True;
 end;
 
 function TRawHttp.WaitClosed(const ATimeoutMs: Integer): Boolean;

@@ -2,7 +2,7 @@
 ---
 license: LGPL-2.1-only WITH Independent-modules-exception
 copyright: Copyright 2026 Liam Seamus Coughlin
-keywords: http1, exchange, request, response, chunked, framing, keep-alive, handler job
+keywords: http1, exchange, request, response, handler job, detach
 notes:
   - One TH1Exchange is one HTTP/1.1 request with its response. The same object
     is the IServerRequest and the IServerResponse that the handler sees, and the
@@ -14,10 +14,9 @@ notes:
   - The exchange reaches the connection core through a link. The core cuts the
     link when the connection ends, so a handler thread that runs on never calls a
     core that is gone.
-  - The response framing follows RFC 9112 section 6.3. A response that the
-    handler gives a Content-Length is sent with that length. Any other response to
-    an HTTP/1.1 request is chunked, and an HTTP/1.0 client gets a response that
-    ends with the close of the connection.
+  - The head of the response and its framing come from Http2Server.Http1.ResponseHead.
+  - A handler can detach the response. The exchange then answers through a
+    TH1ChunkedChannel, and the handler thread is free.
 ---
 }
 /// One HTTP/1.1 request and its response
@@ -33,46 +32,10 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs,
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Duplex,
-  Http2Server.HandlerJob, Http2Server.Http1.Guard;
+  Http2Server.HandlerJob, Http2Server.Http1.Guard, Http2Server.Http1.Host,
+  Http2Server.Http1.ResponseHead, Http2Server.Http1.Channel;
 
 type
-  /// what the exchange needs from the connection core
-  TH1Host = class
-  public
-    /// queue bytes for the socket
-    procedure EnqueueOutput(const AData: TBytes); virtual; abstract;
-    /// octets queued and not yet taken by the socket
-    function OutputBacklog: Int64; virtual; abstract;
-    /// the handler first reads a body that the client holds back for 100 Continue
-    procedure RequestContinue; virtual; abstract;
-    /// the response ended
-    // - AKeepAlive is the persistence decision; AFailed says that the response
-    //   was cut or the exchange broke, so the connection closes
-    procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean); virtual; abstract;
-  end;
-
-  /// the link between an exchange and its core
-  // - every call takes the lock of the link, so Orphan waits for a call that runs
-  THostLink = class(TInterfacedObject)
-  private
-    FLock: TCriticalSection;
-    FHost: TH1Host;
-    /// calls that run in the core now; the lock is not held across a call
-    FInFlight: Integer;
-    function Enter: TH1Host;
-    procedure Leave;
-  public
-    constructor Create(const AHost: TH1Host);
-    destructor Destroy; override;
-    /// the core is going away; later calls do nothing
-    procedure Orphan;
-    function Alive: Boolean;
-    procedure EnqueueOutput(const AData: TBytes);
-    function OutputBacklog: Int64;
-    procedure RequestContinue;
-    procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean);
-  end;
-
   TH1ExchangeOptions = record
     Scheme: string;
     /// the greatest backlog of unsent octets before a write waits
@@ -82,7 +45,7 @@ type
   end;
 
   TH1Exchange = class(TInterfacedObject, IServerRequest, IServerResponse,
-    IHandlerJob)
+    IHandlerJob, IH1ChannelOwner)
   private
     FLink: THostLink;
     FLinkRef: IInterface;
@@ -101,19 +64,32 @@ type
     // the response
     FHeadersSent: Boolean;
     FFinished: Boolean;
-    FNoBody: Boolean;
-    FChunked: Boolean;
-    FCloseDelimited: Boolean;
+    FFraming: TH1ResponseFraming;
     FKeep: Boolean;
     FRemaining: Int64;
     FDetached: Boolean;
-    function BuildHead(const AStatus: Integer; const AHeaders: THeaderBlock): TBytes;
+    FRegistry: IChannelRegistry;
+    FChannel: TH1ChunkedChannel;
+    FChannelRef: IDuplexChannel;
     procedure CheckCanWrite;
     procedure WaitForRoom;
     procedure Emit(const AData: TBytes);
     procedure CompleteExchange(const AFailed: Boolean);
     procedure SendError(const AStatus: Integer);
     function ClaimResponse: Boolean;
+    procedure SendHead(const AStatus: Integer; const AHeaders: THeaderBlock);
+    procedure WriteBody(const ABuffer; const ACount: Integer);
+    procedure EndResponse;
+    // IH1ChannelOwner
+    procedure OwnerEmit(const AData: TBytes);
+    function OwnerBacklog: Int64;
+    procedure OwnerHead(const AStatus: Integer; const AHeaders: THeaderBlock);
+    procedure OwnerComplete(const AStatus: Integer; const AHeaders: THeaderBlock;
+      const ABody: TBytes);
+    function OwnerChunked: Boolean;
+    function OwnerNoBody: Boolean;
+    procedure OwnerFinish(const AGraceful: Boolean);
+    procedure OwnerWatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
   public
     constructor Create(const ALink: THostLink; const AHead: TH1Head;
       const AOptions: TH1ExchangeOptions; const AOrdinal: LongWord);
@@ -162,177 +138,13 @@ type
     property Head: TH1Head read FHead;
   end;
 
-/// a complete response with no body, for an error before or instead of a handler
-// - the response closes the connection and has Content-Length 0
-function H1ErrorResponse(const AStatus, AMinor: Integer;
-  const AExtra: THeaderBlock): TBytes;
-
-/// the 100 Continue interim response
-function H1ContinueResponse: TBytes;
-
 implementation
 
 uses
-  Http2Server.Http1.Status, Http2Server.ResponseWriter;
+  Http2Server.Http1.Status;
 
 const
   cWaitSliceMs = 5;
-
-function StrToBytes(const AText: string): TBytes;
-begin
-  Result := nil;
-  SetLength(Result, Length(AText));
-  if Length(AText) > 0 then
-    Move(AText[1], Result[0], Length(AText));
-end;
-
-function H1ContinueResponse: TBytes;
-begin
-  Result := StrToBytes('HTTP/1.1 100 Continue'#13#10#13#10);
-end;
-
-function H1ErrorResponse(const AStatus, AMinor: Integer;
-  const AExtra: THeaderBlock): TBytes;
-var
-  S: string;
-  I: Integer;
-begin
-  S := Http1StatusLine(AStatus, AMinor);
-  for I := 0 to High(AExtra) do
-    S := S + AExtra[I].Name + ': ' + AExtra[I].Value + #13#10;
-  S := S + 'content-length: 0'#13#10'connection: close'#13#10'date: ' + HttpDateNow +
-    #13#10#13#10;
-  Result := StrToBytes(S);
-end;
-
-{ THostLink }
-
-constructor THostLink.Create(const AHost: TH1Host);
-begin
-  inherited Create;
-  FLock := TCriticalSection.Create;
-  FHost := AHost;
-end;
-
-destructor THostLink.Destroy;
-begin
-  FLock.Free;
-  inherited Destroy;
-end;
-
-function THostLink.Enter: TH1Host;
-begin
-  FLock.Acquire;
-  try
-    Result := FHost;
-    if Result <> nil then
-      Inc(FInFlight);
-  finally
-    FLock.Release;
-  end;
-end;
-
-procedure THostLink.Leave;
-begin
-  FLock.Acquire;
-  try
-    Dec(FInFlight);
-  finally
-    FLock.Release;
-  end;
-end;
-
-procedure THostLink.Orphan;
-var
-  Deadline: QWord;
-  Busy: Boolean;
-begin
-  FLock.Acquire;
-  try
-    FHost := nil;
-  finally
-    FLock.Release;
-  end;
-  // a call that began before the cut finishes; the wait is bounded
-  Deadline := GetTickCount64 + 10000;
-  repeat
-    FLock.Acquire;
-    try
-      Busy := FInFlight > 0;
-    finally
-      FLock.Release;
-    end;
-    if Busy then
-      Sleep(1);
-  until (not Busy) or (GetTickCount64 > Deadline);
-end;
-
-function THostLink.Alive: Boolean;
-begin
-  FLock.Acquire;
-  try
-    Result := FHost <> nil;
-  finally
-    FLock.Release;
-  end;
-end;
-
-procedure THostLink.EnqueueOutput(const AData: TBytes);
-var
-  H: TH1Host;
-begin
-  H := Enter;
-  if H = nil then
-    Exit;
-  try
-    H.EnqueueOutput(AData);
-  finally
-    Leave;
-  end;
-end;
-
-function THostLink.OutputBacklog: Int64;
-var
-  H: TH1Host;
-begin
-  Result := 0;
-  H := Enter;
-  if H = nil then
-    Exit;
-  try
-    Result := H.OutputBacklog;
-  finally
-    Leave;
-  end;
-end;
-
-procedure THostLink.RequestContinue;
-var
-  H: TH1Host;
-begin
-  H := Enter;
-  if H = nil then
-    Exit;
-  try
-    H.RequestContinue;
-  finally
-    Leave;
-  end;
-end;
-
-procedure THostLink.ExchangeFinished(const AKeepAlive, AFailed: Boolean);
-var
-  H: TH1Host;
-begin
-  H := Enter;
-  if H = nil then
-    Exit;
-  try
-    H.ExchangeFinished(AKeepAlive, AFailed);
-  finally
-    Leave;
-  end;
-end;
 
 { TH1Exchange }
 
@@ -350,8 +162,6 @@ begin
   FRoomEv := RTLEventCreate;
   FLastProgressMs := GetTickCount64;
   FKeep := AHead.KeepAlive;
-  // a request with no body has ended its body already
-  FBodyEnded := False;
 end;
 
 destructor TH1Exchange.Destroy;
@@ -550,15 +360,21 @@ begin
 end;
 
 procedure TH1Exchange.Cancel;
+var
+  Channel: TH1ChunkedChannel;
 begin
   FLock.Acquire;
   try
     FCancelled := True;
+    Channel := FChannel;
   finally
     FLock.Release;
   end;
   RTLEventSetEvent(FBodyEv);
   RTLEventSetEvent(FRoomEv);
+  // the application that holds a detached channel learns that the peer is gone
+  if Channel <> nil then
+    Channel.PeerGone;
 end;
 
 procedure TH1Exchange.RegisterCancelHook(const AHook: TCancelHook);
@@ -567,9 +383,32 @@ begin
 end;
 
 function TH1Exchange.Detach: IDuplexChannel;
+var
+  Pending: Boolean;
 begin
-  Result := nil;
-  raise EDetachRefused.Create('a detached stream is not available on HTTP/1.1');
+  FLock.Acquire;
+  try
+    if FDetached then
+      raise EDetachRefused.Create('the response is detached already');
+    if FFinished then
+      raise EHttpError.Create('the response has ended');
+    Pending := not FHeadersSent;
+  finally
+    FLock.Release;
+  end;
+  if (FRegistry <> nil) and not FRegistry.TryAcquire then
+    raise EDetachRefused.Create('the server holds its limit of detached streams');
+  FLock.Acquire;
+  try
+    FDetached := True;
+    FChannel := TH1ChunkedChannel.Create(Self, FRegistry, Pending);
+    FChannelRef := FChannel;
+    Result := FChannelRef;
+  finally
+    FLock.Release;
+  end;
+  if FRegistry <> nil then
+    FRegistry.Add(Result);
 end;
 
 procedure TH1Exchange.CheckCanWrite;
@@ -599,88 +438,22 @@ begin
     raise EStreamCancelled.Create('the connection ended');
 end;
 
-function TH1Exchange.BuildHead(const AStatus: Integer;
-  const AHeaders: THeaderBlock): TBytes;
-var
-  I: Integer;
-  S, N: string;
-  HasLength: Boolean;
-  Len: Int64;
-begin
-  CheckResponseHeaders(AHeaders);
-  HasLength := False;
-  Len := 0;
-  S := '';
-  for I := 0 to High(AHeaders) do
-  begin
-    N := LowerCase(AHeaders[I].Name);
-    if (N = 'connection') or (N = 'keep-alive') or (N = 'transfer-encoding') or
-       (N = 'upgrade') or (N = 'proxy-connection') then
-      raise EHttpError.Create('a handler never sets the connection field ' + N);
-    if N = 'content-length' then
-    begin
-      if (AStatus = 204) or (AStatus < 200) then
-        Continue;
-      if HasLength then
-        raise EHttpError.Create('a handler set Content-Length twice');
-      if not TryStrToInt64(Trim(AHeaders[I].Value), Len) or (Len < 0) then
-        raise EHttpError.Create('Content-Length is not a number');
-      HasLength := True;
-    end;
-    S := S + AHeaders[I].Name + ': ' + AHeaders[I].Value + #13#10;
-  end;
-
-  FNoBody := (FHead.Line.Method = 'HEAD') or (AStatus = 204) or (AStatus = 304);
-  FChunked := False;
-  FCloseDelimited := False;
-  FRemaining := 0;
-  if HasLength then
-    FRemaining := Len
-  else if not FNoBody then
-  begin
-    if FHead.Line.Minor = 1 then
-    begin
-      FChunked := True;
-      S := S + 'transfer-encoding: chunked'#13#10;
-    end
-    else
-      FCloseDelimited := True;
-  end;
-
-  // persistence: the connection stays open when the request allows it and the
-  // end of the response is known to the client
-  if FCloseDelimited then
-    FKeep := False;
-  if FHead.Line.Minor = 0 then
-  begin
-    if FKeep then
-      S := S + 'connection: keep-alive'#13#10;
-  end;
-  if not FKeep then
-    S := S + 'connection: close'#13#10;
-
-  // RFC 9110 section 6.6.1: the server adds Date unless the handler set one
-  if not ResponseHasHeader(AHeaders, 'date') then
-    S := S + 'date: ' + HttpDateNow + #13#10;
-  Result := StrToBytes(Http1StatusLine(AStatus, FHead.Line.Minor) + S + #13#10);
-end;
-
-procedure TH1Exchange.SendHeaders(const AStatus: Integer;
-  const AHeaders: THeaderBlock; const AEndStream: Boolean);
+procedure TH1Exchange.SendHead(const AStatus: Integer; const AHeaders: THeaderBlock);
 var
   Bytes: TBytes;
+  Framing: TH1ResponseFraming;
 begin
-  CheckCanWrite;
   if (AStatus < 100) or (AStatus > 599) or (AStatus = 101) then
     raise EHttpError.Create('the status is not usable for a response');
   if AStatus < 200 then
   begin
     // an interim response; a final response follows
     if FHead.Line.Minor = 1 then
-      Emit(StrToBytes(Http1StatusLine(AStatus, 1) + #13#10));
+      Emit(H1TextBytes(Http1StatusLine(AStatus, 1) + #13#10));
     Exit;
   end;
-  Bytes := BuildHead(AStatus, AHeaders);
+  Bytes := H1BuildResponseHead(FHead.Line.Method, FHead.Line.Minor, FKeep,
+    AStatus, AHeaders, Framing);
   if not ClaimResponse then
   begin
     // the core ended the exchange with an error answer, or the handler sent twice
@@ -688,8 +461,18 @@ begin
       raise EStreamCancelled.Create('the exchange ended before the response');
     raise EHttpError.Create('the response headers were sent already');
   end;
+  FFraming := Framing;
+  FKeep := Framing.Keep;
+  FRemaining := Framing.Remaining;
   WaitForRoom;
   Emit(Bytes);
+end;
+
+procedure TH1Exchange.SendHeaders(const AStatus: Integer;
+  const AHeaders: THeaderBlock; const AEndStream: Boolean);
+begin
+  CheckCanWrite;
+  SendHead(AStatus, AHeaders);
   if AEndStream then
     Finish;
 end;
@@ -700,21 +483,20 @@ begin
     Write(AData[0], Length(AData));
 end;
 
-procedure TH1Exchange.Write(const ABuffer; const ACount: Integer);
+procedure TH1Exchange.WriteBody(const ABuffer; const ACount: Integer);
 var
   Frame: TBytes;
   Hex: string;
   Off: Integer;
 begin
-  CheckCanWrite;
   if not FHeadersSent then
     raise EHttpError.Create('Write before SendHeaders');
   if ACount <= 0 then
     Exit;
-  if FNoBody then
+  if FFraming.NoBody then
     Exit;   // a HEAD response and a 204 or 304 response carry no body
   WaitForRoom;
-  if FChunked then
+  if FFraming.Chunked then
   begin
     Hex := IntToHex(ACount, 1) + #13#10;
     SetLength(Frame, Length(Hex) + ACount + 2);
@@ -726,14 +508,20 @@ begin
   end
   else
   begin
-    if (not FCloseDelimited) and (ACount > FRemaining) then
+    if (not FFraming.CloseDelimited) and (ACount > FRemaining) then
       raise EHttpError.Create('the handler wrote more than its Content-Length');
     SetLength(Frame, ACount);
     Move(ABuffer, Frame[0], ACount);
-    if not FCloseDelimited then
+    if not FFraming.CloseDelimited then
       Dec(FRemaining, ACount);
   end;
   Emit(Frame);
+end;
+
+procedure TH1Exchange.Write(const ABuffer; const ACount: Integer);
+begin
+  CheckCanWrite;
+  WriteBody(ABuffer, ACount);
 end;
 
 procedure TH1Exchange.SetBodyWriter(const AWriter: IBodyWriter);
@@ -759,25 +547,28 @@ begin
   FLink.ExchangeFinished(FKeep and not AFailed, AFailed);
 end;
 
-procedure TH1Exchange.Finish;
+procedure TH1Exchange.EndResponse;
 var
   Failed: Boolean;
 begin
-  if FDetached then
-    Exit;
-  if FFinished then
+  Failed := False;
+  if FFraming.Chunked then
+    Emit(H1TextBytes('0'#13#10#13#10))
+  else if (not FFraming.CloseDelimited) and (not FFraming.NoBody) and (FRemaining > 0) then
+    // the handler promised more octets than it wrote; the client would wait
+    Failed := True;
+  if FFraming.CloseDelimited then
+    FKeep := False;
+  CompleteExchange(Failed);
+end;
+
+procedure TH1Exchange.Finish;
+begin
+  if FDetached or FFinished then
     Exit;
   if not FHeadersSent then
     raise EHttpError.Create('Finish before SendHeaders');
-  Failed := False;
-  if FChunked then
-    Emit(StrToBytes('0'#13#10#13#10))
-  else if (not FCloseDelimited) and (not FNoBody) and (FRemaining > 0) then
-    // the handler promised more octets than it wrote; the client would wait
-    Failed := True;
-  if FCloseDelimited then
-    FKeep := False;
-  CompleteExchange(Failed);
+  EndResponse;
 end;
 
 procedure TH1Exchange.SendError(const AStatus: Integer);
@@ -825,6 +616,7 @@ end;
 procedure TH1Exchange.Run(const AHandler: IHttp2Handler;
   const ARegistry: IChannelRegistry);
 begin
+  FRegistry := ARegistry;
   try
     AHandler.Handle(Self, Self);
   except
@@ -866,6 +658,65 @@ begin
   end;
   Emit(H1ErrorResponse(503, FHead.Line.Minor, Extra));
   CompleteExchange(True);
+end;
+
+{ IH1ChannelOwner }
+
+procedure TH1Exchange.OwnerEmit(const AData: TBytes);
+begin
+  Emit(AData);
+end;
+
+function TH1Exchange.OwnerBacklog: Int64;
+begin
+  Result := FLink.OutputBacklog;
+end;
+
+procedure TH1Exchange.OwnerHead(const AStatus: Integer; const AHeaders: THeaderBlock);
+begin
+  SendHead(AStatus, AHeaders);
+end;
+
+procedure TH1Exchange.OwnerComplete(const AStatus: Integer;
+  const AHeaders: THeaderBlock; const ABody: TBytes);
+var
+  H: THeaderBlock;
+  N: Integer;
+begin
+  // a whole response with a body: the length is known, so the head carries it
+  H := Copy(AHeaders);
+  N := Length(H);
+  SetLength(H, N + 1);
+  H[N].Name := 'content-length';
+  H[N].Value := IntToStr(Length(ABody));
+  H[N].Sensitive := False;
+  SendHead(AStatus, H);
+  if Length(ABody) > 0 then
+    WriteBody(ABody[0], Length(ABody));
+  EndResponse;
+end;
+
+function TH1Exchange.OwnerChunked: Boolean;
+begin
+  Result := FFraming.Chunked;
+end;
+
+function TH1Exchange.OwnerNoBody: Boolean;
+begin
+  Result := FFraming.NoBody;
+end;
+
+procedure TH1Exchange.OwnerFinish(const AGraceful: Boolean);
+begin
+  if AGraceful and FFraming.CloseDelimited then
+    FKeep := False;
+  FChannel := nil;
+  CompleteExchange(not AGraceful);
+end;
+
+procedure TH1Exchange.OwnerWatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
+begin
+  FLink.WatchDrain(ALowWater, ASink);
 end;
 
 end.

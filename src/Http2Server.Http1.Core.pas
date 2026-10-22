@@ -28,9 +28,9 @@ interface
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs, Generics.Collections,
-  Http2Server.Hpack, Http2Server.Output, Http2Server.HandlerJob,
+  Http2Server.Hpack, Http2Server.Output, Http2Server.HandlerJob, Http2Server.Duplex,
   Http2Server.Http1.Limits, Http2Server.Http1.Guard, Http2Server.Http1.Parser,
-  Http2Server.Http1.Exchange;
+  Http2Server.Http1.Host, Http2Server.Http1.ResponseHead, Http2Server.Http1.Exchange;
 
 type
   /// what the core needs from the server
@@ -59,6 +59,9 @@ type
     FOutLock: TCriticalSection;
     FOut: TList<TBytes>;
     FOutBytes: Int64;
+    /// the writer of a detached stream that waits for the backlog to fall
+    FDrainWatcher: IChannelSink;
+    FDrainLow: Int64;
     FWaker: IWriteWaker;
     FCurrent: TH1Exchange;
     FCurrentRef: IInterface;
@@ -108,6 +111,7 @@ type
     function OutputBacklog: Int64; override;
     procedure RequestContinue; override;
     procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean); override;
+    procedure WatchDrain(const ALowWater: Int64; const ASink: IChannelSink); override;
   end;
 
 implementation
@@ -194,8 +198,11 @@ begin
 end;
 
 function TH1Core.TakeOutput(out AData: TBytes): Boolean;
+var
+  Watcher: IChannelSink;
 begin
   AData := nil;
+  Watcher := nil;
   FOutLock.Acquire;
   try
     Result := FOut.Count > 0;
@@ -204,7 +211,26 @@ begin
       AData := FOut[0];
       FOut.Delete(0);
       Dec(FOutBytes, Length(AData));
+      if (FDrainWatcher <> nil) and (FOutBytes <= FDrainLow) then
+      begin
+        Watcher := FDrainWatcher;
+        FDrainWatcher := nil;
+      end;
     end;
+  finally
+    FOutLock.Release;
+  end;
+  // the writer hears of the drain with no lock of the core held
+  if Watcher <> nil then
+    Watcher.WriteDrained;
+end;
+
+procedure TH1Core.WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
+begin
+  FOutLock.Acquire;
+  try
+    FDrainWatcher := ASink;
+    FDrainLow := ALowWater;
   finally
     FOutLock.Release;
   end;
