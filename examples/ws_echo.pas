@@ -173,6 +173,7 @@ begin
     .Build;
   Server.Start;
   WriteLn('WebSocket echo on http://', Host, ':', Server.Port, '/ ; press Enter to stop');
+  Flush(Output);
   ReadLn(Line);
   Server.Stop;
 end.

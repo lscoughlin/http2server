@@ -65,6 +65,17 @@ type
 
 implementation
 
+/// true when the block holds the :protocol pseudo-header of an extended CONNECT
+function HasProtocolPseudo(const ABlock: THeaderBlock): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ABlock) do
+    if ABlock[I].Name = ':protocol' then
+      Exit(True);
+  Result := False;
+end;
+
 procedure TServerConnectionCore.Feed(const AData: TBytes);
 var
   Offset, Total, FrameLen, Need: Integer;
@@ -340,6 +351,15 @@ begin
   // the first header block of a stream is the request head; a later block
   // is the trailer, because ProcessHeaders refuses any other second block
   IsTrailer := Stream.HasRequestHead;
+  if IsTrailer and HasProtocolPseudo(Stream.RemoteHeaders) then
+  begin
+    // RFC 8441 section 5: an extended CONNECT stream carries DATA after its head, and
+    // a trailer block is a stream error (RFC 9113 section 8.5)
+    SendRstStream(Stream.StreamId, ecProtocolError);
+    Stream.Cancel(ecProtocolError);
+    CloseStream(Stream);
+    Exit;
+  end;
   Stream.SetRemoteHeaders(Headers);
   if FHpack.BlockEndStream then
     Stream.MarkRemoteEnded;
@@ -354,7 +374,8 @@ function TServerConnectionCore.ValidateRequestBlock(
 var
   Verdict: TRequestVerdict;
 begin
-  Verdict := ValidateRequestHeaders(AStream.RemoteHeaders, AIsTrailer);
+  Verdict := ValidateRequestHeaders(AStream.RemoteHeaders, AIsTrailer,
+    FOptions.ConnectProtocol);
   if not Verdict.Valid then
   begin
     // RFC 9113 section 8.1.2.6: a malformed request is a stream error, so
@@ -443,7 +464,8 @@ begin
     Stream.DeliverData(Payload, AFrame.IsEndStream);
   end
   else if AFrame.IsEndStream then
-    Stream.MarkRemoteEnded;
+    // an empty DATA frame that ends the stream: a detached sink hears PeerClosed too
+    Stream.DeliverData(nil, True);
   if AFrame.IsEndStream and (not Stream.DeclaredLengthMatches) then
   begin
     // the body length differs from the declared content-length

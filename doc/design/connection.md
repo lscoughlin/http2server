@@ -135,6 +135,14 @@ pseudo-header order, the lowercase name rule, the forbidden fields, the `te`
 field and the `content-length` field. The document
 [protocol](protocol.md) holds the field rules.
 
+The call takes a third argument, `AConnectProtocol`, which is true when the server
+advertised `SETTINGS_ENABLE_CONNECT_PROTOCOL`. Only then is the pseudo-header
+`:protocol` legal (RFC 8441 section 4). It is legal once, with a value that is not
+empty, on the method `CONNECT` with `:authority` present, and the verdict then sets
+`IsExtendedConnect`. A trailer `HEADERS` block on a stream whose head holds `:protocol`
+is a stream error with `PROTOCOL_ERROR` (RFC 9113 section 8.5). A `CONNECT` without
+`:protocol` follows the rules it followed before.
+
 ## The HPACK state
 
 One connection owns one `THpackConnection`
@@ -183,6 +191,12 @@ socket call `Cancel` on the stream, and `Cancel` tells the sink once. The core
 raises the loss of the socket through `ConnectionLost`, which the async
 connection calls from `OnClose` and the destructor of the core calls again as a
 safety net. The document [seam](seam.md) describes the channel and its rules.
+
+A `DATA` frame that has no payload and carries `END_STREAM` also reaches the sink as
+`PeerClosed(True)`. The request that holds the stream calls the handler with the
+request and the response as interface references, so a handler that takes an interface
+of its own cannot destroy either object while the pool still uses it
+(`THandlerPool.TakeOne`).
 
 ## Test seams
 

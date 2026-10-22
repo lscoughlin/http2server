@@ -161,15 +161,15 @@ if command -v openssl >/dev/null 2>&1; then
         report_fail "openssl s_client ALPN result ($alpn)"
       fi
       if command -v curl >/dev/null 2>&1; then
-        tbody1=$(curl -sk --http1.1 "https://127.0.0.1:$tls_port/" </dev/null)
-        tbody2=$(curl -sk --http2 "https://127.0.0.1:$tls_port/" </dev/null)
+        tbody1=$(curl -sk -m 10 --http1.1 "https://127.0.0.1:$tls_port/" </dev/null)
+        tbody2=$(curl -sk -m 10 --http2 "https://127.0.0.1:$tls_port/" </dev/null)
         if [ -n "$tbody1" ] && [ "$tbody1" = "$tbody2" ]; then
           report_pass "curl --http1.1 and --http2 give the same body (TLS)"
         else
           report_fail "curl --http1.1 and --http2 differ over TLS ('$tbody1' / '$tbody2')"
         fi
         # a request with Connection: close takes the close path of a TLS connection
-        tbody3=$(curl -sk --http1.1 -H 'Connection: close' "https://127.0.0.1:$tls_port/" </dev/null)
+        tbody3=$(curl -sk -m 10 --http1.1 -H 'Connection: close' "https://127.0.0.1:$tls_port/" </dev/null)
         if [ -n "$tbody3" ] && [ "$tbody3" = "$tbody1" ]; then
           report_pass "curl --http1.1 with Connection: close over TLS"
         else
@@ -181,9 +181,9 @@ if command -v openssl >/dev/null 2>&1; then
       if command -v curl >/dev/null 2>&1 &&
          start_interop_server "$root/bin/interop_server" no-http11 \
            --cert="$cert_dir/localhost.crt" --key="$cert_dir/localhost.key"; then
-        if curl -sk --http1.1 "https://127.0.0.1:$INTEROP_PORT/" </dev/null >/dev/null 2>&1; then
+        if curl -sk -m 10 --http1.1 "https://127.0.0.1:$INTEROP_PORT/" </dev/null >/dev/null 2>&1; then
           report_fail "TLS with the fallback off still served HTTP/1.1"
-        elif curl -sk --http2 "https://127.0.0.1:$INTEROP_PORT/" </dev/null >/dev/null 2>&1; then
+        elif curl -sk -m 10 --http2 "https://127.0.0.1:$INTEROP_PORT/" </dev/null >/dev/null 2>&1; then
           report_pass "TLS with the fallback off refuses http/1.1 and serves h2"
         else
           report_fail "TLS with the fallback off refused h2 too"
@@ -198,6 +198,34 @@ if command -v openssl >/dev/null 2>&1; then
   fi
 else
   report_skip openssl "the tool is not installed"
+fi
+
+# --- WebSocket over HTTP/2 (RFC 8441) with h2 and wsproto ---
+# WS_PYTHON names a Python that holds the packages h2 and wsproto.
+ws_python="${WS_PYTHON:-python3}"
+if [ -x "$root/bin/ws_echo" ] && "$ws_python" -c 'import h2, wsproto' >/dev/null 2>&1; then
+  ws_out="${TMPDIR:-/tmp}/http2_ws_out.$$"
+  ( sleep 60 | "$root/bin/ws_echo" 127.0.0.1 0 >"$ws_out" 2>/dev/null ) &
+  ws_pid=$!
+  ws_port=''
+  i=0
+  while [ "$i" -lt 100 ] && [ -z "$ws_port" ]; do
+    ws_port=$(sed -n 's#.*127\.0\.0\.1:\([0-9][0-9]*\)/.*#\1#p' "$ws_out" 2>/dev/null | head -1)
+    i=$((i + 1))
+    sleep 0.1
+  done
+  if [ -n "$ws_port" ] &&
+     "$ws_python" "$here/ws_h2_client.py" 127.0.0.1 "$ws_port" 50 </dev/null >"$ws_out.client" 2>&1; then
+    report_pass "WebSocket echo over HTTP/2 with h2 and wsproto (50 messages, clean close)"
+  else
+    report_fail "WebSocket echo over HTTP/2 with h2 and wsproto"
+    cat "$ws_out" "$ws_out.client" 2>/dev/null
+  fi
+  kill "$ws_pid" 2>/dev/null
+  pkill -f "$root/bin/ws_echo" 2>/dev/null
+  rm -f "$ws_out" "$ws_out.client"
+else
+  report_skip "WebSocket over HTTP/2" "ws_echo or the Python packages h2 and wsproto are absent"
 fi
 
 exit "$exit_code"

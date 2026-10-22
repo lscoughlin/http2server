@@ -177,8 +177,44 @@ A real browser opened `examples/ws_echo` through `new WebSocket` in Chrome on
 2026-10-22: the page reported `open, subprotocol echo`, and the message `hello` came
 back as an echo.
 
-Gaps of this record: WebSocket over HTTP/2 is covered in its own section, and the
-Autobahn run covers HTTP/1.1 only.
+### WebSocket over HTTP/2
+
+The unit tests cover the validator rules for `:protocol` (10 tests: the setting, the
+method, the authority, a second value, an empty value, the order, the path, a `CONNECT`
+without `:protocol`, the `SETTINGS` entry) and the handshake of RFC 8441 on a live
+server with a raw frame client (17 tests: the setting with and without
+`WithWebSockets`, a stream error without the setting, `:protocol` on another method,
+the `200` without `END_STREAM`, an echo and a Ping, a GET and a WebSocket on one
+connection, 100 streams on one connection, a close from the client, an `END_STREAM`
+with no Close frame, `RST_STREAM`, `Stop`, the refusals with 400 and 403, a `401` from
+`Init`, a greeting and a subprotocol, a trailer, a message of 400 KiB under the
+default windows, the detach limit).
+
+The client in `tools/validate/ws_h2_client.py` uses the Python packages `h2` 4.4.1 and
+`wsproto` 1.3.2. It reads the setting, opens the extended CONNECT stream, sends 50 text
+messages, checks 50 matching echoes, closes with 1000 and reads the clean close. The
+check ran against `examples/ws_echo` on 2026-10-22 and passed. `tools/validate/run.sh`
+runs it when the packages are present.
+
+The browser check over HTTP/2 did not run. Chrome uses HTTP/2 only over TLS, and the
+test certificate of the repository is self-signed, so Chrome stops at a certificate
+page. The record of Chrome over HTTP/1.1 above and the `h2`/`wsproto` run above prove
+the two paths separately.
+
+The pool of handlers had a defect that this work found. A handler that took an
+interface of its own, for example with `Supports`, released the last reference of the
+request or the response object and destroyed it, and the pool then freed it a second
+time. The pool now holds an interface reference of each object across the call.
+
+Known intermittent issue: in the TLS leg of `tools/validate/run.sh`, a `curl --http2`
+request to a freshly started server sometimes gets no answer, and the server is idle
+while it waits. The issue appears in about 2 of 8 runs of the script. It also appears on
+the commit before this work, so it is older than WebSocket over HTTP/2. A loop of 40
+fresh servers outside the script showed no hang. The cause is open. The curl calls of the
+script have a time limit of 10 seconds, so the script reports FAIL and does not wait.
+
+Gaps of this record: the Autobahn run covers HTTP/1.1 only, and a WebSocket in a
+browser over HTTP/2 has no record.
 
 ### Server-sent events
 

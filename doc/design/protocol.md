@@ -84,6 +84,12 @@ first frame of a connection. It takes a `TConnectionSettings` record, so the
 frame carries the values that the factory set and not a default. The frame
 uses stream 0 and no ACK flag, as RFC 9113 section 6.5 requires.
 
+The record `TConnectionSettings` holds one more value than the six settings of
+RFC 9113: `EnableConnectProtocol`, which stands for `SETTINGS_ENABLE_CONNECT_PROTOCOL`
+(code 8, RFC 8441 section 9.1). `Encode` writes the entry only when the value is set,
+because the value 0 is the default. `Decode` reads the entry and stores the value. The
+server reads the entry of a client and does not use it (RFC 8441 section 3).
+
 ## HPACK
 
 `Http2Server.Hpack` holds the HPACK codec of RFC 7541: the static table, the

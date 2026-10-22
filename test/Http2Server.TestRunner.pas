@@ -63,6 +63,8 @@ uses
   Http2Server.Ws.Session.Test,
   Http2Server.Ws.Pool.Test,
   Http2Server.Ws.Http1.Test,
+  Http2Server.Ws.Http2.Test,
+  Http2Server.ConnectProtocol.Test,
   Http2Server.Output.Test,
   Http2Server.Licence.Test,
   Http2Server.Encoding.Test,

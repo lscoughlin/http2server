@@ -147,6 +147,14 @@ messages. An empty bucket closes the session with 1008 and raises
 `seWsBucketTripped`. The capacities and the refill rates are in `TWsOptions` (see
 [websocket](websocket.md)). A Close frame costs no token.
 
+## Handshake refusals on HTTP/2
+
+A WebSocket handshake that fails a check of `AcceptWebSocket` is answered with an
+ordinary response on its stream (see [websocket](websocket.md)). The answer is not a
+reset, so it costs no token of the reset bucket. The detach limit and the queue of the
+handler pool bound the number of such streams in flight. A request that the validator
+refuses is a stream error and costs a token as any other reset does.
+
 ## HTTP/1.1 rejections
 
 The HTTP/1.1 core uses no token bucket. A request that breaks a rule of the guard

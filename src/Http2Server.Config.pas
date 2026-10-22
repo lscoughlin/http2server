@@ -138,6 +138,7 @@ type
     FHttp11Fallback: Boolean;
     FHttp11: THttp11Limits;
     FWs: TWsOptions;
+    FWsEnabled: Boolean;
     FMaxConcurrentStreams: LongWord;
     FInitialStreamWindow: LongWord;
     FInitialConnectionWindow: LongWord;
@@ -328,6 +329,8 @@ type
     property Http11Fallback: Boolean read FHttp11Fallback;
     property Http11: THttp11Limits read FHttp11;
     property WebSockets: TWsOptions read FWs;
+    /// true once WithWebSockets ran; the server then advertises RFC 8441 extended CONNECT
+    property WebSocketsEnabled: Boolean read FWsEnabled;
 
     // ---- streams ----
 
@@ -472,6 +475,7 @@ begin
   Result.FHttp11Fallback := True;
   Result.FHttp11 := THttp11Limits.Create;
   Result.FWs := TWsOptions.Create;
+  Result.FWsEnabled := False;
   Result.FMaxConcurrentStreams := 100;
   Result.FInitialStreamWindow := 65535;
   Result.FInitialConnectionWindow := 65535;
@@ -622,6 +626,7 @@ function THttp2ServerFactory.WithWebSockets(
 begin
   Result := Self;
   Result.FWs := AOptions;
+  Result.FWsEnabled := True;
 end;
 
 function THttp2ServerFactory.WithHttp11Fallback(

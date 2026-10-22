@@ -79,6 +79,9 @@ type
     procedure TestTheDetachLimitAnswers503;
   end;
 
+/// wait until the recording of the handler holds AText; false after five seconds
+function WaitUntilText(const AHandler: TRecordingHandler; const AText: string): Boolean;
+
 implementation
 
 function WaitUntilText(const AHandler: TRecordingHandler; const AText: string): Boolean;

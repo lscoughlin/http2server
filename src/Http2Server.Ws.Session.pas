@@ -557,6 +557,9 @@ begin
   end;
   // the transport ended without a Close frame
   EndWithClosed(WsCloseAbnormal, '', False);
+  // a half close leaves the other half open: END_STREAM answers it (RFC 8441 section 5)
+  if AClean then
+    FChannel.Close(ccGraceful);
 end;
 
 procedure TWsSession.WriteDrained;

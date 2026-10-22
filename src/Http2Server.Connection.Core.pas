@@ -51,6 +51,8 @@ type
     OutboundBufferLimit: Integer;
     ConnectionUpdateThreshold: LongWord;
     StreamUpdateThreshold: LongWord;
+    /// advertise SETTINGS_ENABLE_CONNECT_PROTOCOL and accept :protocol (RFC 8441)
+    ConnectProtocol: Boolean;
   end;
 
   /// the core raises one of these events for every state change the server acts on
@@ -379,6 +381,7 @@ begin
   FSettings.HeaderTableSize := FOptions.MaxHeaderTableSize;
   FSettings.InitialWindowSize := LongWord(FOptions.InitialStreamWindow);
   FSettings.EnablePush := False;
+  FSettings.EnableConnectProtocol := FOptions.ConnectProtocol;
   // the peer settings start at the protocol defaults until the peer speaks
   FPeerSettings := TConnectionSettings.Defaults;
   FTripKind := lkReset;

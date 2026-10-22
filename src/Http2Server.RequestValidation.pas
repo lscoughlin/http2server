@@ -28,14 +28,19 @@ type
     Valid: Boolean;
     /// the content-length that the block declares, or -1 when absent
     DeclaredLength: Int64;
+    /// true when the block is an extended CONNECT of RFC 8441 (it carries :protocol)
+    IsExtendedConnect: Boolean;
   end;
 
 /// check one request header block
 /// - AIsTrailer is true for a trailing header block, where the
 ///   pseudo-headers are forbidden and the request pseudo-headers are not
 ///   required
+/// - AConnectProtocol is true when the server advertised
+///   SETTINGS_ENABLE_CONNECT_PROTOCOL; only then is :protocol legal
+///   (RFC 8441 section 4 and RFC 9113 section 8.1.1)
 function ValidateRequestHeaders(const ABlock: THeaderBlock;
-  const AIsTrailer: Boolean): TRequestVerdict;
+  const AIsTrailer: Boolean; const AConnectProtocol: Boolean = False): TRequestVerdict;
 
 /// true when AValue is a whole non-negative decimal number, and ALength
 /// then holds its value
@@ -49,6 +54,7 @@ const
   PseudoScheme    = ':scheme';
   PseudoPath      = ':path';
   PseudoAuthority = ':authority';
+  PseudoProtocol  = ':protocol';
 
   /// HTTP/1.1 connection-specific header fields, forbidden on the HTTP/2
   /// wire (RFC 9113 section 8.1.2.2)
@@ -127,15 +133,19 @@ begin
 end;
 
 function ValidateRequestHeaders(const ABlock: THeaderBlock;
-  const AIsTrailer: Boolean): TRequestVerdict;
+  const AIsTrailer: Boolean; const AConnectProtocol: Boolean): TRequestVerdict;
 var
   I: Integer;
   Name, Value, Lower: string;
   SeenRegular: Boolean;
-  HasMethod, HasScheme, HasPath, HasAuthority, HasLength: Boolean;
+  HasMethod, HasScheme, HasPath, HasAuthority, HasLength, HasProtocol: Boolean;
   Declared: Int64;
+  Method: string;
 begin
   Result.Valid := False;
+  Result.IsExtendedConnect := False;
+  HasProtocol := False;
+  Method := '';
   Result.DeclaredLength := -1;
   SeenRegular := False;
   HasMethod := False;
@@ -158,7 +168,13 @@ begin
       if AIsTrailer or SeenRegular then
         Exit;
       if (Name = PseudoMethod) and (not HasMethod) and (Value <> '') then
-        HasMethod := True
+      begin
+        HasMethod := True;
+        Method := Value;
+      end
+      else if (Name = PseudoProtocol) and AConnectProtocol and (not HasProtocol) and
+        (Value <> '') then
+        HasProtocol := True
       else if (Name = PseudoScheme) and (not HasScheme) and (Value <> '') then
         HasScheme := True
       else if (Name = PseudoPath) and (not HasPath) and (Value <> '') then
@@ -199,6 +215,14 @@ begin
   if (not AIsTrailer) and ((not HasMethod) or (not HasScheme) or
      (not HasPath)) then
     Exit;
+  if HasProtocol then
+  begin
+    // RFC 8441 section 4: :protocol belongs to CONNECT, and the request then names
+    // :scheme, :path and :authority
+    if (Method <> 'CONNECT') or (not HasAuthority) then
+      Exit;
+    Result.IsExtendedConnect := True;
+  end;
   Result.Valid := True;
 end;
 

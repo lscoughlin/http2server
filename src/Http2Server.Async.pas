@@ -809,6 +809,7 @@ begin
   result.OutboundBufferLimit := Integer(FFactory.InitialStreamWindow);
   result.ConnectionUpdateThreshold := FFactory.InitialConnectionWindow div 2;
   result.StreamUpdateThreshold := FFactory.InitialStreamWindow div 2;
+  result.ConnectProtocol := FFactory.WebSocketsEnabled;
 end;
 
 function THttp2AsyncServer.LeastControlBucket: TTokenBucketOptions;

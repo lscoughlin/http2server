@@ -718,6 +718,8 @@ var
   Outcome: TDequeueResult;
   Req: TServerStreamRequest;
   Res: TServerStreamResponse;
+  ReqRef: IServerRequest;
+  ResRef: IServerResponse;
 begin
   Result := False;
   if not FQueue.DequeueEntry(Entry, Outcome) then
@@ -769,6 +771,11 @@ begin
   Req := TServerStreamRequest.Create(Stream);
   Res := TServerStreamResponse.Create(Stream, FChannelRegistry);
   Res.OnDetach := DetachNotify;
+  // the pair holds one reference each for the whole call: a handler that takes an
+  // interface of its own (Supports, an assignment) would otherwise bring the count
+  // to zero on release and destroy the object while this method still uses it
+  ReqRef := Req;
+  ResRef := Res;
   try
     try
       // a handler must never run on an IO thread: it would hold the connection
@@ -787,8 +794,9 @@ begin
           ReportError(Stream, not Res.HeadersSent);
     end;
   finally
-    Res.Free;
-    Req.Free;
+    // the last reference destroys the pair
+    ResRef := nil;
+    ReqRef := nil;
     MarkIdle(Stream);
     Notify(seStreamCompleted, Stream, 'the handler returned');
   end;

@@ -165,6 +165,7 @@ together with no name clash.
 | `Http2Server.Ws.Session.pas` | 653 | websocket | the session: task queue, Init, receive path and stop |
 | `Http2Server.Ws.Environment.pas` | 297 | websocket | the options, counters, report and watchdog that the sessions share |
 | `Http2Server.Ws.Handshake.pas` | 187 | websocket | the accept key, the token lists, the subprotocol choice and the origin check of an upgrade |
+| `Http2Server.Ws.Http2.pas` | 150 | websocket | the checks and the 200 response of the HTTP/2 extended CONNECT |
 | `Http2Server.Ws.Accept.pas` | 50 | websocket | `AcceptWebSocket`, which picks the handshake of the protocol |
 | `Http2Server.Http1.SocketChannel.pas` | 340 | http1 | the raw-byte channel of an upgraded HTTP/1.1 connection |
 | `Http2Server.Http1.Upgrade.pas` | 190 | http1 | the checks and the 101 response of the HTTP/1.1 upgrade |

@@ -265,6 +265,64 @@ session. No `101` goes out before `Init` accepts.
   application that expects bursts sets a larger queue.
 
 
+## The HTTP/2 handshake
+
+A client opens a WebSocket on one HTTP/2 stream with the extended CONNECT method of
+RFC 8441 (checked on 2026-10-22 at https://www.rfc-editor.org/info/rfc8441). The
+handler code is the same: `AcceptWebSocket(ARequest, AResponse, AHandler)` picks the
+handshake from the response it receives.
+
+- **The setting.** The server sends `SETTINGS_ENABLE_CONNECT_PROTOCOL` (code 8) with the
+  value 1 in its first `SETTINGS` frame when the factory ran `WithWebSockets`. Without
+  the call the frame holds no such entry, and a request with `:protocol` is a stream
+  error of the type `PROTOCOL_ERROR` (RFC 8441 section 4). The server never sends the
+  value 0 after the value 1. The server reads the setting of a client and ignores it
+  (RFC 8441 section 3).
+- **The request.** The method is `CONNECT`, `:protocol` is `websocket`, and `:scheme`,
+  `:path` and `:authority` are present. The pseudo-header `:protocol` is legal once, with
+  a value that is not empty, and only on `CONNECT`. The request holds neither a key nor
+  `Upgrade` and `Connection` fields, because the stream carries the semantics (RFC 8441
+  section 5). A `CONNECT` without `:protocol` keeps the behaviour it had.
+- **The checks.** After the request validation the function checks, in this order: the
+  method (405, `Allow: CONNECT`), the protocol value (501 for a value other than
+  `websocket`), the version (400 with `sec-websocket-version: 13`), the origin policy
+  (403 or 400) and the detach limit (503 with `Retry-After`). An answer is an ordinary
+  response with `END_STREAM`, and the HTTP/2 connection stays open.
+- **Accept.** The response is `:status 200` with `sec-websocket-protocol` when `Init`
+  chose a subprotocol, and without `END_STREAM`. The stream is detached before `Init`
+  runs, so no `200` goes out before `Init` accepts. A reject from `Init` is an
+  ordinary response with `END_STREAM`.
+- **After the head.** The stream accepts `DATA`, `RST_STREAM`, `WINDOW_UPDATE` and
+  `PRIORITY`. A second `HEADERS` block, a trailer for example, is a stream error.
+
+### The close mapping
+
+| Event | Action on the stream |
+| --- | --- |
+| both Close frames are done | the server ends its half with `END_STREAM` |
+| the client ends its half with no Close frame | `Closed(1006, clean = False)`, then `END_STREAM` from the server |
+| the parser finds a protocol error | Close 1002, then the server ends the stream |
+| `RST_STREAM` from the client | `Closed(1006)`, and no frame goes out |
+| `GOAWAY` or the loss of the connection | `Closed(1006)` |
+| `Stop` | Close 1001, then `END_STREAM` after the close timeout |
+
+The HTTP/2 connection stays open in each row except the last two.
+
+### Flow control
+
+The `DATA` frames of a WebSocket stream use the usual windows of the stream and of the
+connection. The session returns credit to the stream when the parser takes the octets,
+and it holds the credit back while its queue is full. An outbound message waits in the
+channel queue, and `Send` answers `srFull` when the queue is full.
+
+### The cost of a refusal
+
+A refused handshake is an ordinary response on a live stream. It is not a reset, and
+no abuse bucket counts it. A request that the validator finds malformed, a `:protocol`
+without the setting for example, is a stream error and counts as the other resets
+of the connection do (see [limits](limits.md)).
+
+
 ## Settings
 
 The record `TWsOptions` belongs to the server builder (`WithWebSockets`). The

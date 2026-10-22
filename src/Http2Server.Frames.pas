@@ -98,8 +98,11 @@ type
     InitialWindowSize: LongWord;     // SETTINGS_INITIAL_WINDOW_SIZE (id 4)
     MaxFrameSize: LongWord;          // SETTINGS_MAX_FRAME_SIZE (id 5)
     MaxHeaderListSize: LongWord;     // SETTINGS_MAX_HEADER_LIST_SIZE (id 6)
+    /// SETTINGS_ENABLE_CONNECT_PROTOCOL (id 8, RFC 8441 section 9.1); Encode writes the
+    /// entry only when it is set, because the value 0 is the default
+    EnableConnectProtocol: Boolean;
     class function Defaults: TConnectionSettings; static;
-    /// serialize the six settings as SETTINGS payload entries
+    /// serialize the settings as SETTINGS payload entries
     function Encode: TBytes;
     /// parse SETTINGS payload entries (unknown ids are ignored)
     class function Decode(const APayload: TBytes): TConnectionSettings; static;
@@ -112,6 +115,7 @@ const
   SettingInitialWindowSize    = 4;
   SettingMaxFrameSize         = 5;
   SettingMaxHeaderListSize    = 6;
+  SettingEnableConnectProtocol = 8;
 
 /// wire byte for a flag set (public so tests can pin the mapping)
 function FrameFlagsToByte(const AFlags: TFrameFlags): Byte;
@@ -342,13 +346,14 @@ begin
   Result.InitialWindowSize := 65535;
   Result.MaxFrameSize := DefaultMaxFrameSize;
   Result.MaxHeaderListSize := MaxStreamId;  // effectively unlimited
+  Result.EnableConnectProtocol := False;
 end;
 
 function TConnectionSettings.Encode: TBytes;
 var
   Count, I: Integer;
-  Ids: array[0..5] of Word;
-  Vals: array[0..5] of LongWord;
+  Ids: array[0..6] of Word;
+  Vals: array[0..6] of LongWord;
 begin
   Result := nil;
   Ids[0] := SettingHeaderTableSize;      Vals[0] := HeaderTableSize;
@@ -357,7 +362,12 @@ begin
   Ids[3] := SettingInitialWindowSize;    Vals[3] := InitialWindowSize;
   Ids[4] := SettingMaxFrameSize;         Vals[4] := MaxFrameSize;
   Ids[5] := SettingMaxHeaderListSize;    Vals[5] := MaxHeaderListSize;
-  Count := Length(Ids);
+  Count := 6;
+  if EnableConnectProtocol then
+  begin
+    Ids[6] := SettingEnableConnectProtocol; Vals[6] := 1;
+    Count := 7;
+  end;
   SetLength(Result, Count * SettingsEntrySize);
   for I := 0 to Count - 1 do
   begin
@@ -409,6 +419,10 @@ begin
         end;
       SettingMaxHeaderListSize:
         Result.MaxHeaderListSize := Value;
+      SettingEnableConnectProtocol:
+        // RFC 8441 section 3: receipt by a server has no effect, and the value is not
+        // checked here; a value above 1 would be a client fault the server ignores
+        Result.EnableConnectProtocol := Value = 1;
     else
       ; // unknown settings must be ignored (RFC 7540 section 6.5.2)
     end;

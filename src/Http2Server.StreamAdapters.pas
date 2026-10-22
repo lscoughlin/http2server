@@ -33,6 +33,19 @@ uses
   Http2Server.StreamChannel;
 
 type
+  /// what an upgrade needs to know of an HTTP/2 request: the :protocol pseudo-header
+  IH2ConnectRequest = interface
+    ['{7E1F0C11-00C6-4A11-9C72-000000000F06}']
+    /// the value of :protocol, or an empty text for a request that has none
+    function Protocol: string;
+  end;
+
+  /// what an upgrade needs from an HTTP/2 response: the WebSocket environment
+  IH2Upgradable = interface
+    ['{7E1F0C11-00C7-4A11-9C72-000000000F07}']
+    function WsEnvironment: IInterface;
+  end;
+
   /// the report of a detach: the stream, and True when the registry refused it
   TDetachNotify = procedure(const AStream: TServerStream;
     const ARefused: Boolean) of object;
@@ -41,7 +54,7 @@ type
   ///
   /// The adapter is byte-oriented, as the seam requires.  The pseudo-headers
   /// come from the decoded request block of the stream.
-  TServerStreamRequest = class(TInterfacedObject, IServerRequest)
+  TServerStreamRequest = class(TInterfacedObject, IServerRequest, IH2ConnectRequest)
   private
     FStream: TServerStream;
     function PseudoValue(const AName: string): string;
@@ -57,13 +70,14 @@ type
     function BodyIsComplete: Boolean;
     function IsCancelled: Boolean;
     function StreamId: LongWord;
+    function Protocol: string;
   end;
 
   /// The response as one handler writes it, backed by one TServerStream.
   ///
   /// SendHeaders holds the response block for the IO side, which owns the
   /// HPACK encoder.  A body writer is pulled when the handler calls Finish.
-  TServerStreamResponse = class(TInterfacedObject, IServerResponse)
+  TServerStreamResponse = class(TInterfacedObject, IServerResponse, IH2Upgradable)
   private
     FStream: TServerStream;
     FBodyWriter: IBodyWriter;
@@ -87,6 +101,7 @@ type
     function IsCancelled: Boolean;
     function StreamId: LongWord;
     function Detach: IDuplexChannel;
+    function WsEnvironment: IInterface;
     /// the report of a detach, for the observer of the server
     property OnDetach: TDetachNotify read FOnDetach write FOnDetach;
     /// true once the handler detached the stream
@@ -181,7 +196,20 @@ begin
   Result := FStream.StreamId;
 end;
 
+function TServerStreamRequest.Protocol: string;
+begin
+  Result := PseudoValue(':protocol');
+end;
+
 { TServerStreamResponse }
+
+function TServerStreamResponse.WsEnvironment: IInterface;
+begin
+  if FRegistry = nil then
+    Result := nil
+  else
+    Result := FRegistry.WsEnvironment;
+end;
 
 constructor TServerStreamResponse.Create(const AStream: TServerStream;
   const ARegistry: IChannelRegistry);
