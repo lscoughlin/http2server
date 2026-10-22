@@ -1,0 +1,14 @@
+# Keep the build context small. Stage 1 of the Dockerfile does not read these
+# files, and stage 2 builds from the tracked sources only.
+.git
+.obsidian
+.claude
+bin
+third_party
+test/certs
+plan
+doc/references
+*.o
+*.ppu
+*.a
+__pycache__
