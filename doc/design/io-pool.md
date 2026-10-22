@@ -122,8 +122,8 @@ mORMot2 keeps the object of a closed connection in a pool and gives it to a late
 connection (`TAsyncConnections.ConnectionCreate`). It then calls `Recycle` and
 `AfterCreate`, and it does not call `BeforeDestroy`. The class `THttp2AsyncConnection`
 releases the cores, the waker, the events and the send lock in `ReleaseState`, which
-`BeforeDestroy` and `Recycle` both call. A reused object that kept the HTTP/1.1 core of
-its last connection sent no output on a new HTTP/2 connection.
+`BeforeDestroy` and `Recycle` both call. After `ReleaseState` the object is in the
+undecided mode, as for a new connection, and the next first read chooses the protocol.
 
 ## The write wake-up
 
