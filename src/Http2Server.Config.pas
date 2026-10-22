@@ -41,6 +41,7 @@ uses
   Http2Server.Limits,
   Http2Server.Duplex,
   Http2Server.Http1.Limits,
+  Http2Server.Ws.Options,
   Http2Server.Seam;
 
 type
@@ -136,6 +137,7 @@ type
     FQueue: TQueueOptions;
     FHttp11Fallback: Boolean;
     FHttp11: THttp11Limits;
+    FWs: TWsOptions;
     FMaxConcurrentStreams: LongWord;
     FInitialStreamWindow: LongWord;
     FInitialConnectionWindow: LongWord;
@@ -217,6 +219,11 @@ type
     function WithHttp11Fallback(const AValue: Boolean): THttp2ServerFactory;
     /// the limits of the HTTP/1.1 parser
     function WithHttp11Limits(const ALimits: THttp11Limits): THttp2ServerFactory;
+
+    // ---- WebSocket ----
+
+    /// the settings of the WebSocket part of the server
+    function WithWebSockets(const AOptions: TWsOptions): THttp2ServerFactory;
 
     // ---- streams ----
 
@@ -320,6 +327,7 @@ type
     property Queue: TQueueOptions read FQueue;
     property Http11Fallback: Boolean read FHttp11Fallback;
     property Http11: THttp11Limits read FHttp11;
+    property WebSockets: TWsOptions read FWs;
 
     // ---- streams ----
 
@@ -463,6 +471,7 @@ begin
   Result.FQueue := TQueueOptions.Create;
   Result.FHttp11Fallback := True;
   Result.FHttp11 := THttp11Limits.Create;
+  Result.FWs := TWsOptions.Create;
   Result.FMaxConcurrentStreams := 100;
   Result.FInitialStreamWindow := 65535;
   Result.FInitialConnectionWindow := 65535;
@@ -606,6 +615,13 @@ function THttp2ServerFactory.WithQueue(
 begin
   Result := Self;
   Result.FQueue := AOptions;
+end;
+
+function THttp2ServerFactory.WithWebSockets(
+  const AOptions: TWsOptions): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FWs := AOptions;
 end;
 
 function THttp2ServerFactory.WithHttp11Fallback(
@@ -788,6 +804,7 @@ begin
   if (FSseStallTimeoutMs < 0) or (FSseStallTimeoutMs > cSseMaxMs) then
     Add('the SSE stall timeout is outside 0 to one hour');
   FHttp11.Problems(Problems);
+  FWs.Problems(Problems);
   if FQueue.Depth < 0 then
     Add('the queue depth is below 0');
   if FQueue.MaxWaitMs < 0 then

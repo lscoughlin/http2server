@@ -96,6 +96,20 @@ server holds `MaxDetachedStreams` channels. The facade `Http2Server` re-exports
 `IDuplexChannel`, `IChannelSink`, `TSendResult`, `TChannelClose`,
 `TChannelState` and `EDetachRefused`.
 
+## WebSocket
+
+An application serves a WebSocket with an `IWsHandler`. The handler gets an
+`IWsSession` and is called on a thread of the streaming pool. `Init` authorises the
+upgrade, `Message` gets a whole message, `Pong` and `Closed` report the rest, and
+`Failed` reports a callback that raised. `WithWebSockets` sets the limits, the
+timers, the origin policy and the subprotocols (`TWsOptions`). The facade
+`Http2Server` re-exports `TWsOptions`, `TWsOriginPolicy`, `IWsSession`,
+`IWsHandler`, `TWsInitResult`, the origin policies, the close codes that a server
+sends and the observer events `seWsOpened`, `seWsRejected`, `seWsClosed`,
+`seWsFailed` and `seWsBucketTripped`. The statistics hold the open sessions and the
+message and octet counts. The document [websocket](websocket.md) describes the
+contract.
+
 ## HTTP/1.1
 
 The same handler serves HTTP/1.1. `WithHttp11Fallback` turns the fallback on or

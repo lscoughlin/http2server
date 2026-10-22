@@ -33,7 +33,8 @@ uses
   Http2Server.Observer,
   Http2Server.Duplex,
   Http2Server.Config,
-  Http2Server.Async;
+  Http2Server.Async,
+  Http2Server.Ws.Environment;
 
 type
   /// one running server
@@ -60,6 +61,9 @@ type
   THttp2Server = class(TInterfacedObject, IHttp2Server)
   private
     FAsync: THttp2AsyncServer;
+    /// the WebSocket environment: options, counters, watchdog
+    FWsEnv: TWsEnvironment;
+    FWsEnvRef: IInterface;
     FObserver: IHttp2ServerObserver;
     FGracefulStopMs: Integer;
     FStarted: Boolean;
@@ -95,6 +99,9 @@ begin
   FAsync := THttp2AsyncServer.Create(AFactory);
   FAsync.Observer := FObserver;
   FAsync.Handlers.Observer := FObserver;
+  FWsEnv := TWsEnvironment.Create(AFactory.WebSockets, AFactory.Clock, FAsync.Notify);
+  FWsEnvRef := FWsEnv;
+  FAsync.Channels.SetWsEnvironment(FWsEnvRef);
 end;
 
 destructor THttp2Server.Destroy;
@@ -102,6 +109,8 @@ begin
   Stop;
   FAsync.Free;
   FAsync := nil;
+  FWsEnv.Stop;
+  FWsEnvRef := nil;
   inherited Destroy;
 end;
 
@@ -125,7 +134,10 @@ begin
   if FGracefulStopMs <= 0 then
     Exit;
   Deadline := GetTickCount64 + QWord(FGracefulStopMs);
-  while (FAsync.OpenStreamTotal > 0) and (GetTickCount64 < Deadline) do
+  // a detached stream counts as open until its channel is released, on HTTP/1.1
+  // too, and a WebSocket session ends its closing handshake in this time
+  while ((FAsync.OpenStreamTotal > 0) or (FAsync.Channels.Count > 0)) and
+        (GetTickCount64 < Deadline) do
     Sleep(20);
 end;
 
@@ -164,6 +176,7 @@ begin
   Result.ResetTotal := 0;
   Result.TrippedTotal := 0;
   Result.DetachedStreams := 0;
+  FWsEnv.FillStats(Result);
   if FAsync = nil then
     Exit;
   if FAsync.Handlers <> nil then

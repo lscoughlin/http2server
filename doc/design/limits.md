@@ -139,6 +139,14 @@ control bucket on each limited control frame. A `False` answer starts the
 close sequence. The observer receives the bucket trip, and then the
 `GOAWAY` sent event.
 
+## WebSocket buckets
+
+A session has two token buckets of the class in this unit. The control bucket
+counts the Ping and Pong frames that arrive, and the message bucket counts the data
+messages. An empty bucket closes the session with 1008 and raises
+`seWsBucketTripped`. The capacities and the refill rates are in `TWsOptions` (see
+[websocket](websocket.md)). A Close frame costs no token.
+
 ## HTTP/1.1 rejections
 
 The HTTP/1.1 core uses no token bucket. A request that breaks a rule of the guard

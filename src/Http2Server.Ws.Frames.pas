@@ -98,6 +98,13 @@ function WsEncodeFrame(const AOpcode: Byte; const AFin: Boolean;
   const APayload: TBytes; const AMasked: Boolean;
   const AKey: TWsMaskKey): TBytes;
 
+/// one message as a run of frames of at most AFrameSize payload octets
+// - the first frame carries AOpcode (text or binary), the others are continuation
+//   frames, and the last has FIN. An empty message is one empty frame.
+// - the frames are not masked, as a server sends them
+function WsEncodeMessage(const AOpcode: Byte; const AData: TBytes;
+  const AFrameSize: Integer): TBytes;
+
 /// the payload of a Close frame
 // - raises EHttpError for a code that is not sendable or a reason over 123 octets
 function WsBuildClosePayload(const ACode: Integer;
@@ -232,6 +239,46 @@ begin
   Move(Head[0], Result[0], Length(Head));
   if Length(Body) > 0 then
     Move(Body[0], Result[Length(Head)], Length(Body));
+end;
+
+function WsEncodeMessage(const AOpcode: Byte; const AData: TBytes;
+  const AFrameSize: Integer): TBytes;
+var
+  Key: TWsMaskKey;
+  Frames, At, N, Op, Total, Head: Integer;
+  Frame: TBytes;
+  Last: Boolean;
+begin
+  Result := nil;
+  Key := WsMaskKeyFromLongWord(0);
+  if AFrameSize < 1 then
+    raise EHttpError.Create('the WebSocket frame size is below 1');
+  if Length(AData) = 0 then
+    Exit(WsEncodeFrame(AOpcode, True, nil, False, Key));
+  Frames := (Length(AData) + AFrameSize - 1) div AFrameSize;
+  // the size is known: each frame adds a header of 2, 4 or 10 octets
+  Total := 0;
+  At := 0;
+  Result := nil;
+  SetLength(Result, 0);
+  while At < Length(AData) do
+  begin
+    N := Length(AData) - At;
+    if N > AFrameSize then
+      N := AFrameSize;
+    Last := At + N >= Length(AData);
+    if At = 0 then
+      Op := AOpcode
+    else
+      Op := WsOpContinuation;
+    Frame := WsEncodeFrame(Op, Last, Copy(AData, At, N), False, Key);
+    Head := Total;
+    SetLength(Result, Total + Length(Frame));
+    Move(Frame[0], Result[Head], Length(Frame));
+    Inc(Total, Length(Frame));
+    Inc(At, N);
+    Dec(Frames);
+  end;
 end;
 
 function WsBuildClosePayload(const ACode: Integer;

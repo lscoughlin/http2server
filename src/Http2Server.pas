@@ -37,7 +37,11 @@ uses
   Http2Server.Encoding,
   Http2Server.Server,
   Http2Server.Sse.Encoder,
-  Http2Server.Sse;
+  Http2Server.Sse,
+  Http2Server.Ws.Origin,
+  Http2Server.Ws.Options,
+  Http2Server.Ws.Types,
+  Http2Server.Ws.Frames;
 
 type
   /// the server lifecycle
@@ -71,6 +75,13 @@ type
   TChannelClose = Http2Server.Duplex.TChannelClose;
   TChannelState = Http2Server.Duplex.TChannelState;
   EDetachRefused = Http2Server.Duplex.EDetachRefused;
+
+  /// WebSocket: the settings, the origin policy, the session and the handler
+  TWsOptions = Http2Server.Ws.Options.TWsOptions;
+  TWsOriginPolicy = Http2Server.Ws.Origin.TWsOriginPolicy;
+  IWsSession = Http2Server.Ws.Types.IWsSession;
+  IWsHandler = Http2Server.Ws.Types.IWsHandler;
+  TWsInitResult = Http2Server.Ws.Types.TWsInitResult;
 
   /// server-sent events
   ISseStream = Http2Server.Sse.ISseStream;
@@ -131,6 +142,30 @@ const
   seHandlerException = Http2Server.Observer.seHandlerException;
   seStreamDetached = Http2Server.Observer.seStreamDetached;
   seStreamDetachRefused = Http2Server.Observer.seStreamDetachRefused;
+
+  /// the origin policies
+  opSameOrAbsent = Http2Server.Ws.Origin.opSameOrAbsent;
+  opAllowList = Http2Server.Ws.Origin.opAllowList;
+  opAllowListOnly = Http2Server.Ws.Origin.opAllowListOnly;
+  opAny = Http2Server.Ws.Origin.opAny;
+  opNone = Http2Server.Ws.Origin.opNone;
+
+  /// the observer events of WebSocket
+  seWsOpened = Http2Server.Observer.seWsOpened;
+  seWsRejected = Http2Server.Observer.seWsRejected;
+  seWsClosed = Http2Server.Observer.seWsClosed;
+  seWsFailed = Http2Server.Observer.seWsFailed;
+  seWsBucketTripped = Http2Server.Observer.seWsBucketTripped;
+
+  /// the close codes of RFC 6455 section 7.4.1 that a server sends
+  WsCloseNormal = Http2Server.Ws.Frames.WsCloseNormal;
+  WsCloseGoingAway = Http2Server.Ws.Frames.WsCloseGoingAway;
+  WsCloseProtocolError = Http2Server.Ws.Frames.WsCloseProtocolError;
+  WsCloseUnsupported = Http2Server.Ws.Frames.WsCloseUnsupported;
+  WsCloseBadData = Http2Server.Ws.Frames.WsCloseBadData;
+  WsClosePolicy = Http2Server.Ws.Frames.WsClosePolicy;
+  WsCloseTooBig = Http2Server.Ws.Frames.WsCloseTooBig;
+  WsCloseInternal = Http2Server.Ws.Frames.WsCloseInternal;
 
   /// the constants of the channel types
   srQueued = Http2Server.Duplex.srQueued;

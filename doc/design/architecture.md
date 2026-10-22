@@ -157,7 +157,14 @@ together with no name clash.
 | `Http2Server.ResponseWriter.pas` | 144 | seam | the `Date` field and the header checks that both protocols share |
 | `Http2Server.Sse.Encoder.pas` | 190 | streaming | the encoder of server-sent events: field rules, line splitting and the injection checks |
 | `Http2Server.Sse.pas` | 347 | streaming | `StartSse` and the event stream: serialised sends, the keep-alive timer and the stall rule |
-| `Http2Server.Ws.Frames.pas` | 287 | codec | WebSocket opcodes, close codes, the mask, the frame encoder and the Close payload helpers (RFC 6455) |
+| `Http2Server.Ws.Origin.pas` | 341 | websocket | the origin policy of an upgrade request |
+| `Http2Server.Ws.Options.pas` | 257 | websocket | the record `TWsOptions` of the server builder |
+| `Http2Server.Ws.Types.pas` | 162 | websocket | `IWsSession`, `IWsHandler`, `TWsInitResult` and the interfaces to the server |
+| `Http2Server.Ws.Close.pas` | 116 | websocket | the timer rules of ping, pong and close |
+| `Http2Server.Ws.SessionCore.pas` | 631 | websocket | the state, the sender, the closing handshake and the timers of a session |
+| `Http2Server.Ws.Session.pas` | 653 | websocket | the session: task queue, Init, receive path and stop |
+| `Http2Server.Ws.Environment.pas` | 297 | websocket | the options, counters, report and watchdog that the sessions share |
+| `Http2Server.Ws.Frames.pas` | 334 | codec | WebSocket opcodes, close codes, the mask, the frame encoder and the Close payload helpers (RFC 6455) |
 | `Http2Server.Ws.Utf8.pas` | 116 | codec | a resumable UTF-8 validator that holds three bytes of state |
 | `Http2Server.Ws.Parser.pas` | 291 | codec | the resumable frame parser; it pushes the unmasked payload of a data frame to a sink and buffers no data frame |
 | `Http2Server.Ws.Reader.pas` | 265 | codec | the assembly of frames into messages with the size, fragment and UTF-8 checks; the codec holds no socket and no thread |

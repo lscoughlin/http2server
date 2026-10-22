@@ -81,6 +81,14 @@ type
 
   IChannelRegistry = interface;
 
+  /// a layer that wants to close its channel by its own rules when the server stops
+  // - a WebSocket session sends Close 1001 and waits for the reply
+  IChannelCloser = interface
+    ['{7E1F0C11-0054-4A11-9C72-000000000804}']
+    /// the server stops; ccGraceful asks for the closing handshake, ccAbort is final
+    procedure CloseForStop(const AMode: TChannelClose);
+  end;
+
   /// the phase of a channel
   TChannelState = (
     /// detached before the response headers: no response has left yet
@@ -166,6 +174,13 @@ type
     function LowWater: Integer;
     /// a new work source of the streaming pool; nil when the server has none
     function NewSource: IStreamSource;
+    /// a layer that closes its own channel when the server stops
+    // - CloseAll calls the closers first
+    procedure AddCloser(const ACloser: IChannelCloser);
+    procedure RemoveCloser(const ACloser: IChannelCloser);
+    /// the WebSocket environment of the server; nil when none
+    function WsEnvironment: IInterface;
+    procedure SetWsEnvironment(const AValue: IInterface);
     /// the period of the keep-alive comment of an event stream; 0 means none
     function SseKeepAliveMs: Integer;
     /// how long a full event stream may stay full before the server closes it
@@ -182,6 +197,8 @@ type
     FCount: Integer;
     FChannels: TList<IDuplexChannel>;
     FSourceProvider: TNewSourceFunc;
+    FClosers: TList<IChannelCloser>;
+    FWsEnvironment: IInterface;
     FSseKeepAliveMs: Integer;
     FSseStallMs: Integer;
   public
@@ -199,6 +216,11 @@ type
     function QueueLimit: Integer;
     function LowWater: Integer;
     function NewSource: IStreamSource;
+    procedure AddCloser(const ACloser: IChannelCloser);
+    procedure RemoveCloser(const ACloser: IChannelCloser);
+    function WsEnvironment: IInterface;
+    procedure SetWsEnvironment(const AValue: IInterface);
+    property Environment: IInterface write FWsEnvironment;
     function SseKeepAliveMs: Integer;
     function SseStallTimeoutMs: Integer;
     /// the maker of work sources; set once, before the first channel
@@ -220,10 +242,12 @@ begin
   FQueueLimit := AQueueLimit;
   FLowWater := ALowWater;
   FChannels := TList<IDuplexChannel>.Create;
+  FClosers := TList<IChannelCloser>.Create;
 end;
 
 destructor TChannelRegistry.Destroy;
 begin
+  FClosers.Free;
   FChannels.Free;
   FLock.Free;
   inherited Destroy;
@@ -275,17 +299,52 @@ end;
 procedure TChannelRegistry.CloseAll(const AMode: TChannelClose);
 var
   Copy: TArray<IDuplexChannel>;
+  Closers: TArray<IChannelCloser>;
   I: Integer;
 begin
   // close outside the lock: Close calls back into Remove
   FLock.Acquire;
   try
     Copy := FChannels.ToArray;
+    Closers := FClosers.ToArray;
   finally
     FLock.Release;
   end;
+  // a layer with its own closing rules goes first
+  for I := 0 to High(Closers) do
+    Closers[I].CloseForStop(AMode);
   for I := 0 to High(Copy) do
     Copy[I].Close(AMode);
+end;
+
+procedure TChannelRegistry.AddCloser(const ACloser: IChannelCloser);
+begin
+  FLock.Acquire;
+  try
+    FClosers.Add(ACloser);
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TChannelRegistry.RemoveCloser(const ACloser: IChannelCloser);
+begin
+  FLock.Acquire;
+  try
+    FClosers.Remove(ACloser);
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TChannelRegistry.WsEnvironment: IInterface;
+begin
+  Result := FWsEnvironment;
+end;
+
+procedure TChannelRegistry.SetWsEnvironment(const AValue: IInterface);
+begin
+  FWsEnvironment := AValue;
 end;
 
 function TChannelRegistry.Count: Integer;

@@ -149,6 +149,20 @@ thread, also from inside a task.
 The pool lock is the innermost lock. A caller can post while it holds the
 connection lock, and a pool thread runs a task with no pool lock held.
 
+### The tasks of a WebSocket session
+
+A WebSocket session is a work source of this pool. Its tasks are `Init`, each
+message, each Pong and the `Closed` call. The tasks of one session run one at a
+time and in the order of the events, and sessions take turns. With the default pool
+size of 1, one thread runs the callbacks of every session in turn. A callback that
+blocks, for example a database call in `Init`, delays every session and every timer
+of an event stream, and the application raises `StreamPoolSize` for such callbacks.
+A callback never runs on an IO thread. The IO thread parses the frames, answers Ping
+and Close, and queues the data messages. The time limit of `Init` runs on one
+watchdog thread of the server and not on the pool, because `Init` can hold every pool
+thread. The lock of a session guards its flags and its queue only, and the session
+never holds it across a call into the channel or the handler.
+
 ## Wake-up safety
 
 The wake-up follows the mORMot2 pattern. The IO thread sets a pending flag

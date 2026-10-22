@@ -50,6 +50,7 @@ library.
 | [output](design/output.md) | The response path: encode under the connection lock, then frame the bytes. |
 | [protocol](design/protocol.md) | The five protocol units, the server changes to them, and the errors they raise. |
 | [http1](design/http1.md) | The HTTP/1.1 fallback: the selection, the parser and its guard, the framing, the limits and the memory bounds. |
+| [websocket](design/websocket.md) | The WebSocket part: the frame codec, the session contract, the receive path, the closing handshake, the heartbeat, the origin policy and the settings. |
 | [sse](design/sse.md) | The event stream: the encoder rules, the keep-alive, the stall rule and the close rules. |
 | [limits](design/limits.md) | The token buckets that bound the work a peer may ask for. |
 | [io-pool](design/io-pool.md) | The mORMot2 async subclasses, the write wake-up and the thread rule. |

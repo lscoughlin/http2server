@@ -58,7 +58,17 @@ type
     /// a handler detached its stream into a channel
     seStreamDetached,
     /// a detach was refused because the limit of detached streams is reached
-    seStreamDetachRefused);
+    seStreamDetachRefused,
+    /// a WebSocket session opened: Init accepted and the handshake response went out
+    seWsOpened,
+    /// an upgrade was refused; WsCode holds the status
+    seWsRejected,
+    /// a WebSocket session ended with a close code; WsCode holds the code
+    seWsClosed,
+    /// a WebSocket callback raised an exception
+    seWsFailed,
+    /// a WebSocket token bucket tripped
+    seWsBucketTripped);
 
   /// one event of the server
   TServerEvent = record
@@ -72,6 +82,8 @@ type
     ErrorCode: THttp2ErrorCode;
     /// a short human-readable detail; the observer never parses it
     Detail: string;
+    /// the status or the close code, for the WebSocket events
+    WsCode: Integer;
   end;
 
   /// the receiver of server events
@@ -113,6 +125,18 @@ type
     TrippedTotal: Int64;
     /// detached streams that are open now
     DetachedStreams: Integer;
+    /// WebSocket sessions that are open now
+    WsSessions: Integer;
+    /// WebSocket messages received and sent since the start
+    WsMessagesIn: Int64;
+    WsMessagesOut: Int64;
+    /// WebSocket payload octets received and sent since the start
+    WsBytesIn: Int64;
+    WsBytesOut: Int64;
+    /// WebSocket sessions closed for a protocol error since the start
+    WsProtocolErrors: Int64;
+    /// WebSocket sessions closed because the Pong did not come since the start
+    WsPingTimeouts: Int64;
   end;
 
 implementation

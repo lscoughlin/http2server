@@ -85,10 +85,12 @@ order.
    pushes the frame to the socket.
 3. `CloseChannels` (`src/Http2Server.Async.pas`) closes every detached stream
    gracefully. The queued bytes and END_STREAM leave, so a detached stream does
-   not hold the wait of the next step until the timeout.
+   not hold the wait of the next step until the timeout. A WebSocket session
+   sends Close 1001 instead and waits for the reply; at the final stop the
+   application hears `Closed(1001)`.
 4. `WaitForStreams` (`src/Http2Server.Server.pas:118`) polls the open stream
-   total every twenty milliseconds until it reaches zero or the graceful stop
-   timeout passes. A quiet server stops at once, and a busy server gets the
+   total and the count of detached channels every twenty milliseconds until both
+   reach zero or the graceful stop timeout passes. A quiet server stops at once, and a busy server gets the
    full period.
 5. `THttp2AsyncServer.Stop` (`src/Http2Server.Async.pas`) aborts the channels that
    are still open, stops the handler pool, shuts the IO pools down, and stops

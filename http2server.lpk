@@ -6,7 +6,7 @@
     <Type Value="RunAndDesignTime"/>
     <Author Value="lscoughlin"/>
     <Description Value="HTTP/2 server library for Free Pascal 3.2.4+ (ALPN via mORMot2/OpenSSL)"/>
-    <Version Major="0" Minor="20" Release="0" Build="0"/>
+    <Version Major="0" Minor="21" Release="0" Build="0"/>
     <License Value="LGPL-2.1-only WITH Independent-modules-exception"/>
     <CompilerOptions>
       <Version Value="11"/>
@@ -22,7 +22,7 @@
         </SyntaxOptions>
       </Parsing>
     </CompilerOptions>
-    <Files Count="48">
+    <Files Count="55">
       <Item1>
         <Filename Value="src/Http2Server.pas"/>
         <UnitName Value="Http2Server"/>
@@ -200,21 +200,49 @@
         <UnitName Value="Http2Server.Waiter"/>
       </Item44>
       <Item45>
-        <Filename Value="src/Http2Server.Ws.Frames.pas"/>
-        <UnitName Value="Http2Server.Ws.Frames"/>
+        <Filename Value="src/Http2Server.Ws.Close.pas"/>
+        <UnitName Value="Http2Server.Ws.Close"/>
       </Item45>
       <Item46>
-        <Filename Value="src/Http2Server.Ws.Parser.pas"/>
-        <UnitName Value="Http2Server.Ws.Parser"/>
+        <Filename Value="src/Http2Server.Ws.Environment.pas"/>
+        <UnitName Value="Http2Server.Ws.Environment"/>
       </Item46>
       <Item47>
-        <Filename Value="src/Http2Server.Ws.Reader.pas"/>
-        <UnitName Value="Http2Server.Ws.Reader"/>
+        <Filename Value="src/Http2Server.Ws.Frames.pas"/>
+        <UnitName Value="Http2Server.Ws.Frames"/>
       </Item47>
       <Item48>
+        <Filename Value="src/Http2Server.Ws.Options.pas"/>
+        <UnitName Value="Http2Server.Ws.Options"/>
+      </Item48>
+      <Item49>
+        <Filename Value="src/Http2Server.Ws.Origin.pas"/>
+        <UnitName Value="Http2Server.Ws.Origin"/>
+      </Item49>
+      <Item50>
+        <Filename Value="src/Http2Server.Ws.Parser.pas"/>
+        <UnitName Value="Http2Server.Ws.Parser"/>
+      </Item50>
+      <Item51>
+        <Filename Value="src/Http2Server.Ws.Reader.pas"/>
+        <UnitName Value="Http2Server.Ws.Reader"/>
+      </Item51>
+      <Item52>
+        <Filename Value="src/Http2Server.Ws.Session.pas"/>
+        <UnitName Value="Http2Server.Ws.Session"/>
+      </Item52>
+      <Item53>
+        <Filename Value="src/Http2Server.Ws.SessionCore.pas"/>
+        <UnitName Value="Http2Server.Ws.SessionCore"/>
+      </Item53>
+      <Item54>
+        <Filename Value="src/Http2Server.Ws.Types.pas"/>
+        <UnitName Value="Http2Server.Ws.Types"/>
+      </Item54>
+      <Item55>
         <Filename Value="src/Http2Server.Ws.Utf8.pas"/>
         <UnitName Value="Http2Server.Ws.Utf8"/>
-      </Item48>
+      </Item55>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>

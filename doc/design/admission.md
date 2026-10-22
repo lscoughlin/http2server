@@ -41,6 +41,11 @@ with `Refuse` (queue full, wait limit passed, pool stopped) and cancels it at
 stream, and the refusal is a 503 with `Retry-After: 1` followed by a close. The
 document [http1](http1.md) describes the HTTP/1.1 side.
 
+The tasks of a WebSocket session do not use this queue. They run on the streaming
+pool (see [threading](threading.md)), so a burst of WebSocket traffic cannot delay or
+refuse an ordinary request. A session bounds its own work with the cap of queued
+messages and the credit rule (see [websocket](websocket.md)).
+
 ## The bounded queue
 
 `TRequestQueue` (`src/Http2Server.Admission.pas:76`) is a FIFO of entries. An

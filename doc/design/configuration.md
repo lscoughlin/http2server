@@ -80,6 +80,7 @@ sets a value.
 | `Port` | `WithPort` | the TCP port; 0 asks the operating system for a free port |
 | `Backlog` | `WithBacklog` | the length of the listen backlog |
 | `Http11Fallback` | `WithHttp11Fallback` | serves HTTP/1.1 on the same listener when the peer does not speak HTTP/2; on by default |
+| `WebSockets` | `WithWebSockets` | the record `TWsOptions`: the limits, the timers, the buckets, the origin policy and the subprotocols of the WebSocket part (see [websocket](websocket.md)) |
 | `Http11` | `WithHttp11Limits` | the record `THttp11Limits`: the limits of the HTTP/1.1 parser (see [http1](http1.md)) |
 | `ClearTextAllowed` | `WithClearTextAllowed` | allows cleartext connections (HTTP/2 with prior knowledge, and HTTP/1.1 when the fallback is on); off by default |
 
