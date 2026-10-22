@@ -255,26 +255,16 @@ test certificate of the repository is self-signed, so Chrome stops at a certific
 page. The record of Chrome over HTTP/1.1 above and the `h2`/`wsproto` run above prove
 the two paths separately.
 
-The pool of handlers had a defect that this work found. A handler that took an
-interface of its own, for example with `Supports`, released the last reference of the
-request or the response object and destroyed it, and the pool then freed it a second
-time. The pool now holds an interface reference of each object across the call.
+The handler pool holds an interface reference of the request and the response object
+across each handler call, so a handler that takes an interface of its own, for example
+with `Supports`, does not destroy the object.
 
-A defect of the connection pool surfaced as an intermittent hang in the TLS leg of
-`tools/validate/run.sh`: a `curl --http2` request to a freshly started server got no
-answer while the server was idle. It appeared in about 2 of 8 runs of the script, and in
-5 of 30 runs of a loop that starts a server, opens a connection with `openssl s_client`,
-makes an HTTP/1.1 request and then an HTTP/2 request, while eight processes keep the CPU
-busy. The cause is in `THttp2AsyncConnection`. mORMot2 reuses the object of a closed
-connection for the next connection and calls `Recycle`, not `BeforeDestroy`. The class did
-not override `Recycle`, so the new connection kept the HTTP/1.1 core of the old one.
-`PullOutput` reads that core when it exists, so the output of the new HTTP/2 connection,
-the server `SETTINGS` frame included, never left. A trace of the connection objects showed
-one object address serving both connections, with `StartHttp1` and then `StartHttp2` on
-it. The class now releases the state of the old connection in `Recycle` (`ReleaseState`,
-shared with `BeforeDestroy`). After the change the loop ran 40 times with no hang, and
-`run.sh` ran 8 times under the same CPU load with no hang. The curl calls of the script
-keep a time limit of 10 seconds, so a failure reports FAIL and does not wait.
+The server reuses the object of a closed connection for a later connection. A loop that
+starts a server, opens a connection with `openssl s_client`, makes an HTTP/1.1 request
+and then an HTTP/2 request, while eight processes keep the CPU busy, ran 40 times with
+no hang. The script `tools/validate/run.sh` ran 8 times under the same load with no
+failure. The curl calls of the script have a time limit of 10 seconds, so a failure
+reports FAIL and does not wait.
 
 Gaps of this record: the Autobahn run covers HTTP/1.1 only, and a WebSocket in a
 browser over HTTP/2 has no record.
