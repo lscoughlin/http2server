@@ -137,7 +137,8 @@ together with no name clash.
 | `Http2Server.Async.pas` | 791 | IO | the mORMot2 async subclasses and the core bridge |
 | `Http2Server.Tls.pas` | 176 | TLS | the `INetTls` plug-in of a connection |
 | `Http2Server.Alpn.pas` | 276 | TLS | the `SSL_CTX_set_alpn_select_cb` binding and callback |
-| `Http2Server.Admission.pas` | 897 | admission | the bounded queue and the handler pool |
+| `Http2Server.Admission.pas` | 709 | admission | the bounded queue and the handler pool |
+| `Http2Server.StreamAdapters.pas` | 226 | admission | the handler-side request and response of one stream |
 | `Http2Server.Connection.Core.pas` | 703 | connection | the base of the connection core: fields, locks, output queue, write wake-up and stream table |
 | `Http2Server.Connection.pas` | 617 | connection | the connection core: `Feed` and the frame handlers |
 | `Http2Server.HpackConnection.pas` | 229 | connection | the HPACK encoder and decoder of one connection |

@@ -80,7 +80,7 @@ returns. No coroutine and no continuation is part of the contract.
 
 The handler runs on a handler-pool thread. A handler that runs on an IO thread
 would hold the connection lock and stall the pool, so the pool checks the rule
-at dispatch (`src/Http2Server.Admission.pas:790`).
+at dispatch (`src/Http2Server.Admission.pas:614`).
 
 ## The observation events
 
@@ -113,7 +113,7 @@ A server with no observer carries no observation cost.
 
 The connection events come from `THttp2ConnectionEvents`
 (`src/Http2Server.Async.pas:270-300`), and the queue events come from
-`THandlerPool` (`src/Http2Server.Admission.pas:723`).
+`THandlerPool` (`src/Http2Server.Admission.pas:141`).
 
 ## The statistics
 

@@ -167,7 +167,7 @@ connection on that IO thread. The seam carries the rule
 (`src/Http2Server.Seam.pas:155-171`). The IO callbacks mark their thread at
 entry (`src/Http2Server.Async.pas:299`, `...:324`), and the handler pool
 checks the mark before it calls a handler
-(`src/Http2Server.Admission.pas:761-763`). The check raises in every build,
+(`src/Http2Server.Admission.pas:614`). The check raises in every build,
 so a violation fails loudly and never reaches production silently.
 
 ## The idle and header timeouts

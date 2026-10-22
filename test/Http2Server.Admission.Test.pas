@@ -30,7 +30,7 @@ uses
   SysUtils, Classes, SyncObjs, Generics.Collections, fpcunit, testregistry,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Stream,
   Http2Server.Limits, Http2Server.Config, Http2Server.Hpack,
-  Http2Server.Admission;
+  Http2Server.Admission, Http2Server.StreamAdapters;
 
 type
   /// a stream host that ignores the window credit

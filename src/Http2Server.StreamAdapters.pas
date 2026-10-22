@@ -1,0 +1,226 @@
+{**
+---
+license: LGPL-2.1-only WITH Independent-modules-exception
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: http2, server, seam, handler, request, response, adapter
+notes:
+  - This unit holds the handler-side request and response adapters. Each one
+    wraps one TServerStream and implements the seam interfaces.
+  - The handler pool builds a fresh pair for each dispatch.
+---
+}
+/// The handler-side request and response of one stream
+// - the adapters move bytes only and convert no text encoding, as the seam
+//   requires
+unit Http2Server.StreamAdapters;
+
+{$mode delphi}{$H+}
+{$modeswitch advancedrecords}
+{$interfaces com}
+
+interface
+
+uses
+  SysUtils, Classes,
+  Http2Server.Errors,
+  Http2Server.Hpack,
+  Http2Server.Headers,
+  Http2Server.Seam,
+  Http2Server.Waiter,
+  Http2Server.Stream;
+
+type
+  /// The request as one handler sees it, backed by one TServerStream.
+  ///
+  /// The adapter is byte-oriented, as the seam requires.  The pseudo-headers
+  /// come from the decoded request block of the stream.
+  TServerStreamRequest = class(TInterfacedObject, IServerRequest)
+  private
+    FStream: TServerStream;
+    function PseudoValue(const AName: string): string;
+  public
+    constructor Create(const AStream: TServerStream);
+    function Method: string;
+    function Scheme: string;
+    function Authority: string;
+    function Path: string;
+    function Headers: THeaderBlock;
+    function Read(var ABuffer; const ACount: Integer): Integer;
+    function ReadChunk(out AChunk: TBytes): Boolean;
+    function BodyIsComplete: Boolean;
+    function IsCancelled: Boolean;
+    function StreamId: LongWord;
+  end;
+
+  /// The response as one handler writes it, backed by one TServerStream.
+  ///
+  /// SendHeaders holds the response block for the IO side, which owns the
+  /// HPACK encoder.  A body writer is pulled when the handler calls Finish.
+  TServerStreamResponse = class(TInterfacedObject, IServerResponse)
+  private
+    FStream: TServerStream;
+    FBodyWriter: IBodyWriter;
+    FHeadersSent: Boolean;
+  public
+    constructor Create(const AStream: TServerStream);
+    procedure SendHeaders(const AStatus: Integer; const AHeaders: THeaderBlock;
+      const AEndStream: Boolean = False);
+    procedure Write(const AData: TBytes); overload;
+    procedure Write(const ABuffer; const ACount: Integer); overload;
+    procedure SetBodyWriter(const AWriter: IBodyWriter);
+    procedure Finish;
+    procedure RegisterCancelHook(const AHook: TCancelHook);
+    function IsCancelled: Boolean;
+    function StreamId: LongWord;
+    /// true once the handler sent the response headers
+    property HeadersSent: Boolean read FHeadersSent;
+  end;
+
+implementation
+
+{ TServerStreamRequest }
+
+constructor TServerStreamRequest.Create(const AStream: TServerStream);
+begin
+  inherited Create;
+  FStream := AStream;
+end;
+
+function TServerStreamRequest.PseudoValue(const AName: string): string;
+var
+  H: THeaderBlock;
+  I: Integer;
+begin
+  Result := '';
+  H := FStream.RemoteHeaders;
+  for I := 0 to High(H) do
+    if H[I].Name = AName then
+      Exit(H[I].Value);
+end;
+
+function TServerStreamRequest.Method: string;
+begin
+  Result := PseudoValue(HeaderMethod);
+end;
+
+function TServerStreamRequest.Scheme: string;
+begin
+  Result := PseudoValue(HeaderScheme);
+end;
+
+function TServerStreamRequest.Authority: string;
+begin
+  Result := PseudoValue(HeaderAuthority);
+end;
+
+function TServerStreamRequest.Path: string;
+begin
+  Result := PseudoValue(HeaderPath);
+end;
+
+function TServerStreamRequest.Headers: THeaderBlock;
+var
+  H: THeaderBlock;
+  I, N: Integer;
+begin
+  Result := nil;
+  H := FStream.RemoteHeaders;
+  SetLength(Result, Length(H));
+  N := 0;
+  for I := 0 to High(H) do
+    if (Length(H[I].Name) = 0) or (H[I].Name[1] <> ':') then
+    begin
+      Result[N] := H[I];
+      Inc(N);
+    end;
+  SetLength(Result, N);
+end;
+
+function TServerStreamRequest.Read(var ABuffer;
+  const ACount: Integer): Integer;
+begin
+  Result := FStream.Read(ABuffer, ACount);
+end;
+
+function TServerStreamRequest.ReadChunk(out AChunk: TBytes): Boolean;
+begin
+  Result := FStream.ReadChunk(AChunk);
+end;
+
+function TServerStreamRequest.BodyIsComplete: Boolean;
+begin
+  Result := FStream.BodyIsComplete;
+end;
+
+function TServerStreamRequest.IsCancelled: Boolean;
+begin
+  Result := FStream.IsCancelled;
+end;
+
+function TServerStreamRequest.StreamId: LongWord;
+begin
+  Result := FStream.StreamId;
+end;
+
+{ TServerStreamResponse }
+
+constructor TServerStreamResponse.Create(const AStream: TServerStream);
+begin
+  inherited Create;
+  FStream := AStream;
+end;
+
+procedure TServerStreamResponse.SendHeaders(const AStatus: Integer;
+  const AHeaders: THeaderBlock; const AEndStream: Boolean);
+begin
+  FHeadersSent := True;
+  FStream.QueueResponseHeaders(AStatus, AHeaders, AEndStream);
+end;
+
+procedure TServerStreamResponse.Write(const AData: TBytes);
+begin
+  FStream.Write(AData);
+end;
+
+procedure TServerStreamResponse.Write(const ABuffer; const ACount: Integer);
+begin
+  FStream.Write(ABuffer, ACount);
+end;
+
+procedure TServerStreamResponse.SetBodyWriter(const AWriter: IBodyWriter);
+begin
+  FBodyWriter := AWriter;
+end;
+
+procedure TServerStreamResponse.Finish;
+var
+  Chunk: TBytes;
+begin
+  if FBodyWriter <> nil then
+    while FBodyWriter.NextChunk(Chunk) do
+      FStream.Write(Chunk);
+  FStream.RequestFinish;
+end;
+
+procedure TServerStreamResponse.RegisterCancelHook(const AHook: TCancelHook);
+var
+  W: IStreamWaiter;
+begin
+  W := FStream.Waiter;
+  // the default waiter is a TBlockingWaiter and holds the hook slot; another
+  // IStreamWaiter has no hook slot
+  if W is TBlockingWaiter then
+    (W as TBlockingWaiter).RegisterHook(AHook);
+end;
+
+function TServerStreamResponse.IsCancelled: Boolean;
+begin
+  Result := FStream.IsCancelled;
+end;
+
+function TServerStreamResponse.StreamId: LongWord;
+begin
+  Result := FStream.StreamId;
+end;
+
+end.
