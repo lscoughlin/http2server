@@ -26,6 +26,7 @@ uses
   Http2Server.Hpack,
   Http2Server.Headers,
   Http2Server.Seam,
+  Http2Server.ResponseWriter,
   Http2Server.Waiter,
   Http2Server.Stream,
   Http2Server.Duplex,
@@ -221,7 +222,8 @@ procedure TServerStreamResponse.SendHeaders(const AStatus: Integer;
 begin
   CheckNotDetached;
   FHeadersSent := True;
-  FStream.QueueResponseHeaders(AStatus, AHeaders, AEndStream);
+  CheckResponseHeaders(AHeaders);
+  FStream.QueueResponseHeaders(AStatus, WithDate(AHeaders, AStatus), AEndStream);
 end;
 
 procedure TServerStreamResponse.Write(const AData: TBytes);

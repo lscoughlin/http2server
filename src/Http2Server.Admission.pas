@@ -40,6 +40,7 @@ uses
   Http2Server.Headers,
   Http2Server.Limits,
   Http2Server.Seam,
+  Http2Server.ResponseWriter,
   Http2Server.Stream,
   Http2Server.Duplex,
   Http2Server.StreamAdapters,
@@ -535,7 +536,7 @@ begin
       // RST_STREAM that Refuse asks the connection to queue
       AStream.Refuse(ecRefusedStream);
     rmHttp503:
-      AStream.QueueResponseHeaders(503, nil, True);
+      AStream.QueueResponseHeaders(503, WithDate(nil, 503), True);
   end;
 end;
 

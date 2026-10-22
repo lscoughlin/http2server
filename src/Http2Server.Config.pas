@@ -40,6 +40,7 @@ uses
   Http2Server.FlowControl,
   Http2Server.Limits,
   Http2Server.Duplex,
+  Http2Server.Http1.Limits,
   Http2Server.Seam;
 
 type
@@ -133,6 +134,8 @@ type
     FSseKeepAliveMs: Integer;
     FSseStallTimeoutMs: Integer;
     FQueue: TQueueOptions;
+    FHttp11Fallback: Boolean;
+    FHttp11: THttp11Limits;
     FMaxConcurrentStreams: LongWord;
     FInitialStreamWindow: LongWord;
     FInitialConnectionWindow: LongWord;
@@ -207,6 +210,13 @@ type
 
     /// the request queue settings
     function WithQueue(const AOptions: TQueueOptions): THttp2ServerFactory;
+
+    // ---- HTTP/1.1 ----
+
+    /// serve HTTP/1.1 on the same listener when the peer does not speak HTTP/2
+    function WithHttp11Fallback(const AValue: Boolean): THttp2ServerFactory;
+    /// the limits of the HTTP/1.1 parser
+    function WithHttp11Limits(const ALimits: THttp11Limits): THttp2ServerFactory;
 
     // ---- streams ----
 
@@ -308,6 +318,8 @@ type
     // ---- queue ----
 
     property Queue: TQueueOptions read FQueue;
+    property Http11Fallback: Boolean read FHttp11Fallback;
+    property Http11: THttp11Limits read FHttp11;
 
     // ---- streams ----
 
@@ -449,6 +461,8 @@ begin
   Result.FSseKeepAliveMs := 15000;
   Result.FSseStallTimeoutMs := 30000;
   Result.FQueue := TQueueOptions.Create;
+  Result.FHttp11Fallback := True;
+  Result.FHttp11 := THttp11Limits.Create;
   Result.FMaxConcurrentStreams := 100;
   Result.FInitialStreamWindow := 65535;
   Result.FInitialConnectionWindow := 65535;
@@ -592,6 +606,20 @@ function THttp2ServerFactory.WithQueue(
 begin
   Result := Self;
   Result.FQueue := AOptions;
+end;
+
+function THttp2ServerFactory.WithHttp11Fallback(
+  const AValue: Boolean): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FHttp11Fallback := AValue;
+end;
+
+function THttp2ServerFactory.WithHttp11Limits(
+  const ALimits: THttp11Limits): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FHttp11 := ALimits;
 end;
 
 function THttp2ServerFactory.WithMaxConcurrentStreams(
@@ -759,6 +787,7 @@ begin
     Add('the SSE keep-alive period is outside 0 to one hour');
   if (FSseStallTimeoutMs < 0) or (FSseStallTimeoutMs > cSseMaxMs) then
     Add('the SSE stall timeout is outside 0 to one hour');
+  FHttp11.Problems(Problems);
   if FQueue.Depth < 0 then
     Add('the queue depth is below 0');
   if FQueue.MaxWaitMs < 0 then

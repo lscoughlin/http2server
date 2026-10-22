@@ -30,7 +30,7 @@ interface
 uses
   SysUtils, Classes, SyncObjs,
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Stream,
-  Http2Server.Duplex;
+  Http2Server.Duplex, Http2Server.ResponseWriter;
 
 type
   /// the channel of one detached HTTP/2 stream
@@ -353,7 +353,8 @@ begin
   end;
   if FRegistry <> nil then
     FRegistry.Remove(Self as IDuplexChannel);
-  FStream.QueueResponseHeaders(AStatus, AHeaders, Length(ABody) = 0);
+  CheckResponseHeaders(AHeaders);
+  FStream.QueueResponseHeaders(AStatus, WithDate(AHeaders, AStatus), Length(ABody) = 0);
   if Length(ABody) > 0 then
   begin
     FStream.TryWrite(ABody);
@@ -378,7 +379,8 @@ begin
   finally
     FLock.Release;
   end;
-  FStream.QueueResponseHeaders(AStatus, AHeaders, False);
+  CheckResponseHeaders(AHeaders);
+  FStream.QueueResponseHeaders(AStatus, WithDate(AHeaders, AStatus), False);
   if Length(Hold) > 0 then
     FStream.TryWrite(Hold);
 end;
