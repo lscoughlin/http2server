@@ -63,7 +63,10 @@ implementation
 type
   TSseStream = class(TInterfacedObject, ISseStream, IChannelSink)
   private
+    /// guards the flags below; never held across a call into the channel
     FLock: TCriticalSection;
+    /// serialises the writes; no channel callback takes it
+    FSendLock: TCriticalSection;
     FChannel: IDuplexChannel;
     FSource: IStreamSource;
     /// a reference to self while a timer is armed; a pool task holds no reference
@@ -117,6 +120,7 @@ constructor TSseStream.Create(const AChannel: IDuplexChannel;
 begin
   inherited Create;
   FLock := TCriticalSection.Create;
+  FSendLock := TCriticalSection.Create;
   FChannel := AChannel;
   FSource := ASource;
   FKeepAliveMs := AKeepAliveMs;
@@ -128,6 +132,7 @@ end;
 
 destructor TSseStream.Destroy;
 begin
+  FSendLock.Free;
   FLock.Free;
   inherited Destroy;
 end;
@@ -194,31 +199,40 @@ end;
 
 function TSseStream.SendBytes(const ABytes: TBytes): TSendResult;
 var
-  Ended: Boolean;
+  Open: Boolean;
 begin
-  Ended := False;
-  FLock.Acquire;
+  // FSendLock keeps the writes in order and is held across the channel call.
+  // No callback of the channel takes it. FLock guards the flags only and is
+  // never held across a call into the channel.
+  FSendLock.Acquire;
   try
-    if not FOpen then
+    FLock.Acquire;
+    try
+      Open := FOpen;
+    finally
+      FLock.Release;
+    end;
+    if not Open then
       Exit(srClosed);
     Result := FChannel.Send(ABytes);
-    case Result of
-      srQueued:
-        begin
+    FLock.Acquire;
+    try
+      case Result of
+        srQueued:
           FLastSendMs := NowMs;
+        srFull:
           // a refusal that lasts is the stall; the drain callback ends it
-        end;
-      srFull:
-        if FFullSince = 0 then
-          FFullSince := NowMs;
-      srClosed:
-        Ended := True;
+          if FFullSince = 0 then
+            FFullSince := NowMs;
+      end;
+    finally
+      FLock.Release;
     end;
   finally
-    FLock.Release;
+    FSendLock.Release;
   end;
   // the channel ended under us: drop the timer and the self reference
-  if Ended then
+  if Result = srClosed then
     Terminate(ccAbort);
 end;
 
@@ -261,10 +275,12 @@ function TSseStream.IsOpen: Boolean;
 begin
   FLock.Acquire;
   try
-    Result := FOpen and FChannel.IsOpen;
+    Result := FOpen;
   finally
     FLock.Release;
   end;
+  // the channel call comes after the flag lock is free
+  Result := Result and FChannel.IsOpen;
 end;
 
 function TSseStream.LastEventId: UTF8String;
@@ -281,11 +297,15 @@ end;
 procedure TSseStream.PeerClosed(const AClean: Boolean);
 var
   Keep: IInterface;
+  ChannelOpen: Boolean;
 begin
+  // the channel calls this with its own lock held, so no lock of this stream
+  // may be held across a call back into the channel
+  ChannelOpen := FChannel.IsOpen;
   FLock.Acquire;
   try
     // a GET request ends its half at once; that is not the end of the stream
-    if AClean and FOpen and FChannel.IsOpen then
+    if AClean and FOpen and ChannelOpen then
       Exit;
     FOpen := False;
     Keep := FSelf;

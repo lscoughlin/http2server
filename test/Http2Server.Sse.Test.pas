@@ -59,6 +59,9 @@ type
     function Registry: IChannelRegistry;
     function SentCount: Integer;
     function SentText(const AIndex: Integer): string;
+    /// call the sink the way the real channel does: with the channel lock held
+    procedure DrainUnderLock;
+    procedure ResetUnderLock;
   end;
 
   TFakeResponse = class(TInterfacedObject, IServerResponse)
@@ -149,6 +152,7 @@ type
     procedure TestLastEventIdReachesTheHandler;
     procedure TestBadEventIsRaisedAndNothingIsSent;
     procedure TestRequestBodyCreditGoesBack;
+    procedure TestCallbacksUnderTheChannelLockDoNotDeadlock;
   end;
 
 implementation
@@ -271,6 +275,28 @@ begin
   FLock.Acquire;
   try
     Result := Sent.Count;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TFakeChannel.DrainUnderLock;
+begin
+  FLock.Acquire;
+  try
+    if Sink <> nil then
+      Sink.WriteDrained;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TFakeChannel.ResetUnderLock;
+begin
+  FLock.Acquire;
+  try
+    if Sink <> nil then
+      Sink.PeerClosed(False);
   finally
     FLock.Release;
   end;
@@ -914,6 +940,72 @@ begin
   B := 1;
   FChannel.Sink.BytesReceived(B, 1);
   AssertEquals(1, FChannel.Credit);
+end;
+
+type
+  /// sends events until told to stop
+  TSendLoop = class(TThread)
+  public
+    Stream: ISseStream;
+    Rounds: Integer;
+    procedure Execute; override;
+  end;
+
+  /// delivers the sink callbacks under the channel lock
+  TCallbackLoop = class(TThread)
+  public
+    Channel: TFakeChannel;
+    Rounds: Integer;
+    procedure Execute; override;
+  end;
+
+procedure TSendLoop.Execute;
+var
+  I: Integer;
+begin
+  for I := 1 to Rounds do
+    Stream.Send(TSseEvent.Text('x'));
+end;
+
+procedure TCallbackLoop.Execute;
+var
+  I: Integer;
+begin
+  for I := 1 to Rounds do
+    Channel.DrainUnderLock;
+end;
+
+procedure TSseStreamTest.TestCallbacksUnderTheChannelLockDoNotDeadlock;
+var
+  S: ISseStream;
+  A, B: TSendLoop;
+  C: TCallbackLoop;
+  Waited: Integer;
+begin
+  Build(0, 0);
+  S := Start;
+  A := TSendLoop.Create(True);
+  B := TSendLoop.Create(True);
+  C := TCallbackLoop.Create(True);
+  A.Stream := S; A.Rounds := 20000;
+  B.Stream := S; B.Rounds := 20000;
+  C.Channel := FChannel; C.Rounds := 20000;
+  A.FreeOnTerminate := False; B.FreeOnTerminate := False; C.FreeOnTerminate := False;
+  A.Start; B.Start; C.Start;
+  Waited := 0;
+  while (not (A.Finished and B.Finished and C.Finished)) and (Waited < 20000) do
+  begin
+    Sleep(10);
+    Inc(Waited, 10);
+  end;
+  AssertTrue('producers and channel callbacks finish: no lock-order deadlock',
+    A.Finished and B.Finished and C.Finished);
+  A.WaitFor; B.WaitFor; C.WaitFor;
+  A.Free; B.Free; C.Free;
+  // a reset under the channel lock ends the stream without a deadlock too
+  FChannel.ResetUnderLock;
+  FChannel.Closed := True;
+  AssertFalse(S.IsOpen);
 end;
 
 initialization
