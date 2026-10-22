@@ -170,11 +170,29 @@ function Http2IsIoThread: Boolean;
 //   check and it raises in every build
 procedure Http2AssertHandlerThread(const AWhere: string);
 
+/// mark the calling thread as running a task of the streaming pool
+// - the pool enters this mark around every task it runs
+procedure Http2StreamThreadEnter;
+
+/// clear the streaming-pool mark of the calling thread
+procedure Http2StreamThreadLeave;
+
+/// TRUE while the calling thread runs a task of the streaming pool
+function Http2IsStreamThread: Boolean;
+
+/// raise unless the calling thread runs a task of the streaming pool
+// - code that serves a detached stream (a WebSocket callback, for example)
+//   calls this at entry.  A callback on an IO thread would stall the whole IO
+//   pool, so the rule is a hard check and it raises in every build
+procedure Http2AssertStreamThread(const AWhere: string);
+
 implementation
 
 threadvar
   /// how many IO-side calls the current thread holds; zero on a handler thread
   IoDepth: Integer;
+  /// how many streaming-pool tasks the current thread runs; zero elsewhere
+  StreamDepth: Integer;
 
 procedure Http2IoThreadEnter;
 begin
@@ -196,6 +214,31 @@ procedure Http2AssertHandlerThread(const AWhere: string);
 begin
   if IoDepth > 0 then
     raise EHttpError.Create('handler code ran on an IO thread at ' + AWhere);
+end;
+
+procedure Http2StreamThreadEnter;
+begin
+  Inc(StreamDepth);
+end;
+
+procedure Http2StreamThreadLeave;
+begin
+  if StreamDepth > 0 then
+    Dec(StreamDepth);
+end;
+
+function Http2IsStreamThread: Boolean;
+begin
+  Result := StreamDepth > 0;
+end;
+
+procedure Http2AssertStreamThread(const AWhere: string);
+begin
+  if IoDepth > 0 then
+    raise EHttpError.Create('stream code ran on an IO thread at ' + AWhere);
+  if StreamDepth = 0 then
+    raise EHttpError.Create('stream code ran outside the streaming pool at ' +
+      AWhere);
 end;
 
 end.

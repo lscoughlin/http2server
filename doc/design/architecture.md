@@ -139,6 +139,7 @@ together with no name clash.
 | `Http2Server.Alpn.pas` | 276 | TLS | the `SSL_CTX_set_alpn_select_cb` binding and callback |
 | `Http2Server.Admission.pas` | 709 | admission | the bounded queue and the handler pool |
 | `Http2Server.StreamAdapters.pas` | 226 | admission | the handler-side request and response of one stream |
+| `Http2Server.StreamPool.pas` | 796 | streaming | the streaming pool: ordered task queues, timers and fair scheduling |
 | `Http2Server.Connection.Core.pas` | 703 | connection | the base of the connection core: fields, locks, output queue, write wake-up and stream table |
 | `Http2Server.Connection.pas` | 617 | connection | the connection core: `Feed` and the frame handlers |
 | `Http2Server.HpackConnection.pas` | 229 | connection | the HPACK encoder and decoder of one connection |

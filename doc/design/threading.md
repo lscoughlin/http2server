@@ -10,6 +10,8 @@ notes:
 scope: The thread roles, the work each role does, and the rules that keep the roles apart.
 primary_types:
   - THttp2ServerFactory
+  - TStreamPool
+  - IStreamSource
   - TCancelWorkerPool
   - TBlockingWaiter
   - TServerStream
@@ -22,6 +24,7 @@ invariants:
   - The handler pool runs synchronous handlers and never touches a socket.
   - The HPACK encoder and decoder run only on an IO thread under the connection lock.
   - A wake-up never raises an exception in another thread.
+  - The streaming pool runs the tasks of one source one at a time, in order, and one task per turn.
 ---
 
 # Threads
@@ -97,6 +100,47 @@ hook is a rare event.
 The hooks are a best effort. A handler blocked inside a database call with no
 registered hook runs on to completion, and the server discards the response
 after it returns.
+
+## The streaming pool
+
+`src/Http2Server.StreamPool.pas` holds a pool for work that outlives one
+request, such as the callbacks of a long-lived stream. The pool is separate from
+the handler pool. It uses no admission queue and no handler thread, so a burst
+of streaming work cannot delay or refuse an ordinary request. The unit depends
+on the monotonic clock of `Http2Server.Limits` and on the thread marks of
+`Http2Server.Seam`. It does not depend on the connection core.
+
+The unit of scheduling is a work source (`IStreamSource`). A source is one
+ordered task queue. A caller posts a task with `Post`, or posts a task that
+becomes ready after a delay with `PostAfter`. Both calls are safe from any
+thread, also from inside a task.
+
+- A source waits once in the ready queue when it has tasks. A pool thread takes
+  a source, runs one task, and puts the source back at the end of the ready
+  queue when more tasks wait. Sources therefore take turns, and a long queue of
+  one source does not starve another source.
+- One thread works on a source at a time, and the tasks of a source run in the
+  order of posting. A task that posts a follow-up task to its own source queues
+  that task behind the tasks of the other sources.
+- A timer is a task with a deadline. The deadlines sit in a min-heap. A thread
+  with nothing to run parks until the first deadline, with a bound of 250
+  milliseconds. A timer that fires queues its task behind the tasks that already
+  wait in the source.
+- The pool size is the number of threads. A pool of size 0 starts no thread, and
+  `RunOne` runs one ready task on the calling thread. Tests use this form with a
+  manual clock, so the order of tasks is exact and no test sleeps.
+- A task runs with the stream-thread mark set (`Http2IsStreamThread`).
+  `Http2AssertStreamThread` raises on an IO thread and outside the pool.
+- A task that raises never ends a pool thread. The error goes to `OnTaskError`
+  and to the error counter.
+- `Close` on a source drops its waiting tasks and its timers and refuses later
+  posts. `Stop` on the pool refuses posts, drops everything that waits, lets a
+  running task finish, and waits for the threads. A task cannot call `Stop`,
+  because the call would wait for the thread that runs it. A source stays safe
+  to call after its pool is gone, and it then answers as closed.
+
+The pool lock is the innermost lock. A caller can post while it holds the
+connection lock, and a pool thread runs a task with no pool lock held.
 
 ## Wake-up safety
 
