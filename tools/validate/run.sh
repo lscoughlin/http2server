@@ -47,7 +47,7 @@ if [ ! -x "$root/bin/interop_server" ]; then
   exit 2
 fi
 
-start_interop_server "$root/bin/interop_server" || {
+start_interop_server "$root/bin/interop_server" no-http11 || {
   echo "the example server did not report a port"
   exit 2
 }

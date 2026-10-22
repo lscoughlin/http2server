@@ -46,7 +46,8 @@ uses
   Http2Server.StreamAdapters,
   Http2Server.Waiter,
   Http2Server.Config,
-  Http2Server.Observer;
+  Http2Server.Observer,
+  Http2Server.HandlerJob;
 
 type
   /// the outcome of one admission attempt
@@ -65,7 +66,10 @@ type
 
   /// one queue entry: the stream and the time it entered the queue
   TQueueEntry = record
+    /// the HTTP/2 stream of the entry; nil when the entry is a job
     Stream: TServerStream;
+    /// the job of the entry; nil when the entry is an HTTP/2 stream
+    Job: IHandlerJob;
     EnqueueMs: QWord;
   end;
 
@@ -92,6 +96,13 @@ type
 
     /// add AStream to the queue
     function TryEnqueue(const AStream: TServerStream): TAdmitResult;
+    /// add a job to the queue; the same depth and wait limit apply
+    function TryEnqueueJob(const AJob: IHandlerJob): TAdmitResult;
+    /// take the next entry, a stream or a job
+    function DequeueEntry(out AEntry: TQueueEntry;
+      out AResult: TDequeueResult): Boolean;
+    /// take every entry out of the queue
+    function DrainEntries: TArray<TQueueEntry>;
     /// take the oldest entry; False means the queue is stopped and empty
     // - a dispatch carries the stream; a timeout carries an aged entry that
     //   the caller answers with a refusal
@@ -148,6 +159,7 @@ type
     FThreads: TObjectList<THandlerThread>;
     FLock: TCriticalSection;
     FActive: TList<TServerStream>;
+    FActiveJobs: TList<IHandlerJob>;
     FBusy: Integer;
     FRefused: Integer;
     FTimedOut: Integer;
@@ -170,6 +182,7 @@ type
     procedure MarkBusy(const AStream: TServerStream);
     procedure MarkIdle(const AStream: TServerStream);
     function SnapshotActive: TArray<TServerStream>;
+    procedure RunJob(const AEntry: TQueueEntry; const AResult: TDequeueResult);
     function GetBusyHandlers: Integer;
     function GetRefusedTotal: Integer;
     function GetTimedOutTotal: Integer;
@@ -184,6 +197,8 @@ type
     /// offer AStream to the queue
     // - a refusal answers the stream at once, per the refusal mode
     function Admit(const AStream: TServerStream): TAdmitResult;
+    /// queue an HTTP/1.1 request; a refusal is answered by the job itself
+    function AdmitJob(const AJob: IHandlerJob): TAdmitResult;
     /// remove the queued entry of AStreamId, as a reset does
     function RemoveStream(const AStreamId: LongWord): Boolean;
     /// stop acceptance, refuse the waiting entries and end the workers
@@ -268,13 +283,33 @@ begin
   Result := asQueued;
 end;
 
-function TRequestQueue.Dequeue(out AStream: TServerStream;
-  out AResult: TDequeueResult): Boolean;
+function TRequestQueue.TryEnqueueJob(const AJob: IHandlerJob): TAdmitResult;
 var
   E: TQueueEntry;
+begin
+  FLock.Acquire;
+  try
+    if FStopped then
+      Exit(asRefused);
+    if (FDepth <= 0) or (FEntries.Count >= FDepth) then
+      Exit(asRefused);
+    E.Stream := nil;
+    E.Job := AJob;
+    E.EnqueueMs := FClock.NowMs;
+    FEntries.Enqueue(E);
+  finally
+    FLock.Release;
+  end;
+  RTLEventSetEvent(FWake);
+  Result := asQueued;
+end;
+
+function TRequestQueue.DequeueEntry(out AEntry: TQueueEntry;
+  out AResult: TDequeueResult): Boolean;
+var
   Now, Deadline: QWord;
 begin
-  AStream := nil;
+  AEntry := Default(TQueueEntry);
   AResult := drDispatch;
   while True do
   begin
@@ -284,10 +319,9 @@ begin
         Exit(False);
       if FEntries.Count > 0 then
       begin
-        E := FEntries.Dequeue;
-        AStream := E.Stream;
+        AEntry := FEntries.Dequeue;
         Now := FClock.NowMs;
-        Deadline := E.EnqueueMs + QWord(FMaxWaitMs);
+        Deadline := AEntry.EnqueueMs + QWord(FMaxWaitMs);
         // an entry that waited past the limit is a timeout, not a dispatch
         if (FMaxWaitMs > 0) and (Now >= Deadline) then
           AResult := drTimedOut
@@ -300,6 +334,34 @@ begin
     end;
     // the queue is empty; park for a bounded time, then look again
     RTLEventWaitFor(FWake, cQueueParkMs);
+  end;
+end;
+
+function TRequestQueue.Dequeue(out AStream: TServerStream;
+  out AResult: TDequeueResult): Boolean;
+var
+  E: TQueueEntry;
+begin
+  Result := DequeueEntry(E, AResult);
+  AStream := E.Stream;
+end;
+
+function TRequestQueue.DrainEntries: TArray<TQueueEntry>;
+var
+  N: Integer;
+begin
+  Result := nil;
+  FLock.Acquire;
+  try
+    SetLength(Result, FEntries.Count);
+    N := 0;
+    while FEntries.Count > 0 do
+    begin
+      Result[N] := FEntries.Dequeue;
+      Inc(N);
+    end;
+  finally
+    FLock.Release;
   end;
 end;
 
@@ -318,7 +380,7 @@ begin
       while FEntries.Count > 0 do
       begin
         E := FEntries.Dequeue;
-        if (not Result) and (E.Stream.StreamId = AStreamId) then
+        if (not Result) and (E.Stream <> nil) and (E.Stream.StreamId = AStreamId) then
         begin
           Result := True;
           // the removed entry drops its reference
@@ -339,23 +401,21 @@ end;
 
 function TRequestQueue.DrainAll: TArray<TServerStream>;
 var
-  E: TQueueEntry;
-  N: Integer;
+  Entries: TArray<TQueueEntry>;
+  I, N: Integer;
 begin
+  // the streams only; DrainEntries also returns the jobs
+  Entries := DrainEntries;
   Result := nil;
-  FLock.Acquire;
-  try
-    SetLength(Result, FEntries.Count);
-    N := 0;
-    while FEntries.Count > 0 do
+  SetLength(Result, Length(Entries));
+  N := 0;
+  for I := 0 to High(Entries) do
+    if Entries[I].Stream <> nil then
     begin
-      E := FEntries.Dequeue;
-      Result[N] := E.Stream;
+      Result[N] := Entries[I].Stream;
       Inc(N);
     end;
-  finally
-    FLock.Release;
-  end;
+  SetLength(Result, N);
 end;
 
 function TRequestQueue.Count: Integer;
@@ -408,6 +468,7 @@ begin
   FPoolStopped := False;
   FLock := TCriticalSection.Create;
   FActive := TList<TServerStream>.Create;
+  FActiveJobs := TList<IHandlerJob>.Create;
   FThreads := TObjectList<THandlerThread>.Create(True);
   FQueue := TRequestQueue.Create(FOptions.Depth, FOptions.MaxWaitMs,
     AFactory.Clock);
@@ -424,6 +485,7 @@ begin
   Stop;
   FThreads.Free;
   FActive.Free;
+  FActiveJobs.Free;
   FQueue.Free;
   FLock.Free;
   inherited Destroy;
@@ -575,17 +637,98 @@ begin
     Notify(seStreamDetached, AStream, 'the handler detached the stream');
 end;
 
+procedure THandlerPool.RunJob(const AEntry: TQueueEntry;
+  const AResult: TDequeueResult);
+var
+  Job: IHandlerJob;
+begin
+  Job := AEntry.Job;
+  if AResult = drTimedOut then
+  begin
+    FLock.Acquire;
+    try
+      Inc(FTimedOut);
+    finally
+      FLock.Release;
+    end;
+    Notify(seRequestTimedOut, nil, 'the queue wait limit passed');
+    Job.Refuse(jrTimedOut);
+    Exit;
+  end;
+  if Job.IsCancelled or (FHandler = nil) then
+  begin
+    FLock.Acquire;
+    try
+      Inc(FDropped);
+    finally
+      FLock.Release;
+    end;
+    Exit;
+  end;
+  FLock.Acquire;
+  try
+    Inc(FBusy);
+    FActiveJobs.Add(Job);
+  finally
+    FLock.Release;
+  end;
+  try
+    try
+      Http2AssertHandlerThread('THandlerPool.RunJob');
+      Job.Run(FHandler, FChannelRegistry);
+    except
+      on E: EStreamCancelled do
+        ; // the cancellation ends the handler quietly
+      on E: Exception do
+        // the job answers its own peer; the pool only reports
+        Notify(seHandlerException, nil, 'the handler raised');
+    end;
+  finally
+    FLock.Acquire;
+    try
+      Dec(FBusy);
+      FActiveJobs.Remove(Job);
+    finally
+      FLock.Release;
+    end;
+    Notify(seStreamCompleted, nil, 'the handler returned');
+  end;
+end;
+
+function THandlerPool.AdmitJob(const AJob: IHandlerJob): TAdmitResult;
+begin
+  Result := FQueue.TryEnqueueJob(AJob);
+  if Result = asRefused then
+  begin
+    FLock.Acquire;
+    try
+      Inc(FRefused);
+    finally
+      FLock.Release;
+    end;
+    Notify(seQueueFull, nil, 'the queue was full');
+    AJob.Refuse(jrQueueFull);
+  end;
+end;
+
 function THandlerPool.TakeOne: Boolean;
 var
+  Entry: TQueueEntry;
   Stream: TServerStream;
   Outcome: TDequeueResult;
   Req: TServerStreamRequest;
   Res: TServerStreamResponse;
 begin
   Result := False;
-  if not FQueue.Dequeue(Stream, Outcome) then
+  if not FQueue.DequeueEntry(Entry, Outcome) then
     Exit;
   Result := True;
+  if Entry.Job <> nil then
+  begin
+    RunJob(Entry, Outcome);
+    Exit;
+  end;
+  Stream := Entry.Stream;
   if Outcome = drTimedOut then
   begin
     FLock.Acquire;
@@ -687,6 +830,8 @@ var
   Deadline: QWord;
   I: Integer;
   Streams: TArray<TServerStream>;
+  Entries: TArray<TQueueEntry>;
+  Jobs: TArray<IHandlerJob>;
 begin
   FLock.Acquire;
   try
@@ -700,13 +845,16 @@ begin
   // stop acceptance; a parked worker leaves the loop at the next park
   FQueue.Stop;
   // every entry that still waits is refused, per the refusal mode
-  Streams := FQueue.DrainAll;
-  for I := 0 to High(Streams) do
-  begin
-    AnswerRefusal(Streams[I]);
-    // each drained entry drops its queue reference
-    Streams[I].ReleaseRef;
-  end;
+  Entries := FQueue.DrainEntries;
+  for I := 0 to High(Entries) do
+    if Entries[I].Job <> nil then
+      Entries[I].Job.Refuse(jrStopped)
+    else
+    begin
+      AnswerRefusal(Entries[I].Stream);
+      // each drained entry drops its queue reference
+      Entries[I].Stream.ReleaseRef;
+    end;
 
   // wait for the workers up to the graceful timeout.  A worker that runs a
   // handler is not finished until that handler returns.
@@ -721,6 +869,14 @@ begin
     Streams := SnapshotActive;
     for I := 0 to High(Streams) do
       Streams[I].Cancel(ecCancel);
+    FLock.Acquire;
+    try
+      Jobs := FActiveJobs.ToArray;
+    finally
+      FLock.Release;
+    end;
+    for I := 0 to High(Jobs) do
+      Jobs[I].Cancel;
     Deadline := GetTickCount64 + QWord(FGracefulTimeoutMs);
     while (AliveThreadCount > 0) and (GetTickCount64 < Deadline) do
       Sleep(1);

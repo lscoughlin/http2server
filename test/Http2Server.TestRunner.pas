@@ -53,6 +53,8 @@ uses
   Http2Server.Http1.TestKit,
   Http2Server.Http1.Head.Test,
   Http2Server.Http1.Chunked.Test,
+  Http2Server.Http1.RawClient,
+  Http2Server.Http1.Live.Test,
   Http2Server.Output.Test,
   Http2Server.Licence.Test,
   Http2Server.Encoding.Test,

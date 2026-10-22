@@ -36,7 +36,7 @@ interface
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils, Classes, SyncObjs,
+  SysUtils, Classes, SyncObjs, {$IFDEF UNIX}Sockets,{$ENDIF}
   mormot.core.base,
   mormot.core.os,
   mormot.core.threads,
@@ -53,7 +53,18 @@ uses
   Http2Server.StreamPool,
   Http2Server.Stream,
   Http2Server.Tls,
-  Http2Server.Admission;
+  Http2Server.Admission,
+  Http2Server.HandlerJob,
+  Http2Server.Http1.Limits,
+  Http2Server.Http1.Select,
+  Http2Server.Http1.Core,
+  Http2Server.Async.Events;
+
+const
+  /// the time a staged close waits for the peer to close first, in seconds
+  cDrainSeconds = 2;
+  /// the how argument of shutdown that closes the write side
+  cShutWrite = 1;
 
 type
   THttp2AsyncServer = class;
@@ -74,23 +85,8 @@ type
     procedure Signal;
   end;
 
-  /// the events of one connection, wired to the shared handler pool
-  THttp2ConnectionEvents = class(TInterfacedObject, IConnectionEvents)
-  private
-    /// the server that owns the pool and the observer; a weak reference
-    FServer: THttp2AsyncServer;
-    /// the handler pool of the server
-    FPool: THandlerPool;
-    procedure Notify(const AKind: TServerEventKind;
-      const AStreamId: LongWord; const ALimit: TLimitKind;
-      const ADetail: string);
-  public
-    constructor Create(const AServer: THttp2AsyncServer);
-    procedure RequestReady(const AStream: TServerStream);
-    procedure StreamReset(const AStream: TServerStream);
-    procedure ConnectionClosing;
-    procedure LimitTripped(const AKind: TLimitKind);
-  end;
+  /// the protocol that a connection speaks, once it is known
+  TConnectionMode = (cmUndecided, cmHttp2, cmHttp1);
 
   /// one connection of the HTTP/2 async server
   ///
@@ -103,6 +99,13 @@ type
     FCore: TServerConnectionCore;
     FEvents: IConnectionEvents;
     FWaker: IWriteWaker;
+    /// the protocol of the connection; undecided until the first octets
+    FMode: TConnectionMode;
+    /// the HTTP/1.1 core; nil on an HTTP/2 connection
+    FH1: TH1Core;
+    FH1Events: IH1Events;
+    /// the second at which a staged close ends; 0 while the connection serves
+    FDrainUntilSec: TAsyncConnectionSec;
     /// the monotonic second at which the first header block must have ended
     // - zero once the first request reached the core
     FHeaderDeadlineSec: TAsyncConnectionSec;
@@ -119,6 +122,14 @@ type
     FSendRequested: Boolean;
     /// guards the two send flags
     FSendLock: TCriticalSection;
+    procedure StartHttp2;
+    procedure StartHttp1;
+    function OnReadHttp1: TPollAsyncSocketOnReadWrite;
+    function SendPendingHttp1: Boolean;
+    function Http1WantsClose: Boolean;
+    function PullOutput(out AData: TBytes): Boolean;
+    function OutputPending: Boolean;
+    procedure BeginDrain;
   protected
     procedure AfterCreate; override;
     procedure BeforeDestroy; override;
@@ -264,63 +275,9 @@ begin
   FConnection.SendPendingOutput;
 end;
 
-{ THttp2ConnectionEvents }
-
-constructor THttp2ConnectionEvents.Create(const AServer: THttp2AsyncServer);
-begin
-  inherited Create;
-  FServer := AServer;
-  if FServer <> nil then
-    FPool := FServer.Handlers;
-end;
-
-procedure THttp2ConnectionEvents.Notify(const AKind: TServerEventKind;
-  const AStreamId: LongWord; const ALimit: TLimitKind;
-  const ADetail: string);
-begin
-  if FServer <> nil then
-    FServer.Notify(AKind, AStreamId, ALimit, ADetail);
-end;
-
-procedure THttp2ConnectionEvents.RequestReady(const AStream: TServerStream);
-begin
-  if AStream <> nil then
-    Notify(seStreamOpened, AStream.StreamId, lkReset, 'the request is complete');
-  if FPool <> nil then
-    FPool.Admit(AStream);
-end;
-
-procedure THttp2ConnectionEvents.StreamReset(const AStream: TServerStream);
-begin
-  // the stream is cancelled inside the core; the pool removes a queued entry
-  if AStream <> nil then
-  begin
-    Notify(seStreamReset, AStream.StreamId, lkReset, 'the stream reset');
-    if FServer <> nil then
-      FServer.StreamResetted;
-  end;
-  if FPool <> nil then
-    FPool.RemoveStream(AStream.StreamId);
-end;
-
-procedure THttp2ConnectionEvents.ConnectionClosing;
-begin
-  // the IO thread closes the socket after the output drains
-end;
-
-procedure THttp2ConnectionEvents.LimitTripped(const AKind: TLimitKind);
-begin
-  if FServer <> nil then
-    FServer.BucketTripped;
-  Notify(seBucketTripped, 0, AKind, 'a token bucket tripped');
-end;
-
 { THttp2AsyncConnection }
 
 procedure THttp2AsyncConnection.AfterCreate;
-var
-  Options: TConnectionCoreOptions;
-  Limits: TConnectionLimits;
 begin
   FServer := THttp2AsyncServer(fOwner);
   FHeaderDeadlineSec := TAsyncConnectionSec(GetTickCount64 div 1000);
@@ -328,6 +285,16 @@ begin
     FHeaderDeadlineSec := FHeaderDeadlineSec + TAsyncConnectionSec(
       cardinal((FServer.Factory.HeaderTimeoutMs + 999) div 1000));
   FIdleSeconds := cardinal(FServer.Factory.IdleTimeoutMs div 1000);
+  FSendLock := TCriticalSection.Create;
+  FMode := cmUndecided;
+  FServer.ConnectionOpened;
+end;
+
+procedure THttp2AsyncConnection.StartHttp2;
+var
+  Options: TConnectionCoreOptions;
+  Limits: TConnectionLimits;
+begin
   Options := FServer.CoreOptions;
   // every control kind carries its own bucket.  The kinds differ in their
   // legitimate rate: a WINDOW_UPDATE accompanies each window a peer refills,
@@ -344,13 +311,30 @@ begin
        FServer.Factory.WindowUpdateBucket),
      TControlBucketOption.Create(lkContinuation,
        FServer.Factory.ContinuationBucket)]);
-  FEvents := THttp2ConnectionEvents.Create(FServer);
+  FEvents := THttp2ConnectionEvents.Create(FServer.Handlers, FServer.Notify,
+    FServer.StreamResetted, FServer.BucketTripped);
   FCore := TServerConnectionCore.Create(Options, FEvents, Limits,
     FServer.Factory.Clock);
   FWaker := THttp2ConnectionWaker.Create(Self);
   FCore.SetWriteWaker(FWaker);
-  FSendLock := TCriticalSection.Create;
-  FServer.ConnectionOpened;
+  FMode := cmHttp2;
+end;
+
+procedure THttp2AsyncConnection.StartHttp1;
+var
+  Options: TH1CoreOptions;
+begin
+  Options.Limits := FServer.Factory.Http11;
+  if fSecure <> nil then
+    Options.Scheme := 'https'
+  else
+    Options.Scheme := 'http';
+  Options.OutboundLimit := FServer.Factory.ChannelQueueLimit;
+  FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers);
+  FH1 := TH1Core.Create(Options, FH1Events);
+  FWaker := THttp2ConnectionWaker.Create(Self);
+  FH1.SetWriteWaker(FWaker);
+  FMode := cmHttp1;
 end;
 
 procedure THttp2AsyncConnection.BeforeDestroy;
@@ -363,6 +347,9 @@ begin
   FSendLock.Free;
   FCore.Free;
   FCore := nil;
+  FH1.Free;
+  FH1 := nil;
+  FH1Events := nil;
   FWaker := nil;
   FEvents := nil;
 end;
@@ -402,10 +389,17 @@ begin
     result := inherited OnFirstRead(aOwner);
     if not result then
       exit;
-    // a TLS connection that did not negotiate h2 is refused, so no HTTP/1.1
-    // request ever reaches the HTTP/2 state machine
-    if (fSecure <> nil) and not NegotiatedH2(fSecure) then
-      result := false;
+    // a TLS connection that negotiated h2 speaks HTTP/2. Any other TLS
+    // connection speaks HTTP/1.1 when the fallback is on, and is refused when it
+    // is off, so no HTTP/1.1 request reaches the HTTP/2 state machine. A cleartext
+    // connection is decided by its first octets in OnRead
+    if fSecure <> nil then
+      if NegotiatedH2(fSecure) then
+        StartHttp2
+      else if FServer.Factory.Http11Fallback then
+        StartHttp1
+      else
+        result := false;
   except
     on E: Exception do
       // an unreadable socket is refused, and the refusal keeps the read
@@ -421,6 +415,31 @@ begin
   Http2IoThreadEnter;
   try
     result := soContinue;
+    if FMode = cmUndecided then
+    begin
+      if fRd.Len = 0 then
+        exit;
+      case SelectCleartextProtocol(fRd.Buffer^, fRd.Len) of
+        pcNeedMore:
+          begin
+            // the octets so far could be the HTTP/2 preface; the header
+            // deadline bounds the wait
+            if (FHeaderDeadlineSec <> 0) and
+               (TAsyncConnectionSec(GetTickCount64 div 1000) > FHeaderDeadlineSec) then
+              exit(soClose);
+            exit;
+          end;
+        pcHttp2:
+          StartHttp2;
+      else
+        if FServer.Factory.Http11Fallback then
+          StartHttp1
+        else
+          exit(soClose);
+      end;
+    end;
+    if FMode = cmHttp1 then
+      exit(OnReadHttp1);
     if FCore = nil then
       exit(soClose);
     if fRd.Len > 0 then
@@ -460,6 +479,14 @@ begin
     // the next pull, because fOwner.Write calls this method before it
     // returns, so a pull here would recurse into the same write path
     result := soContinue;
+    if FMode = cmHttp1 then
+    begin
+      if Http1WantsClose and (PendingWrite = 0) then
+        BeginDrain;
+      exit;
+    end;
+    if FCore = nil then
+      exit;
     // A GOAWAY trip or a graceful stop closes the connection once the last
     // frame left the socket.  OnRead cannot make that decision after the last
     // stream ends, because the trip already drained it, so the decision runs
@@ -479,7 +506,7 @@ var
   Again: Boolean;
 begin
   result := False;
-  if (FCore = nil) or IsClosed then
+  if ((FCore = nil) and (FH1 = nil)) or IsClosed then
     exit;
   // a wake-up that arrives while the loop runs is recorded and not dropped,
   // because the outer loop repeats once the flag is set.  The lock closes the
@@ -506,8 +533,9 @@ begin
       // the drain turns the handler buffers into DATA frames.  It runs under
       // the core lock, which every stream also takes, so the HPACK encoder
       // keeps one owner per connection
-      FCore.DrainPending;
-      while FCore.TakeOutput(Data) do
+      if FCore <> nil then
+        FCore.DrainPending;
+      while PullOutput(Data) do
       begin
         // the mORMot2 write path takes the connection write lock, sends at
         // once when it can, and otherwise subscribes for the write event.  A
@@ -525,7 +553,7 @@ begin
       // record, and the handler would wait for a drain that never comes.
       FSendLock.Acquire;
       try
-        if FSendRequested or FCore.HasOutput then
+        if FSendRequested or OutputPending then
           Again := True
         else
         begin
@@ -545,12 +573,52 @@ begin
       FSendLock.Release;
     end;
   end;
+  // the close decision of an HTTP/1.1 exchange can come after the last write,
+  // so the end of every send loop looks at it too
+  if (FMode = cmHttp1) and Http1WantsClose and (PendingWrite = 0) then
+    BeginDrain;
 end;
 
 function THttp2AsyncConnection.OnLastOperationIdle(
   nowsec: TAsyncConnectionSec): boolean;
 begin
   result := false;
+  if FMode = cmHttp1 then
+  begin
+    // a staged close ends when its drain time has passed
+    if (FDrainUntilSec <> 0) and (nowsec >= FDrainUntilSec) then
+    begin
+      fOwner.ConnectionRemove(Handle);
+      exit(True);
+    end;
+    // a request half read past the header deadline gets a 408 and a close
+    if FH1.CheckDeadlines(GetTickCount64, FServer.Factory.HeaderTimeoutMs) then
+      SendPendingOutput;
+    // an idle connection holds no request; a stalled writer sends nothing
+    if (FIdleSeconds <> 0) and (nowsec - fLastOperation >= FIdleSeconds) and
+       ((not FH1.Busy) or FH1.HasOutput) then
+    begin
+      fOwner.ConnectionRemove(Handle);
+      exit(True);
+    end;
+    exit;
+  end;
+  if FMode = cmUndecided then
+  begin
+    // no octet decided the protocol within the header timeout
+    if (FHeaderDeadlineSec <> 0) and (nowsec > FHeaderDeadlineSec) then
+    begin
+      fOwner.ConnectionRemove(Handle);
+      exit(True);
+    end;
+    // a connection that never sent an octet is idle
+    if (FIdleSeconds <> 0) and (nowsec - fLastOperation >= FIdleSeconds) then
+    begin
+      fOwner.ConnectionRemove(Handle);
+      exit(True);
+    end;
+    exit;
+  end;
   if FCore = nil then
     exit;
   // the first header block did not complete within the header timeout
@@ -575,7 +643,74 @@ begin
   // sink of a detached stream learn it now and not at their next timeout
   if FCore <> nil then
     FCore.ConnectionLost;
+  if FH1 <> nil then
+    FH1.ConnectionLost;
   inherited OnClose;
+end;
+
+function THttp2AsyncConnection.PullOutput(out AData: TBytes): Boolean;
+begin
+  if FH1 <> nil then
+    Result := FH1.TakeOutput(AData)
+  else
+    Result := FCore.TakeOutput(AData);
+end;
+
+function THttp2AsyncConnection.OutputPending: Boolean;
+begin
+  if FH1 <> nil then
+    Result := FH1.HasOutput
+  else
+    Result := FCore.HasOutput;
+end;
+
+function THttp2AsyncConnection.Http1WantsClose: Boolean;
+begin
+  Result := (FH1 <> nil) and FH1.WantsClose;
+end;
+
+function THttp2AsyncConnection.SendPendingHttp1: Boolean;
+begin
+  Result := SendPendingOutput;
+end;
+
+procedure THttp2AsyncConnection.BeginDrain;
+begin
+  // The response left the socket. A close that follows while the peer still
+  // sends would reset the connection and could destroy the response in the
+  // peer's buffer, so the write side closes first (RFC 9112 section 9.6) and
+  // the octets that still arrive are dropped until the peer closes or the drain
+  // time passes
+  if FDrainUntilSec <> 0 then
+    exit;
+  if (fSecure <> nil) or (fSocket = nil) then
+  begin
+    fOwner.ConnectionRemove(Handle);
+    exit;
+  end;
+  {$IFDEF UNIX}Sockets.fpshutdown(LongInt(fSocket.Socket), cShutWrite);{$ENDIF}
+  FDrainUntilSec := TAsyncConnectionSec(GetTickCount64 div 1000) + cDrainSeconds;
+end;
+
+function THttp2AsyncConnection.OnReadHttp1: TPollAsyncSocketOnReadWrite;
+var
+  Data: TBytes;
+begin
+  result := soContinue;
+  if fRd.Len > 0 then
+  begin
+    SetLength(Data, fRd.Len);
+    Move(fRd.Buffer^, Data[0], fRd.Len);
+    fRd.Reset;
+    // while a staged close drains, the octets are dropped
+    if FDrainUntilSec = 0 then
+      FH1.Feed(Data);
+  end;
+  if FH1.CheckDeadlines(GetTickCount64, FServer.Factory.HeaderTimeoutMs) then
+    ;   // the 408 answer is queued
+  SendPendingHttp1;
+  if Http1WantsClose and (PendingWrite = 0) then
+    BeginDrain;
 end;
 
 { THttp2AsyncServer }
@@ -661,7 +796,7 @@ begin
   result.KeyPassword := FFactory.Tls.KeyPassword;
   result.HandshakeTimeoutMs := LongWord(FFactory.Tls.HandshakeTimeoutMs);
   result.AllowClearText := FFactory.ClearTextAllowed;
-  result.AllowHttp11 := False;
+  result.AllowHttp11 := FFactory.Http11Fallback;
   result.IgnoreCertificateErrors := True;
 end;
 

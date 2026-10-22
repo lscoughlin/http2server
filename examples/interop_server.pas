@@ -238,7 +238,7 @@ var
   Line, Arg, CertFile, KeyFile: string;
   I: Integer;
   BigBucket, StrictBucket: TTokenBucketOptions;
-  Strict: Boolean;
+  Strict, NoHttp11: Boolean;
   Factory: THttp2ServerFactory;
 begin
   // the validation runs drive a large body, so the control-frame rate limits
@@ -258,10 +258,13 @@ begin
   CertFile := '';
   KeyFile := '';
   Strict := False;
+  NoHttp11 := False;
   for I := 1 to ParamCount do
   begin
     Arg := ParamStr(I);
-    if Arg = 'strict' then
+    if Arg = 'no-http11' then
+      NoHttp11 := True
+    else if Arg = 'strict' then
       Strict := True
     else if Pos('--cert=', Arg) = 1 then
       CertFile := Copy(Arg, Length('--cert=') + 1, MaxInt)
@@ -277,6 +280,10 @@ begin
     .WithHandler(TInteropHandler.Create)
     .WithHandlerThreads(4)
     .WithIOThreads(4);
+  // the HTTP/2 conformance run needs a server that speaks HTTP/2 only: the
+  // fallback answers invalid preface octets as an HTTP/1.1 request
+  if NoHttp11 then
+    Factory := Factory.WithHttp11Fallback(False);
   if CertFile <> '' then
     Factory := Factory.WithTls(TTlsServerOptions.Create
       .WithCertificateFile(CertFile)
