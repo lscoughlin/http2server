@@ -32,6 +32,10 @@ uses
   SysUtils, Classes, SyncObjs, Generics.Collections,
   Http2Server.Errors, Http2Server.Hpack;
 
+const
+  /// the greatest period or timeout of an event stream: one hour, in milliseconds
+  cSseMaxMs = 3600000;
+
 type
   /// the answer of Send
   TSendResult = (
@@ -48,6 +52,34 @@ type
     ccGraceful,
     /// reset the stream at once and drop the queued bytes
     ccAbort);
+
+  /// one unit of work for a work source
+  TStreamTask = procedure of object;
+
+  /// one ordered task queue of the streaming pool
+  // - every method is safe to call from any thread, also from inside a task
+  IStreamSource = interface
+    ['{7E1F0C11-0041-4A11-9C72-000000000701}']
+    /// queue a task; it runs after the earlier tasks of this source
+    // - answers False when the source is closed or the pool has stopped
+    function Post(const ATask: TStreamTask): Boolean;
+    /// queue a task that becomes ready ADelayMs milliseconds from now
+    // - the task then queues behind the tasks that are already waiting
+    function PostAfter(const ADelayMs: Cardinal;
+      const ATask: TStreamTask): Boolean;
+    /// drop the waiting tasks and the timers, and refuse later posts
+    // - a task that runs at this instant finishes
+    procedure Close;
+    /// true once Close ran or the pool stopped
+    function IsClosed: Boolean;
+    /// the number of tasks that wait in the queue of this source
+    function PendingTasks: Integer;
+  end;
+
+  /// the maker of work sources; the server points it at the streaming pool
+  TNewSourceFunc = function: IStreamSource of object;
+
+  IChannelRegistry = interface;
 
   /// the phase of a channel
   TChannelState = (
@@ -102,6 +134,9 @@ type
       const ABody: TBytes);
     /// pending channels only: send the response headers and open the data path
     procedure Activate(const AStatus: Integer; const AHeaders: THeaderBlock);
+    /// the registry of the server that holds this channel; nil when none
+    // - a stream layer reads its work source and its settings from here
+    function Registry: IChannelRegistry;
   end;
 
   /// the registry refused a detach because the limit of detached streams is
@@ -129,6 +164,12 @@ type
     function QueueLimit: Integer;
     /// the queued byte count at or below which a refused writer is told
     function LowWater: Integer;
+    /// a new work source of the streaming pool; nil when the server has none
+    function NewSource: IStreamSource;
+    /// the period of the keep-alive comment of an event stream; 0 means none
+    function SseKeepAliveMs: Integer;
+    /// how long a full event stream may stay full before the server closes it
+    function SseStallTimeoutMs: Integer;
   end;
 
   /// the registry of one server
@@ -140,6 +181,9 @@ type
     FLowWater: Integer;
     FCount: Integer;
     FChannels: TList<IDuplexChannel>;
+    FSourceProvider: TNewSourceFunc;
+    FSseKeepAliveMs: Integer;
+    FSseStallMs: Integer;
   public
     /// ALimit is the greatest number of live channels; 0 refuses every detach
     constructor Create(const ALimit: Integer; const AQueueLimit: Integer = 0;
@@ -154,6 +198,14 @@ type
     function Limit: Integer;
     function QueueLimit: Integer;
     function LowWater: Integer;
+    function NewSource: IStreamSource;
+    function SseKeepAliveMs: Integer;
+    function SseStallTimeoutMs: Integer;
+    /// the maker of work sources; set once, before the first channel
+    property SourceProvider: TNewSourceFunc read FSourceProvider
+      write FSourceProvider;
+    property KeepAliveMs: Integer write FSseKeepAliveMs;
+    property StallTimeoutMs: Integer write FSseStallMs;
   end;
 
 implementation
@@ -259,6 +311,24 @@ end;
 function TChannelRegistry.LowWater: Integer;
 begin
   Result := FLowWater;
+end;
+
+function TChannelRegistry.NewSource: IStreamSource;
+begin
+  if Assigned(FSourceProvider) then
+    Result := FSourceProvider()
+  else
+    Result := nil;
+end;
+
+function TChannelRegistry.SseKeepAliveMs: Integer;
+begin
+  Result := FSseKeepAliveMs;
+end;
+
+function TChannelRegistry.SseStallTimeoutMs: Integer;
+begin
+  Result := FSseStallMs;
 end;
 
 end.

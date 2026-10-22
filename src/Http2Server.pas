@@ -35,7 +35,9 @@ uses
   Http2Server.Seam,
   Http2Server.Config,
   Http2Server.Encoding,
-  Http2Server.Server;
+  Http2Server.Server,
+  Http2Server.Sse.Encoder,
+  Http2Server.Sse;
 
 type
   /// the server lifecycle
@@ -69,6 +71,11 @@ type
   TChannelClose = Http2Server.Duplex.TChannelClose;
   TChannelState = Http2Server.Duplex.TChannelState;
   EDetachRefused = Http2Server.Duplex.EDetachRefused;
+
+  /// server-sent events
+  ISseStream = Http2Server.Sse.ISseStream;
+  TSseEvent = Http2Server.Sse.Encoder.TSseEvent;
+  ESseError = Http2Server.Sse.Encoder.ESseError;
 
   /// the observation contract and the counters
   IHttp2ServerObserver = Http2Server.Observer.IHttp2ServerObserver;
@@ -135,6 +142,12 @@ const
   csActive = Http2Server.Duplex.csActive;
   csClosed = Http2Server.Duplex.csClosed;
 
+/// answer a request with an event stream and detach it
+/// - see Http2Server.Sse.StartSse
+function StartSse(const ARequest: IServerRequest;
+  const AResponse: IServerResponse;
+  const AExtraHeaders: THeaderBlock = nil): ISseStream;
+
 /// the coding to answer a request with, given its `accept-encoding` value
 /// - an absent or empty value yields ceIdentity, so a peer that offered no
 ///   coding is never sent one
@@ -167,6 +180,13 @@ function GzipDecompress(const AData: TBytes): TBytes;
 function DeflateDecompress(const AData: TBytes): TBytes;
 
 implementation
+
+function StartSse(const ARequest: IServerRequest;
+  const AResponse: IServerResponse;
+  const AExtraHeaders: THeaderBlock): ISseStream;
+begin
+  Result := Http2Server.Sse.StartSse(ARequest, AResponse, AExtraHeaders);
+end;
 
 { THttp2ServerFactoryHelper }
 

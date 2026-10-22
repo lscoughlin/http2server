@@ -47,6 +47,8 @@ uses
   Http2Server.DetachLive.Test,
   Http2Server.Ws.Frames.Test,
   Http2Server.Ws.Parser.Test,
+  Http2Server.Sse.Test,
+  Http2Server.SseLive.Test,
   Http2Server.Output.Test,
   Http2Server.Licence.Test,
   Http2Server.Encoding.Test,

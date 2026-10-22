@@ -96,6 +96,15 @@ server holds `MaxDetachedStreams` channels. The facade `Http2Server` re-exports
 `IDuplexChannel`, `IChannelSink`, `TSendResult`, `TChannelClose`,
 `TChannelState` and `EDetachRefused`.
 
+## Server-sent events
+
+`StartSse` answers a request with an event stream and detaches it. It returns an
+`ISseStream`, and any thread sends `TSseEvent` values to it. `SseKeepAliveMs`
+and `SseStallTimeoutMs` configure the keep-alive comment and the stall rule. The
+document [sse](sse.md) describes the format rules, the threads and the close
+rules. The facade `Http2Server` re-exports `ISseStream`, `TSseEvent`,
+`ESseError` and `StartSse`.
+
 ## The observation events
 
 `IHttp2ServerObserver` (`src/Http2Server.Observer.pas:78-82`) holds one

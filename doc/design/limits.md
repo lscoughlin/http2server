@@ -139,6 +139,13 @@ control bucket on each limited control frame. A `False` answer starts the
 close sequence. The observer receives the bucket trip, and then the
 `GOAWAY` sent event.
 
+## The stall timeout of an event stream
+
+An event stream whose outbound queue stays full is a slow reader. The setting
+`SseStallTimeoutMs` bounds the time. The server closes a stream that stays full
+for that time, with an abort (see [sse](sse.md)). The check is a timer of the
+streaming pool and uses no token bucket.
+
 ## The default limits
 
 `THttp2ServerFactory.Create` sets the default of every bucket

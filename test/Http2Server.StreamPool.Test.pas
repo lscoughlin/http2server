@@ -23,7 +23,7 @@ interface
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, Generics.Collections, fpcunit, testregistry,
-  Http2Server.Limits, Http2Server.Seam, Http2Server.StreamPool;
+  Http2Server.Limits, Http2Server.Seam, Http2Server.Duplex, Http2Server.StreamPool;
 
 type
   /// one named task that writes its name into a shared log

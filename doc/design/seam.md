@@ -226,6 +226,14 @@ flight, and `ReleaseHost` waits (for a bounded time) until the count is zero. A
 lock held across the call would invert the lock order, because a call takes the
 connection lock and the connection lock is taken first.
 
+**The registry and the work source.** A channel answers `Registry`, the
+registry of the server that holds it. The registry hands out a new work source
+of the streaming pool (`NewSource`) and carries the settings that a stream layer
+reads, `SseKeepAliveMs` and `SseStallTimeoutMs`. A stream layer such as the event
+stream (see [sse](sse.md)) posts its timers to such a source, so it needs no
+thread of its own. The registry answers a nil source when the server has no
+pool.
+
 **Lock order.** The connection lock comes first and the channel lock second. The
 channel never calls a stream method while it holds its own lock, because a
 stream method takes the connection lock.

@@ -28,6 +28,7 @@ the copied protocol units.
 - `doc/README.md` is the route map of the documentation.
 - `doc/design/architecture.md` holds the shape of the library.
 - `doc/design/public-api.md` holds the surface a caller uses.
+- `doc/design/sse.md` holds the server-sent event stream.
 - `doc/verification/validation.md` holds the conformance record.
 - `doc/verification/toolchain.md` holds the compiler and the build.
 

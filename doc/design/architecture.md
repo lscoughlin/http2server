@@ -139,14 +139,16 @@ together with no name clash.
 | `Http2Server.Alpn.pas` | 276 | TLS | the `SSL_CTX_set_alpn_select_cb` binding and callback |
 | `Http2Server.Admission.pas` | 709 | admission | the bounded queue and the handler pool |
 | `Http2Server.StreamAdapters.pas` | 226 | admission | the handler-side request and response of one stream |
-| `Http2Server.Duplex.pas` | 238 | seam | the interfaces of a detached stream and the registry of channels |
-| `Http2Server.StreamChannel.pas` | 421 | seam | the channel of a detached HTTP/2 stream |
+| `Http2Server.Duplex.pas` | 334 | seam | the interfaces of a detached stream and the registry of channels |
+| `Http2Server.StreamChannel.pas` | 444 | seam | the channel of a detached HTTP/2 stream |
+| `Http2Server.Sse.Encoder.pas` | 190 | streaming | the encoder of server-sent events: field rules, line splitting and the injection checks |
+| `Http2Server.Sse.pas` | 347 | streaming | `StartSse` and the event stream: serialised sends, the keep-alive timer and the stall rule |
 | `Http2Server.Ws.Frames.pas` | 287 | codec | WebSocket opcodes, close codes, the mask, the frame encoder and the Close payload helpers (RFC 6455) |
 | `Http2Server.Ws.Utf8.pas` | 116 | codec | a resumable UTF-8 validator that holds three bytes of state |
 | `Http2Server.Ws.Parser.pas` | 291 | codec | the resumable frame parser; it pushes the unmasked payload of a data frame to a sink and buffers no data frame |
 | `Http2Server.Ws.Reader.pas` | 265 | codec | the assembly of frames into messages with the size, fragment and UTF-8 checks; the codec holds no socket and no thread |
 | `Http2Server.StreamHost.pas` | 60 | seam | the callbacks that a stream uses to reach its connection |
-| `Http2Server.StreamPool.pas` | 796 | streaming | the streaming pool: ordered task queues, timers and fair scheduling |
+| `Http2Server.StreamPool.pas` | 773 | streaming | the streaming pool: ordered task queues, timers and fair scheduling |
 | `Http2Server.Connection.Core.pas` | 703 | connection | the base of the connection core: fields, locks, output queue, write wake-up and stream table |
 | `Http2Server.Connection.pas` | 617 | connection | the connection core: `Feed` and the frame handlers |
 | `Http2Server.HpackConnection.pas` | 229 | connection | the HPACK encoder and decoder of one connection |

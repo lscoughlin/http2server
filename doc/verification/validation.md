@@ -104,6 +104,30 @@ Four rules keep the pool alive.
 `h2load` is a benchmark and not a conformance tool, so no `h2load` wall time
 gates the acceptance. The runs above finish in under one second.
 
+### Server-sent events
+
+The unit tests assert the exact bytes of the encoder for the rules of the WHATWG
+HTML Living Standard section 9.2 (checked on 2026-10-22): the line splitting at
+LF, CR and CRLF, the final empty data field, the two spaces after the colon for
+a value that starts with a space, the rejection of CR, LF and NUL, the rejection
+of text that is not UTF-8 and the `retry` cap. The stream tests use a fake
+channel and a real streaming pool of one thread. They show that two producer
+threads write 1000 whole events with no interleave, that a keep-alive comment
+reaches an idle stream, that an event stream with a steady flow gets no comment,
+that a stalled stream is closed with an abort and a drained stream is not, and
+that 1000 open streams with a period of 40 milliseconds are served by one pool
+thread.
+
+Three live tests run on a server over HTTP/2: the events arrive byte for byte,
+an idle stream receives the keep-alive comment, and `Stop` ends a stream with
+END_STREAM. The example `examples/sse_clock.pas` shows the events with
+`curl --http2-prior-knowledge -N` on 2026-10-22: the status is 200, the content
+type is `text/event-stream`, and one `tick` event arrives each second.
+
+Gaps of this record: the run with 5000 open streams and one ordinary request is
+not made, the HTTP/1.1 form of the stream waits for the HTTP/1.1 fallback, and a
+browser `EventSource` is not checked.
+
 ### The connection seam
 
 The command `python3 tools/seam/seam.py` drives a running example server and

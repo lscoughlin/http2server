@@ -112,6 +112,8 @@ ALPN name reaches OpenSSL.
 | `MaxDetachedStreams` | `WithMaxDetachedStreams` | the greatest number of detached streams of the whole server; 0 refuses every detach; the default is 10000 |
 | `ChannelQueueLimit` | `WithChannelQueueLimit` | the outbound queue limit of a detached stream, in bytes; the default is 262144 |
 | `ChannelLowWater` | `WithChannelLowWater` | the queued byte count at or below which a refused writer is told that the queue drained; the default is 65536 |
+| `SseKeepAliveMs` | `WithSseKeepAlive` | the period of the keep-alive comment of an event stream, in milliseconds; 0 turns it off; the default is 15000 |
+| `SseStallTimeoutMs` | `WithSseStallTimeout` | the time that a full event stream may stay full before the server closes it, in milliseconds; 0 turns the check off; the default is 30000 |
 
 A cancel hook runs at most once, never on the thread that called `Cancel`
 (`src/Http2Server.Seam.pas:64-70`). The count of cancel workers decides how many

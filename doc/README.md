@@ -48,6 +48,7 @@ library.
 | [connection](design/connection.md) | The connection core: bytes in, frames out, stream states and HPACK state. |
 | [output](design/output.md) | The response path: encode under the connection lock, then frame the bytes. |
 | [protocol](design/protocol.md) | The five protocol units, the server changes to them, and the errors they raise. |
+| [sse](design/sse.md) | The event stream: the encoder rules, the keep-alive, the stall rule and the close rules. |
 | [limits](design/limits.md) | The token buckets that bound the work a peer may ask for. |
 | [io-pool](design/io-pool.md) | The mORMot2 async subclasses, the write wake-up and the thread rule. |
 | [tls](design/tls.md) | The route to ALPN, the TLS plug-in of a connection and the OpenSSL binding. |

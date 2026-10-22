@@ -33,35 +33,12 @@ interface
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs, Generics.Collections,
-  Http2Server.Limits, Http2Server.Seam;
+  Http2Server.Limits, Http2Server.Seam, Http2Server.Duplex;
 
 type
-  /// one unit of work for a work source
-  TStreamTask = procedure of object;
-
   /// the report of a task that ended with an exception
   // - the event runs on the pool thread that ran the task
   TStreamTaskErrorEvent = procedure(const AError: Exception) of object;
-
-  /// one ordered task queue
-  // - every method is safe to call from any thread, also from inside a task
-  IStreamSource = interface
-    ['{7E1F0C11-0041-4A11-9C72-000000000701}']
-    /// queue a task; it runs after the earlier tasks of this source
-    // - answers False when the source is closed or the pool has stopped
-    function Post(const ATask: TStreamTask): Boolean;
-    /// queue a task that becomes ready ADelayMs milliseconds from now
-    // - the task then queues behind the tasks that are already waiting
-    function PostAfter(const ADelayMs: Cardinal;
-      const ATask: TStreamTask): Boolean;
-    /// drop the waiting tasks and the timers, and refuse later posts
-    // - a task that runs at this instant finishes
-    procedure Close;
-    /// true once Close ran or the pool stopped
-    function IsClosed: Boolean;
-    /// the number of tasks that wait in the queue of this source
-    function PendingTasks: Integer;
-  end;
 
   /// a snapshot of the counters of a pool
   TStreamPoolStats = record

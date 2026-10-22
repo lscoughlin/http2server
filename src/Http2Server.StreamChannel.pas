@@ -72,6 +72,7 @@ type
     function IsOpen: Boolean;
     function State: TChannelState;
     function QueuedBytes: Int64;
+    function Registry: IChannelRegistry;
     procedure SetSink(const ASink: IChannelSink);
     procedure ReturnCredit(const ACount: Int64);
     procedure Complete(const AStatus: Integer; const AHeaders: THeaderBlock;
@@ -262,6 +263,11 @@ begin
   finally
     FLock.Release;
   end;
+end;
+
+function THttp2StreamChannel.Registry: IChannelRegistry;
+begin
+  Result := FRegistry;
 end;
 
 function THttp2StreamChannel.QueuedBytes: Int64;

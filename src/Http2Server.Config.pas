@@ -39,6 +39,7 @@ uses
   Http2Server.Frames,
   Http2Server.FlowControl,
   Http2Server.Limits,
+  Http2Server.Duplex,
   Http2Server.Seam;
 
 type
@@ -129,6 +130,8 @@ type
     FMaxDetachedStreams: Integer;
     FChannelQueueLimit: Integer;
     FChannelLowWater: Integer;
+    FSseKeepAliveMs: Integer;
+    FSseStallTimeoutMs: Integer;
     FQueue: TQueueOptions;
     FMaxConcurrentStreams: LongWord;
     FInitialStreamWindow: LongWord;
@@ -195,6 +198,10 @@ type
     function WithChannelQueueLimit(const AValue: Integer): THttp2ServerFactory;
     /// the queued byte count at or below which a refused writer is told
     function WithChannelLowWater(const AValue: Integer): THttp2ServerFactory;
+    /// the period of the keep-alive comment of an event stream, in milliseconds; 0 turns it off
+    function WithSseKeepAlive(const AValue: Integer): THttp2ServerFactory;
+    /// how long a full event stream may stay full before the server closes it; 0 turns it off
+    function WithSseStallTimeout(const AValue: Integer): THttp2ServerFactory;
 
     // ---- queue ----
 
@@ -295,6 +302,8 @@ type
     property MaxDetachedStreams: Integer read FMaxDetachedStreams;
     property ChannelQueueLimit: Integer read FChannelQueueLimit;
     property ChannelLowWater: Integer read FChannelLowWater;
+    property SseKeepAliveMs: Integer read FSseKeepAliveMs;
+    property SseStallTimeoutMs: Integer read FSseStallTimeoutMs;
 
     // ---- queue ----
 
@@ -437,6 +446,8 @@ begin
   Result.FMaxDetachedStreams := 10000;
   Result.FChannelQueueLimit := 262144;
   Result.FChannelLowWater := 65536;
+  Result.FSseKeepAliveMs := 15000;
+  Result.FSseStallTimeoutMs := 30000;
   Result.FQueue := TQueueOptions.Create;
   Result.FMaxConcurrentStreams := 100;
   Result.FInitialStreamWindow := 65535;
@@ -560,6 +571,20 @@ function THttp2ServerFactory.WithChannelLowWater(
 begin
   Result := Self;
   Result.FChannelLowWater := AValue;
+end;
+
+function THttp2ServerFactory.WithSseKeepAlive(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FSseKeepAliveMs := AValue;
+end;
+
+function THttp2ServerFactory.WithSseStallTimeout(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FSseStallTimeoutMs := AValue;
 end;
 
 function THttp2ServerFactory.WithQueue(
@@ -730,6 +755,10 @@ begin
     Add('the channel queue limit is below 1');
   if (FChannelLowWater < 0) or (FChannelLowWater >= FChannelQueueLimit) then
     Add('the channel low-water mark is outside 0 to the queue limit minus 1');
+  if (FSseKeepAliveMs < 0) or (FSseKeepAliveMs > cSseMaxMs) then
+    Add('the SSE keep-alive period is outside 0 to one hour');
+  if (FSseStallTimeoutMs < 0) or (FSseStallTimeoutMs > cSseMaxMs) then
+    Add('the SSE stall timeout is outside 0 to one hour');
   if FQueue.Depth < 0 then
     Add('the queue depth is below 0');
   if FQueue.MaxWaitMs < 0 then

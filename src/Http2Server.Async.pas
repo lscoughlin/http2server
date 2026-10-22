@@ -149,6 +149,8 @@ type
     FHandlers: THandlerPool;
     /// the registry of detached streams: the limit, the list, the queue sizes
     FChannels: IChannelRegistry;
+    /// the same object as FChannels, kept to set its provider and settings
+    FChannelImpl: TChannelRegistry;
     /// the streaming pool: the application work of detached streams
     FStreamPool: TStreamPool;
     FPolicy: TTlsPolicy;
@@ -587,10 +589,14 @@ begin
   FCoreOptions := BuildCoreOptions;
   FControlBucket := LeastControlBucket;
   FHandlers := THandlerPool.Create(AFactory);
-  FChannels := TChannelRegistry.Create(AFactory.MaxDetachedStreams,
+  FChannelImpl := TChannelRegistry.Create(AFactory.MaxDetachedStreams,
     AFactory.ChannelQueueLimit, AFactory.ChannelLowWater);
+  FChannelImpl.KeepAliveMs := AFactory.SseKeepAliveMs;
+  FChannelImpl.StallTimeoutMs := AFactory.SseStallTimeoutMs;
+  FChannels := FChannelImpl;
   FHandlers.ChannelRegistry := FChannels;
   FStreamPool := TStreamPool.Create(AFactory.StreamPoolSize);
+  FChannelImpl.SourceProvider := FStreamPool.NewSource;
   FConnectionLock := TCriticalSection.Create;
   FObserver := nil;
   FConnectionCount := 0;
@@ -612,9 +618,11 @@ begin
   Stop;
   FHandlers.Free;
   FHandlers := nil;
+  FChannelImpl.SourceProvider := nil;
   FStreamPool.Free;
   FStreamPool := nil;
   FChannels := nil;
+  FChannelImpl := nil;
   FConnectionLock.Free;
   FConnectionLock := nil;
   inherited Destroy;
