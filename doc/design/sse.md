@@ -67,6 +67,14 @@ The order of the fields is `retry`, `id`, `event`, then the data.
 The server makes no origin check for an event stream. The caller sets CORS
 headers.
 
+## HTTP/1.1
+
+The stream runs on both protocols. On HTTP/2 an event is a DATA frame. On HTTP/1.1
+the response is chunked, and one event is one chunk. A response to an HTTP/1.0
+request has no chunked coding, and the close of the connection ends it. `Close`
+sends the last chunk, and the connection serves the next request. The test suite
+runs the stream on both protocols (see [http1](http1.md)).
+
 ## Threads
 
 The keep-alive and the stall check are timers of one work source of the

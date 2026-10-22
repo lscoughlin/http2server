@@ -226,6 +226,13 @@ flight, and `ReleaseHost` waits (for a bounded time) until the count is zero. A
 lock held across the call would invert the lock order, because a call takes the
 connection lock and the connection lock is taken first.
 
+**HTTP/1.1.** An HTTP/1.1 response detaches into a `TH1ChunkedChannel`
+(`src/Http2Server.Http1.Channel.pas`). The channel has the same contract: `Send`
+returns `srQueued`, `srFull` or `srClosed`, a pending channel holds bytes until
+`Activate`, `Close` ends the response, and the sink hears of the end of the
+connection. The read side has no data. The document [http1](http1.md) describes
+it.
+
 **The registry and the work source.** A channel answers `Registry`, the
 registry of the server that holds it. The registry hands out a new work source
 of the streaming pool (`NewSource`) and carries the settings that a stream layer

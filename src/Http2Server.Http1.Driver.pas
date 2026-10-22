@@ -5,8 +5,9 @@ copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http1, driver, staged close, deadlines, async connection
 notes:
   - The driver sits between an async connection and the HTTP/1.1 core. It holds
-    the decisions that depend on time and on the state of the socket: when a close
-    is due, when the staged close ends, and which deadline fired. It touches no
+    the decisions that depend on time and on the state of the socket.
+    These are when a close is due, when the staged close ends, and which deadline
+    fired. It touches no
     socket, so a test calls it with plain numbers.
   - The staged close follows RFC 9112 section 9.6. The server sends the response,
     closes the write side, and drops the octets that still arrive until the peer

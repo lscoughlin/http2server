@@ -20,16 +20,21 @@ related_docs:
 invariants:
   - A client that offers no acceptable ALPN protocol is refused with a
     fatal alert, so no HTTP/1.1 request ever reaches an HTTP/2 code path.
+    With the HTTP/1.1 fallback on, a client that offers http/1.1 or no ALPN
+    extension is served by the HTTP/1.1 core and never by the HTTP/2 core.
   - The ALPN callback argument outlives every handshake.
-  - A TLS connection that did not negotiate h2 is refused after the handshake.
+  - A TLS connection that did not negotiate h2 is refused after the handshake when the fallback is off, and is served as HTTP/1.1 when the fallback is on.
   - The handshake deadline of the factory never exceeds the mORMot2 bound.
 ---
 # TLS and ALPN
 
 A TLS connection carries an ALPN extension. The server selects `h2` from the
-list that the client offers. A client that does not offer `h2` is refused with
-a fatal alert, so the server never receives an HTTP/1.1 request on a
-connection it believes to be HTTP/2.
+list that the client offers. When the HTTP/1.1 fallback is off, a client that
+does not offer `h2` is refused with a fatal alert, so the server never receives
+an HTTP/1.1 request on a connection it believes to be HTTP/2. When the fallback
+is on (the default), the server also accepts `http/1.1`, and a client that sends
+no ALPN extension is served as HTTP/1.1. The factory flag feeds the policy field
+`AllowHttp11`. The document [http1](http1.md) describes the fallback.
 
 ## The route
 
@@ -167,8 +172,9 @@ send and receive deadlines to the clamped value before the handshake runs
 nothing holds one IO thread for a bounded time only, and other clients still
 complete their handshakes on other threads.
 
-A TLS connection must select `h2`. After the handshake the connection checks
-the negotiated name and refuses the connection when the name is not `h2`
+After the handshake the connection checks the negotiated name. The name `h2`
+starts the HTTP/2 core. Any other name starts the HTTP/1.1 core when the fallback
+is on, and the connection is refused when the fallback is off
 (`src/Http2Server.Async.pas:273-293`).
 
 ## Open verification

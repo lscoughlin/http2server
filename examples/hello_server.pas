@@ -5,6 +5,9 @@ copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http2, example, hello, cleartext
 notes:
   - This example builds a cleartext server on port 8080 and serves one page.
+  - The same listener serves HTTP/2 and HTTP/1.1. A client reads it with the
+    command curl --http2-prior-knowledge http://127.0.0.1:8080/ or with the
+    command curl --http1.1 http://127.0.0.1:8080/ and gets the same body.
   - The server runs until the caller presses Enter, then stops.
 ---
 }

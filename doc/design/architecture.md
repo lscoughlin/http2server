@@ -141,6 +141,20 @@ together with no name clash.
 | `Http2Server.StreamAdapters.pas` | 226 | admission | the handler-side request and response of one stream |
 | `Http2Server.Duplex.pas` | 334 | seam | the interfaces of a detached stream and the registry of channels |
 | `Http2Server.StreamChannel.pas` | 444 | seam | the channel of a detached HTTP/2 stream |
+| `Http2Server.HandlerJob.pas` | 47 | seam | the job that the handler pool runs besides an HTTP/2 stream |
+| `Http2Server.Http1.Limits.pas` | 198 | http1 | the limits of the HTTP/1.1 parser as a record of the server builder |
+| `Http2Server.Http1.Guard.pas` | 707 | http1 | the strict rules that sit on the mORMot2 parser |
+| `Http2Server.Http1.Parser.pas` | 506 | http1 | the adapter that drives the mORMot2 parser one state at a time |
+| `Http2Server.Http1.Select.pas` | 58 | http1 | the clear-text choice between HTTP/2 and HTTP/1.1 |
+| `Http2Server.Http1.Status.pas` | 87 | http1 | the reason phrases of the status line |
+| `Http2Server.Http1.ResponseHead.pas` | 159 | http1 | the response head and its framing |
+| `Http2Server.Http1.Host.pas` | 213 | http1 | the cut-able link between an exchange and its core |
+| `Http2Server.Http1.Exchange.pas` | 722 | http1 | one HTTP/1.1 request with its response and its pool job |
+| `Http2Server.Http1.Channel.pas` | 356 | http1 | the chunked channel of a detached HTTP/1.1 response |
+| `Http2Server.Http1.Core.pas` | 467 | http1 | the HTTP/1.1 connection core |
+| `Http2Server.Http1.Driver.pas` | 128 | http1 | the staged close, the deadlines and the idle decision |
+| `Http2Server.Async.Events.pas` | 122 | io | the event receivers of an async connection |
+| `Http2Server.ResponseWriter.pas` | 144 | seam | the `Date` field and the header checks that both protocols share |
 | `Http2Server.Sse.Encoder.pas` | 190 | streaming | the encoder of server-sent events: field rules, line splitting and the injection checks |
 | `Http2Server.Sse.pas` | 347 | streaming | `StartSse` and the event stream: serialised sends, the keep-alive timer and the stall rule |
 | `Http2Server.Ws.Frames.pas` | 287 | codec | WebSocket opcodes, close codes, the mask, the frame encoder and the Close payload helpers (RFC 6455) |

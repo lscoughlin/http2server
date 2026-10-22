@@ -79,7 +79,9 @@ sets a value.
 | `Host` | `WithHost` | the address of the listener, such as `0.0.0.0` or `::1` |
 | `Port` | `WithPort` | the TCP port; 0 asks the operating system for a free port |
 | `Backlog` | `WithBacklog` | the length of the listen backlog |
-| `ClearTextAllowed` | `WithClearTextAllowed` | allows cleartext HTTP/2 (h2c prior knowledge); off by default |
+| `Http11Fallback` | `WithHttp11Fallback` | serves HTTP/1.1 on the same listener when the peer does not speak HTTP/2; on by default |
+| `Http11` | `WithHttp11Limits` | the record `THttp11Limits`: the limits of the HTTP/1.1 parser (see [http1](http1.md)) |
+| `ClearTextAllowed` | `WithClearTextAllowed` | allows cleartext connections (HTTP/2 with prior knowledge, and HTTP/1.1 when the fallback is on); off by default |
 
 The listener settings are declared at `src/Http2Server.Config.pas:149-159`.
 

@@ -96,6 +96,13 @@ server holds `MaxDetachedStreams` channels. The facade `Http2Server` re-exports
 `IDuplexChannel`, `IChannelSink`, `TSendResult`, `TChannelClose`,
 `TChannelState` and `EDetachRefused`.
 
+## HTTP/1.1
+
+The same handler serves HTTP/1.1. `WithHttp11Fallback` turns the fallback on or
+off, and `WithHttp11Limits` sets the limits of the parser. `IServerRequest` and
+`IServerResponse` have the same meaning on both protocols, and `Detach` works on
+both. The document [http1](http1.md) lists what a handler can see.
+
 ## Server-sent events
 
 `StartSse` answers a request with an event stream and detaches it. It returns an

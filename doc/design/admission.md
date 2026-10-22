@@ -34,6 +34,13 @@ The unit `src/Http2Server.StreamAdapters.pas` holds the request and response
 adapters (`TServerStreamRequest` at line 37 and `TServerStreamResponse` at line
 59), which the pool builds for each dispatch.
 
+An HTTP/1.1 request enters the same queue as a job. A job is an `IHandlerJob`
+(`src/Http2Server.HandlerJob.pas`): the pool runs it with `Run`, answers a refusal
+with `Refuse` (queue full, wait limit passed, pool stopped) and cancels it at
+`Stop` with `Cancel`. A job counts against the depth and the wait limit like a
+stream, and the refusal is a 503 with `Retry-After: 1` followed by a close. The
+document [http1](http1.md) describes the HTTP/1.1 side.
+
 ## The bounded queue
 
 `TRequestQueue` (`src/Http2Server.Admission.pas:76`) is a FIFO of entries. An

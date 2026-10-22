@@ -5,7 +5,7 @@ copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: http1, detached stream, chunked channel, duplex channel, server-sent events
 notes:
   - This unit holds the channel of a detached HTTP/1.1 response. It is the write
-    side of a chunked response: each Send is one chunk, and Close sends the last
+    side of a chunked response. Each Send is one chunk, and Close sends the last
     chunk. A response to an HTTP/1.0 request has no chunked coding, so its bytes go
     out as they are and the close of the connection ends the body.
   - The read side has no data. The request body of the exchange stays in the

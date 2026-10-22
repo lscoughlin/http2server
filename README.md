@@ -1,7 +1,9 @@
 # http2server
 
 An HTTP/2 server for Free Pascal and mORMot2. The library speaks HTTP/2 over
-clear text with prior knowledge (`h2c`) and over TLS with the ALPN name `h2`.
+clear text with prior knowledge (`h2c`) and over TLS with the ALPN name `h2`. A
+client that does not speak HTTP/2 gets HTTP/1.1 from the same listener and the
+same handler; the factory method `WithHttp11Fallback` turns this off.
 
 The design separates a few non-blocking IO threads from a pool of ordinary
 blocking handler threads. The handler contract is synchronous, so a caller
@@ -29,6 +31,7 @@ the copied protocol units.
 - `doc/design/architecture.md` holds the shape of the library.
 - `doc/design/public-api.md` holds the surface a caller uses.
 - `doc/design/sse.md` holds the server-sent event stream.
+- `doc/design/http1.md` holds the HTTP/1.1 fallback.
 - `doc/verification/validation.md` holds the conformance record.
 - `doc/verification/toolchain.md` holds the compiler and the build.
 

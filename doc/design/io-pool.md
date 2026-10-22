@@ -105,6 +105,17 @@ per connection. The core calls the drain itself at the end of every `Feed`
 (`src/Http2Server.Connection.pas:163`), so the response to one request
 leaves in the same IO turn as the request.
 
+## The second core
+
+`THttp2AsyncConnection` serves either protocol. The mode of a connection is
+undecided until the ALPN result (TLS) or the first octets (clear text) are known
+(see [http1](http1.md)). An HTTP/2 connection owns a `TServerConnectionCore`. An
+HTTP/1.1 connection owns a `TH1Driver` with a `TH1Core`. The read path, the send
+loop, the idle check and the close hooks branch on the mode. The driver keeps the
+decisions that depend on time: the staged close, the head deadline and the idle
+close. The core of HTTP/1.1 reports the octets that the socket layer holds back
+(`PendingWrite`), so a handler write waits for a client that does not read.
+
 ## The write wake-up
 
 The write wake-up follows the mORMot2 pattern. A handler write reaches the

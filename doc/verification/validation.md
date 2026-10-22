@@ -104,6 +104,49 @@ Four rules keep the pool alive.
 `h2load` is a benchmark and not a conformance tool, so no `h2load` wall time
 gates the acceptance. The runs above finish in under one second.
 
+### The HTTP/1.1 fallback
+
+The hostile-input tests send the cases of the research list (cases 1 to 89; case 90
+is covered by the response writer tests) to the parser of mORMot2 and the guard.
+Each case sends a second request after the defect and checks that the server does
+not process it. The input is fed whole, one octet at a time and in random pieces,
+and the three transcripts are equal. The probe tests show what the parser of
+mORMot2 accepts alone: a list in `Content-Length`, a `Transfer-Encoding` field
+without the space, a garbage chunk size that swallows the next request, and a
+trailer field that ends the body early. Each gap is closed by a rule of the guard.
+
+The fuzz test mutates 29 seed requests. The recorded run on 2026-10-22 used
+1,000,000 mutated requests and 250,000 noise inputs: the parser raised no
+exception, split delivery gave the same transcript, and every accepted head passed
+an independent strict check. A run with the check on `Content-Length` removed from
+the guard failed at the 55th request, which shows that the check can fail.
+
+The live tests (`THttp1LiveTest`, 27 tests) run a server on clear text with a
+raw-socket client: keep-alive across ten requests, a POST body, a chunked POST,
+chunked responses, `HEAD`, 204 and 304, `Connection: close`, HTTP/1.0, the
+`100 Continue` at the first read, pipelining, an oversized head, a slow head, a
+handler exception before and after the headers, framing defects, a smuggled
+request, `Date`, header injection by a handler, an early answer with an unread
+body, a full queue, `Stop`, the fallback off, both protocols on one listener, a
+large response, and a client that never reads. The last test showed the effect of
+the pending-octet term in the backlog: with the term removed, a handler that writes
+8 MiB to a client that does not read finishes at once. The detach tests
+(`THttp1DetachTest`, 11 tests) cover the chunked channel and the event stream on
+HTTP/1.1.
+
+`task validate` runs the HTTP/2 conformance with a server whose fallback is off,
+because case 3.5.2 of `h2spec` sends `INVALID CONNECTION PREFACE`, which a server
+with the fallback on reads as an HTTP/1.1 request line and answers with 400. The
+run passes the whole `http2` package. The script then starts a server with the
+fallback on and checks that `curl --http1.1` and `curl --http2` give the same body
+over clear text and over TLS. A server with the fallback off and a certificate
+refuses `curl --http1.1` and serves `curl --http2`.
+
+Gaps of this record: the request body of HTTP/1.1 is not streamed past
+`MaxBodySize`, because the parser of mORMot2 cannot pause the reads of a
+connection. The run with 1,000,000 mutated requests is not part of `make test`,
+which runs 20,000; the environment variable `HTTP1_FUZZ_RUNS` sets the count.
+
 ### Server-sent events
 
 The unit tests assert the exact bytes of the encoder for the rules of the WHATWG
@@ -125,8 +168,8 @@ END_STREAM. The example `examples/sse_clock.pas` shows the events with
 type is `text/event-stream`, and one `tick` event arrives each second.
 
 Gaps of this record: the run with 5000 open streams and one ordinary request is
-not made, the HTTP/1.1 form of the stream waits for the HTTP/1.1 fallback, and a
-browser `EventSource` is not checked.
+not made, and a browser `EventSource` is not checked. The event stream runs on
+HTTP/1.1 too (see the section on the HTTP/1.1 fallback).
 
 ### The connection seam
 

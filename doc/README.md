@@ -18,7 +18,8 @@ invariants:
 # The HTTP/2 server documentation
 
 This file is the route map of the documentation. The library is an HTTP/2
-server for Free Pascal and mORMot2. A caller adds the unit
+server for Free Pascal and mORMot2, with an HTTP/1.1 fallback on the same
+listener. A caller adds the unit
 `src/Http2Server.pas` to a uses clause and builds a server.
 
 The tree has two parts. The directory `doc/design/` holds the design of the
@@ -48,6 +49,7 @@ library.
 | [connection](design/connection.md) | The connection core: bytes in, frames out, stream states and HPACK state. |
 | [output](design/output.md) | The response path: encode under the connection lock, then frame the bytes. |
 | [protocol](design/protocol.md) | The five protocol units, the server changes to them, and the errors they raise. |
+| [http1](design/http1.md) | The HTTP/1.1 fallback: the selection, the parser and its guard, the framing, the limits and the memory bounds. |
 | [sse](design/sse.md) | The event stream: the encoder rules, the keep-alive, the stall rule and the close rules. |
 | [limits](design/limits.md) | The token buckets that bound the work a peer may ask for. |
 | [io-pool](design/io-pool.md) | The mORMot2 async subclasses, the write wake-up and the thread rule. |
