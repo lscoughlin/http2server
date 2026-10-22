@@ -107,7 +107,8 @@ timers, the origin policy and the subprotocols (`TWsOptions`). The facade
 `IWsHandler`, `TWsInitResult`, the origin policies, the close codes that a server
 sends and the observer events `seWsOpened`, `seWsRejected`, `seWsClosed`,
 `seWsFailed` and `seWsBucketTripped`. The statistics hold the open sessions and the
-message and octet counts. The document [websocket](websocket.md) describes the
+message and octet counts. `AcceptWebSocket(ARequest, AResponse, AHandler)` upgrades a
+request to a WebSocket inside a handler. The document [websocket](websocket.md) describes the
 contract.
 
 ## HTTP/1.1

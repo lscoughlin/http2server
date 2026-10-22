@@ -25,6 +25,16 @@ uses
   SysUtils, SyncObjs, Http2Server.Duplex;
 
 type
+  /// the target of the octets that arrive after an upgrade
+  // - the core of the connection calls it on an IO thread, and the HTTP/1.1 parser
+  //   does not see those octets
+  IH1Inbound = interface
+    ['{7E1F0C11-00B3-4A11-9C72-000000000E03}']
+    procedure Inbound(const AData; const ACount: Integer);
+    /// the connection ended
+    procedure ConnectionEnded;
+  end;
+
   /// what the exchange needs from the connection core
   TH1Host = class
   public
@@ -44,6 +54,16 @@ type
     /// call ASink.WriteDrained once the backlog falls to ALowWater, then forget it
     procedure WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
       virtual; abstract;
+    /// octets of later requests that wait in the parser
+    function BufferedAfterHead: Int64; virtual; abstract;
+    /// the octets that arrive now go to ATarget; used while an upgrade is decided
+    procedure UpgradeBegin(const ATarget: IH1Inbound); virtual; abstract;
+    /// the 101 response is out: the connection carries raw bytes from now on
+    procedure UpgradeDone; virtual; abstract;
+    /// the upgrade was refused: HTTP/1.1 resumes
+    procedure UpgradeCancel; virtual; abstract;
+    /// close the connection once the queued octets have left
+    procedure CloseAfterOutput; virtual; abstract;
   end;
 
   /// the link between an exchange and its core
@@ -68,6 +88,11 @@ type
     procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean);
     procedure WatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
     procedure AbortConnection;
+    function BufferedAfterHead: Int64;
+    procedure UpgradeBegin(const ATarget: IH1Inbound);
+    procedure UpgradeDone;
+    procedure UpgradeCancel;
+    procedure CloseAfterOutput;
   end;
 
 implementation
@@ -200,6 +225,77 @@ begin
     Leave;
   end;
 end;
+function THostLink.BufferedAfterHead: Int64;
+var
+  H: TH1Host;
+begin
+  Result := 0;
+  H := Enter;
+  if H = nil then
+    Exit;
+  try
+    Result := H.BufferedAfterHead;
+  finally
+    Leave;
+  end;
+end;
+
+procedure THostLink.UpgradeBegin(const ATarget: IH1Inbound);
+var
+  H: TH1Host;
+begin
+  H := Enter;
+  if H = nil then
+    Exit;
+  try
+    H.UpgradeBegin(ATarget);
+  finally
+    Leave;
+  end;
+end;
+
+procedure THostLink.UpgradeDone;
+var
+  H: TH1Host;
+begin
+  H := Enter;
+  if H = nil then
+    Exit;
+  try
+    H.UpgradeDone;
+  finally
+    Leave;
+  end;
+end;
+
+procedure THostLink.UpgradeCancel;
+var
+  H: TH1Host;
+begin
+  H := Enter;
+  if H = nil then
+    Exit;
+  try
+    H.UpgradeCancel;
+  finally
+    Leave;
+  end;
+end;
+
+procedure THostLink.CloseAfterOutput;
+var
+  H: TH1Host;
+begin
+  H := Enter;
+  if H = nil then
+    Exit;
+  try
+    H.CloseAfterOutput;
+  finally
+    Leave;
+  end;
+end;
+
 procedure THostLink.AbortConnection;
 var
   H: TH1Host;

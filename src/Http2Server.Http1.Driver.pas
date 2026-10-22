@@ -120,6 +120,9 @@ begin
   // a staged close ends when its drain time has passed
   if (FDrainUntilSec <> 0) and (ANowSec >= FDrainUntilSec) then
     Exit(iaClose);
+  // an upgraded connection keeps itself alive with the heartbeat of its session
+  if FCore.Upgraded then
+    Exit;
   // a request half read past the head deadline gets a 408 and a close
   if FCore.CheckDeadlines(ANowMs, AHeadTimeoutMs) then
     Exit(iaFlush);

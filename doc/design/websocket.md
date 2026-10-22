@@ -217,6 +217,54 @@ server no rule, so these are policy choices.
 - A foreign origin is refused with 403. The 81 vectors of the research notes are the
   test list.
 
+## The HTTP/1.1 handshake
+
+An application accepts an upgrade inside an ordinary handler:
+`AcceptWebSocket(ARequest, AResponse, AHandler)`. The function answers True when the
+session started and False after an error response; the handler then returns. Routing,
+cookies and authentication by header stay in the handler (RFC 6455 section 4.2.2,
+steps 2 and 3). The checks run in this order, and a failed check answers an HTTP
+error and leaves the connection for the next request:
+
+| Check | Failure |
+| --- | --- |
+| the method is `GET` | 405 with `Allow: GET` |
+| the version is HTTP/1.1 and `Upgrade` and `Connection` hold the tokens `websocket` and `Upgrade`, in any case | 400 |
+| exactly one `Sec-WebSocket-Key` that decodes from base64 to 16 octets | 400 |
+| exactly one `Sec-WebSocket-Version` with the value 13 | 400 with `Sec-WebSocket-Version: 13` (RFC 6455 section 4.4) |
+| the origin policy | 403, or 400 for a value that is not an origin |
+| the request has no body and no octets follow the head | 400 |
+| the server holds fewer than `MaxDetachedStreams` channels | 503 with `Retry-After` |
+
+After the checks the function detaches the response into a pending channel of raw
+bytes, starts the session and returns. The session's first task is `Init`. From that
+moment the HTTP/1.1 core sends the octets that arrive on the connection to the
+channel, so a client that sends WebSocket octets before the response cancels the
+session. No `101` goes out before `Init` accepts.
+
+- **Accept.** The server sends `101 Switching Protocols` with `Upgrade: websocket`,
+  `Connection: Upgrade`, `Sec-WebSocket-Accept` (the base64 of the SHA-1 of the key and
+  the GUID of RFC 6455 section 1.3) and `Sec-WebSocket-Protocol` when `Init` chose a
+  subprotocol. It sends no `Sec-WebSocket-Extensions` field, because it supports no
+  extension. The frames that `Init` queued follow the response. The core then
+  parses the connection no more: the channel carries raw bytes both ways.
+- **Reject.** The channel answers with an ordinary HTTP response, and the core
+  resumes HTTP/1.1 on the connection when the response allows keep-alive.
+- **The subprotocol.** The client offers tokens in `Sec-WebSocket-Protocol`. The
+  names that reach `Init` are those that the server list holds, compared as
+  case-sensitive tokens (RFC 7936); an empty server list passes every offer on.
+- **The idle time.** An upgraded connection is not closed by the idle timeout of
+  HTTP/1.1. The heartbeat of the session keeps it, and a session with the ping
+  interval 0 holds its connection until a peer or the server ends it.
+- **The close.** The server closes the TCP connection after the closing handshake
+  (RFC 6455 section 7.1.1) and does not wait for the client to close first. The write
+  side closes first, then the connection, as for any close of HTTP/1.1.
+- **No flow control.** HTTP/1.1 has no window. A client that sends a burst of
+  messages faster than the application takes them fills the queue of the session,
+  and the session closes with 1008 when the queue passes `QueuedMessages`. An
+  application that expects bursts sets a larger queue.
+
+
 ## Settings
 
 The record `TWsOptions` belongs to the server builder (`WithWebSockets`). The

@@ -149,6 +149,37 @@ Gaps of this record: the request body of HTTP/1.1 is not streamed past
 the reads of one connection (see [http1](../design/http1.md)). The run with 1,000,000 mutated requests is not part of `make test`,
 which runs 20,000; the environment variable `HTTP1_FUZZ_RUNS` sets the count.
 
+### WebSocket
+
+The unit tests cover the codec (the frames of RFC 6455 section 5.7, every parser rule
+with its close code, split delivery, a fuzz run of 40,000 streams), the origin policy
+(the 81 vectors of the research notes), the session on a fake channel (37 tests: Init,
+reject, the closing handshake with each bad payload, the heartbeat, the queue cap, the
+buckets, the credit rule, Stop), the pool (5,000 idle sessions on one thread, the
+order of the tasks of a session, the turns of two sessions, four threads that never run
+two tasks of one session, Stop) and the HTTP/1.1 handshake on a live server (15
+tests: the RFC accept key, each failed check with its status, the origin policy, the
+subprotocol rule, a body and pipelined octets, a reject that returns the connection
+to keep-alive, no 101 before Init, a greeting, an echo of 100 messages, a Ping, a clean
+and an abnormal close, Stop, the detach limit).
+
+The Autobahn fuzzing client (`crossbario/autobahn-testsuite`, wstest 0.10.9) ran
+against `examples/ws_echo` on 2026-10-22 over HTTP/1.1, with the limits of the `big`
+argument and without compression. The groups 1 to 7, 9 and 10 give 301 cases. The result
+is 291 OK, 7 NON-STRICT and 3 INFORMATIONAL, and no failure. The groups 12 and 13 test
+`permessage-deflate`, which the server does not offer. The NON-STRICT cases are 3.2, 3.3,
+4.1.3, 4.1.4, 4.2.3, 4.2.4 and 5.15: in each, the server first echoes the valid message
+that came before the violation, and then closes, which the specification allows. The
+INFORMATIONAL cases are 7.1.6, 7.13.1 and 7.13.2, where the specification leaves the
+outcome open.
+
+A real browser opened `examples/ws_echo` through `new WebSocket` in Chrome on
+2026-10-22: the page reported `open, subprotocol echo`, and the message `hello` came
+back as an echo.
+
+Gaps of this record: WebSocket over HTTP/2 is covered in its own section, and the
+Autobahn run covers HTTP/1.1 only.
+
 ### Server-sent events
 
 The unit tests assert the exact bytes of the encoder for the rules of the WHATWG

@@ -218,6 +218,17 @@ counts against `MaxDetachedStreams`, `Stop` closes it, and a closed socket tells
 sink that the peer is gone. The read side has no data. The documents [seam](seam.md)
 and [sse](sse.md) describe the channel and the event stream.
 
+## The upgrade hand-over
+
+A handler can upgrade an HTTP/1.1 request to a WebSocket (see
+[websocket](websocket.md)). The exchange then detaches into a `TH1SocketChannel`, and
+the core sends the octets that arrive to the channel and no longer to the parser. The
+head of the `101` response leaves through the exchange, and the core marks the
+connection as upgraded: the exchange ends without a close, and the connection goes on
+as raw bytes. A refused upgrade returns the connection to the parser, which holds no
+octet of the refused request. The idle check of the driver leaves an upgraded
+connection alone.
+
 ## What a handler sees
 
 | Item | HTTP/2 | HTTP/1.1 |

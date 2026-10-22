@@ -79,6 +79,10 @@ type
     FLost: Boolean;
     /// the connection closes without waiting for the queued octets
     FAbort: Boolean;
+    /// the target of the octets that arrive while an upgrade is decided or done
+    FInbound: IH1Inbound;
+    /// the 101 response is out: the connection carries raw bytes
+    FUpgraded: Boolean;
     /// when the first octet of the request in progress arrived; 0 when none
     FHeadStartMs: QWord;
     procedure Enqueue(const AData: TBytes);
@@ -120,6 +124,8 @@ type
     property Busy: Boolean read GetBusy;
     /// a writer asked for the connection to close without waiting
     function AbortRequested: Boolean;
+    /// the connection was upgraded and carries raw bytes
+    function Upgraded: Boolean;
 
     // TH1Host: the exchange calls these through the link
     procedure EnqueueOutput(const AData: TBytes); override;
@@ -128,6 +134,11 @@ type
     procedure ExchangeFinished(const AKeepAlive, AFailed: Boolean); override;
     procedure WatchDrain(const ALowWater: Int64; const ASink: IChannelSink); override;
     procedure AbortConnection; override;
+    function BufferedAfterHead: Int64; override;
+    procedure UpgradeBegin(const ATarget: IH1Inbound); override;
+    procedure UpgradeDone; override;
+    procedure UpgradeCancel; override;
+    procedure CloseAfterOutput; override;
   end;
 
 implementation
@@ -260,6 +271,73 @@ begin
   end;
 end;
 
+function TH1Core.Upgraded: Boolean;
+begin
+  FLock.Acquire;
+  try
+    Result := FUpgraded;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TH1Core.BufferedAfterHead: Int64;
+begin
+  FLock.Acquire;
+  try
+    Result := FParser.Buffered;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TH1Core.UpgradeBegin(const ATarget: IH1Inbound);
+begin
+  FLock.Acquire;
+  try
+    FInbound := ATarget;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TH1Core.UpgradeDone;
+begin
+  FLock.Acquire;
+  try
+    // the exchange ends without a close: the connection goes on as raw bytes
+    FExchangeDone := True;
+    FRequestDone := True;
+    FCurrentRef := nil;
+    FCurrent := nil;
+    FUpgraded := True;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TH1Core.UpgradeCancel;
+begin
+  FLock.Acquire;
+  try
+    FInbound := nil;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TH1Core.CloseAfterOutput;
+begin
+  FLock.Acquire;
+  try
+    FCloseAfter := True;
+  finally
+    FLock.Release;
+  end;
+  if FWaker <> nil then
+    FWaker.Signal;
+end;
+
 function TH1Core.AbortRequested: Boolean;
 begin
   FLock.Acquire;
@@ -339,21 +417,32 @@ begin
 end;
 
 procedure TH1Core.Feed(const AData: TBytes);
+var
+  Target: IH1Inbound;
 begin
   if Length(AData) = 0 then
     Exit;
+  Target := nil;
   FLock.Acquire;
   try
     // after an error answer or a close request, later octets are dropped: the
     // request behind a framing defect is never served
     if FLost or FCloseAfter then
       Exit;
-    if (FHeadStartMs = 0) and (FCurrent = nil) then
-      FHeadStartMs := GetTickCount64;
-    FParser.Feed(AData[0], Length(AData));
+    // an upgrade is decided or done: the octets belong to its channel
+    Target := FInbound;
+    if Target = nil then
+    begin
+      if (FHeadStartMs = 0) and (FCurrent = nil) then
+        FHeadStartMs := GetTickCount64;
+      FParser.Feed(AData[0], Length(AData));
+    end;
   finally
     FLock.Release;
   end;
+  // outside the lock: the channel calls into the session
+  if Target <> nil then
+    Target.Inbound(AData[0], Length(AData));
 end;
 
 procedure TH1Core.HeadComplete(const AHead: TH1Head);
@@ -449,16 +538,20 @@ end;
 procedure TH1Core.ConnectionLost;
 var
   Ref: IInterface;
+  Target: IH1Inbound;
 begin
   FLock.Acquire;
   try
     FLost := True;
     Ref := FCurrentRef;
+    Target := FInbound;
     if FCurrent <> nil then
       FCurrent.Cancel;
   finally
     FLock.Release;
   end;
+  if Target <> nil then
+    Target.ConnectionEnded;
 end;
 
 function TH1Core.CheckDeadlines(const ANowMs: QWord;

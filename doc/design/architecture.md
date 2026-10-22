@@ -164,6 +164,10 @@ together with no name clash.
 | `Http2Server.Ws.SessionCore.pas` | 631 | websocket | the state, the sender, the closing handshake and the timers of a session |
 | `Http2Server.Ws.Session.pas` | 653 | websocket | the session: task queue, Init, receive path and stop |
 | `Http2Server.Ws.Environment.pas` | 297 | websocket | the options, counters, report and watchdog that the sessions share |
+| `Http2Server.Ws.Handshake.pas` | 187 | websocket | the accept key, the token lists, the subprotocol choice and the origin check of an upgrade |
+| `Http2Server.Ws.Accept.pas` | 50 | websocket | `AcceptWebSocket`, which picks the handshake of the protocol |
+| `Http2Server.Http1.SocketChannel.pas` | 340 | http1 | the raw-byte channel of an upgraded HTTP/1.1 connection |
+| `Http2Server.Http1.Upgrade.pas` | 190 | http1 | the checks and the 101 response of the HTTP/1.1 upgrade |
 | `Http2Server.Ws.Frames.pas` | 334 | codec | WebSocket opcodes, close codes, the mask, the frame encoder and the Close payload helpers (RFC 6455) |
 | `Http2Server.Ws.Utf8.pas` | 116 | codec | a resumable UTF-8 validator that holds three bytes of state |
 | `Http2Server.Ws.Parser.pas` | 291 | codec | the resumable frame parser; it pushes the unmasked payload of a data frame to a sink and buffers no data frame |

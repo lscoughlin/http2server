@@ -33,7 +33,8 @@ uses
   SysUtils, Classes, SyncObjs,
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Duplex,
   Http2Server.HandlerJob, Http2Server.Http1.Guard, Http2Server.Http1.Host,
-  Http2Server.Http1.ResponseHead, Http2Server.Http1.Channel;
+  Http2Server.Http1.ResponseHead, Http2Server.Http1.Channel,
+  Http2Server.Http1.SocketChannel;
 
 type
   TH1ExchangeOptions = record
@@ -47,7 +48,7 @@ type
   end;
 
   TH1Exchange = class(TInterfacedObject, IServerRequest, IServerResponse,
-    IHandlerJob, IH1ChannelOwner)
+    IHandlerJob, IH1ChannelOwner, IH1UpgradeOwner, IH1Upgradable)
   private
     FLink: THostLink;
     FLinkRef: IInterface;
@@ -73,6 +74,7 @@ type
     FRegistry: IChannelRegistry;
     FChannel: TH1ChunkedChannel;
     FChannelRef: IDuplexChannel;
+    FSocketChannel: IDuplexChannel;
     procedure CheckCanWrite;
     procedure WaitForRoom;
     procedure Emit(const AData: TBytes);
@@ -92,6 +94,18 @@ type
     function OwnerNoBody: Boolean;
     procedure OwnerFinish(const AGraceful: Boolean);
     procedure OwnerWatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
+    // IH1UpgradeOwner (the other methods are shared with IH1ChannelOwner)
+    procedure OwnerUpgradeHead(const AStatus: Integer; const AHeaders: THeaderBlock);
+    procedure OwnerCloseAfterOutput;
+    procedure OwnerAbort;
+    // IH1Upgradable
+    function UpgradeMethod: string;
+    function UpgradeMinor: Integer;
+    function UpgradeTokensPresent: Boolean;
+    function HasRequestBody: Boolean;
+    function BufferedAfterHead: Int64;
+    function WsEnvironment: IInterface;
+    function DetachForUpgrade: IDuplexChannel;
   public
     constructor Create(const ALink: THostLink; const AHead: TH1Head;
       const AOptions: TH1ExchangeOptions; const AOrdinal: LongWord);
@@ -143,7 +157,7 @@ type
 implementation
 
 uses
-  Http2Server.Http1.Status;
+  Http2Server.Http1.Status, Http2Server.ResponseWriter;
 
 const
   cWaitSliceMs = 5;
@@ -706,6 +720,9 @@ var
   H: THeaderBlock;
   N: Integer;
 begin
+  // a refused upgrade: HTTP/1.1 resumes on the connection after this response
+  if FSocketChannel <> nil then
+    FLink.UpgradeCancel;
   // a whole response with a body: the length is known, so the head carries it
   H := Copy(AHeaders);
   N := Length(H);
@@ -743,6 +760,106 @@ end;
 procedure TH1Exchange.OwnerWatchDrain(const ALowWater: Int64; const ASink: IChannelSink);
 begin
   FLink.WatchDrain(ALowWater, ASink);
+end;
+
+{ upgrade }
+
+function TH1Exchange.UpgradeMethod: string;
+begin
+  Result := FHead.Line.Method;
+end;
+
+function TH1Exchange.UpgradeMinor: Integer;
+begin
+  Result := FHead.Line.Minor;
+end;
+
+function TH1Exchange.UpgradeTokensPresent: Boolean;
+begin
+  Result := FHead.WebSocketUpgrade;
+end;
+
+function TH1Exchange.HasRequestBody: Boolean;
+begin
+  Result := FHead.Framing <> bfNone;
+end;
+
+function TH1Exchange.BufferedAfterHead: Int64;
+begin
+  Result := FLink.BufferedAfterHead;
+end;
+
+function TH1Exchange.WsEnvironment: IInterface;
+begin
+  if FRegistry = nil then
+    Result := nil
+  else
+    Result := FRegistry.WsEnvironment;
+end;
+
+function TH1Exchange.DetachForUpgrade: IDuplexChannel;
+var
+  Channel: TH1SocketChannel;
+begin
+  FLock.Acquire;
+  try
+    if FDetached then
+      raise EDetachRefused.Create('the response is detached already');
+    if FFinished or FHeadersSent then
+      raise EHttpError.Create('the response has started');
+  finally
+    FLock.Release;
+  end;
+  if (FRegistry <> nil) and not FRegistry.TryAcquire then
+    raise EDetachRefused.Create('the server holds its limit of detached streams');
+  Channel := TH1SocketChannel.Create(Self, FRegistry);
+  FLock.Acquire;
+  try
+    FDetached := True;
+    FSocketChannel := Channel;
+    Result := FSocketChannel;
+  finally
+    FLock.Release;
+  end;
+  // from now on the octets of the connection belong to the channel, and the HTTP
+  // parser reads no further request until the upgrade is refused
+  FLink.UpgradeBegin(Channel);
+  if FRegistry <> nil then
+    FRegistry.Add(Result);
+end;
+
+procedure TH1Exchange.OwnerUpgradeHead(const AStatus: Integer; const AHeaders: THeaderBlock);
+var
+  S: string;
+  I: Integer;
+begin
+  CheckResponseHeaders(AHeaders);
+  if not ClaimResponse then
+    raise EHttpError.Create('the response headers were sent already');
+  S := Http1StatusLine(AStatus, 1);
+  for I := 0 to High(AHeaders) do
+    S := S + AHeaders[I].Name + ': ' + AHeaders[I].Value + #13#10;
+  S := S + #13#10;
+  FKeep := False;
+  Emit(H1TextBytes(S));
+  FLock.Acquire;
+  try
+    FFinished := True;
+  finally
+    FLock.Release;
+  end;
+  // the connection carries raw bytes from now on; no close follows
+  FLink.UpgradeDone;
+end;
+
+procedure TH1Exchange.OwnerCloseAfterOutput;
+begin
+  FLink.CloseAfterOutput;
+end;
+
+procedure TH1Exchange.OwnerAbort;
+begin
+  FLink.AbortConnection;
 end;
 
 end.

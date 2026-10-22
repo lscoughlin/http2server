@@ -41,7 +41,8 @@ uses
   Http2Server.Ws.Origin,
   Http2Server.Ws.Options,
   Http2Server.Ws.Types,
-  Http2Server.Ws.Frames;
+  Http2Server.Ws.Frames,
+  Http2Server.Ws.Accept;
 
 type
   /// the server lifecycle
@@ -177,6 +178,12 @@ const
   csActive = Http2Server.Duplex.csActive;
   csClosed = Http2Server.Duplex.csClosed;
 
+/// accept the WebSocket upgrade of this request and serve it with AHandler
+/// - true: the session started and the handler returns; IWsHandler.Init decides
+/// - false: an error response was sent; the handler returns
+function AcceptWebSocket(const ARequest: IServerRequest;
+  const AResponse: IServerResponse; const AHandler: IWsHandler): Boolean;
+
 /// answer a request with an event stream and detach it
 /// - see Http2Server.Sse.StartSse
 function StartSse(const ARequest: IServerRequest;
@@ -215,6 +222,12 @@ function GzipDecompress(const AData: TBytes): TBytes;
 function DeflateDecompress(const AData: TBytes): TBytes;
 
 implementation
+
+function AcceptWebSocket(const ARequest: IServerRequest;
+  const AResponse: IServerResponse; const AHandler: IWsHandler): Boolean;
+begin
+  Result := Http2Server.Ws.Accept.AcceptWebSocket(ARequest, AResponse, AHandler);
+end;
 
 function StartSse(const ARequest: IServerRequest;
   const AResponse: IServerResponse;
