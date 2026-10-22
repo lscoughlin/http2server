@@ -81,3 +81,22 @@ They are not covered by the licence of this product.
    Licence: the upstream repository states no licence.
    This product uses the harness only as a test tool. No harness code enters
    the http2server library or its binaries.
+
+8. Specifications
+   The library follows RFC 9113 (HTTP/2), RFC 7541 (HPACK), RFC 9110 and RFC 9112
+   (HTTP semantics and HTTP/1.1), RFC 6455 and RFC 7936 (WebSocket), RFC 8441
+   (WebSocket over HTTP/2), RFC 6454 (the origin) and the server-sent events section
+   of the WHATWG HTML Standard. The directory `doc/references/` holds verbatim copies
+   and `doc/references/README.md` lists their sources and retrieval dates.
+
+9. mORMot2 routines used by the WebSocket and HTTP/1.1 code
+   The HTTP/1.1 parser builds on `THttpRequestContext` of mORMot2, and the WebSocket
+   handshake uses `TSha1` and `BinToBase64` of mORMot2. All of them come from the pinned
+   revision named in item 1. The product links them from that checkout and copies no
+   mORMot2 source.
+
+10. Autobahn|Testsuite (crossbario/autobahn-testsuite) and the Python packages h2 and
+    wsproto
+    Licences: Apache License 2.0 (Autobahn|Testsuite), MIT License (h2 and wsproto).
+    This product uses them as external test tools only. No code of them enters the
+    library or its binaries.

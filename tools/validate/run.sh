@@ -205,7 +205,7 @@ fi
 ws_python="${WS_PYTHON:-python3}"
 if [ -x "$root/bin/ws_echo" ] && "$ws_python" -c 'import h2, wsproto' >/dev/null 2>&1; then
   ws_out="${TMPDIR:-/tmp}/http2_ws_out.$$"
-  ( sleep 60 | "$root/bin/ws_echo" 127.0.0.1 0 >"$ws_out" 2>/dev/null ) &
+  ( sleep 60 | "$root/bin/ws_echo" 127.0.0.1 0 big >"$ws_out" 2>/dev/null ) &
   ws_pid=$!
   ws_port=''
   i=0
@@ -215,8 +215,8 @@ if [ -x "$root/bin/ws_echo" ] && "$ws_python" -c 'import h2, wsproto' >/dev/null
     sleep 0.1
   done
   if [ -n "$ws_port" ] &&
-     "$ws_python" "$here/ws_h2_client.py" 127.0.0.1 "$ws_port" 50 </dev/null >"$ws_out.client" 2>&1; then
-    report_pass "WebSocket echo over HTTP/2 with h2 and wsproto (50 messages, clean close)"
+     "$ws_python" "$here/ws_h2_client.py" 127.0.0.1 "$ws_port" </dev/null >"$ws_out.client" 2>&1; then
+    report_pass "WebSocket echo over HTTP/2 with h2 and wsproto (32 checks)"
   else
     report_fail "WebSocket echo over HTTP/2 with h2 and wsproto"
     cat "$ws_out" "$ws_out.client" 2>/dev/null
@@ -226,6 +226,29 @@ if [ -x "$root/bin/ws_echo" ] && "$ws_python" -c 'import h2, wsproto' >/dev/null
   rm -f "$ws_out" "$ws_out.client"
 else
   report_skip "WebSocket over HTTP/2" "ws_echo or the Python packages h2 and wsproto are absent"
+fi
+
+# --- Server-sent events on both protocols ---
+if [ -x "$root/bin/sse_replay" ] && command -v curl >/dev/null 2>&1; then
+  sse_out="${TMPDIR:-/tmp}/http2_sse_out.$$"
+  ( sleep 60 | "$root/bin/sse_replay" 127.0.0.1 0 >"$sse_out" 2>/dev/null ) &
+  sse_port=''
+  i=0
+  while [ "$i" -lt 100 ] && [ -z "$sse_port" ]; do
+    sse_port=$(sed -n 's#.*127\.0\.0\.1:\([0-9][0-9]*\)/.*#\1#p' "$sse_out" 2>/dev/null | head -1)
+    i=$((i + 1))
+    sleep 0.1
+  done
+  if [ -n "$sse_port" ]; then
+    sse_report=$(sh "$here/sse_check.sh" 127.0.0.1 "$sse_port" 2>&1) || exit_code=1
+    echo "$sse_report"
+  else
+    report_fail "SSE: the example server did not start"
+  fi
+  pkill -f "$root/bin/sse_replay" 2>/dev/null
+  rm -f "$sse_out"
+else
+  report_skip "SSE" "sse_replay or curl is absent"
 fi
 
 exit "$exit_code"

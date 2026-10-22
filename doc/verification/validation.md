@@ -196,6 +196,61 @@ messages, checks 50 matching echoes, closes with 1000 and reads the clean close.
 check ran against `examples/ws_echo` on 2026-10-22 and passed. `tools/validate/run.sh`
 runs it when the packages are present.
 
+  sub(s, "Known intermittent issue:", <<'T' + "\nKnown intermittent issue:")
+### The release run
+
+The runs below ran on 2026-10-22 on the final build, on the development host (macOS
+aarch64, FPC 3.2.4), at the version 0.24.0.
+
+| Run | Result |
+| --- | --- |
+| `make test` | 642 tests, no error, no failure |
+| `h2spec` (package `http2`, server started with `no-http11`) | 94 of 94 pass, as before |
+| `tools/abuse/abuse.py` (strict profile) | 8 of 8 pass |
+| `tools/seam/seam.py` idle 10,000 connections | 32.27% of one core, against 32.60% in the earlier record |
+| Autobahn groups 1 to 7, 9, 10 over HTTP/1.1 | 291 OK, 7 NON-STRICT, 3 INFORMATIONAL, no failure; the same cases as in the first run |
+| `ws_h2_client.py` over HTTP/2 | 32 of 32 checks |
+| `sse_check.sh` | 1000 events in order on HTTP/1.1 and on HTTP/2; the replay after `Last-Event-ID` 990 gives 10 events, after 400 gives 600 events |
+| `tools/abuse/ws_abuse.py` | 9 of 9 pass |
+
+The WebSocket abuse checks cover a Ping flood (Close 1008), a flood of text frames of one
+octet (Close 1008), a message that never ends (Close 1009 at the limit of 1 MiB), a client
+that sends 2 MiB of echoes and reads nothing, 2,000 handshakes that are never read and 500
+half-open upgrades. After each check a new connection gets an ordinary answer within two
+seconds. The abuse check of a slow reader of an event stream has a unit test (the stall
+rule) and no live run.
+
+The load run used `tools/validate/ws_sse_load.py` against `ws_echo load` and `sse_replay`,
+both on HTTP/1.1, with 6,000 idle WebSocket sessions and 6,000 open event streams held
+together, and 50 ordinary requests per second for 20 seconds:
+
+| Measure | Value |
+| --- | --- |
+| memory per WebSocket session | about 10.4 KB |
+| memory per event stream | about 5.8 KB |
+| ordinary requests | 1,000 sent, 0 failed, p50 0.5 ms, p99 3.3 ms, maximum 5.8 ms |
+| CPU of the WebSocket server | 18.8% of one core |
+| CPU of the event-stream server | 25.9% of one core |
+| time of `Stop` with all sessions open | 7.5 s for both servers |
+
+The plan asked for 10,000 sessions and 10,000 streams at once. The loopback interface of
+the host offers about 16,000 client ports, so the run holds 12,000 connections. The idle CPU
+follows the O(n) `poll` of macOS that the seam record names. A burst of 100 upgrades that
+arrive together passes the admission queue only in part: the server answers the rest with
+503 and `Retry-After`, and the load client tries again.
+
+The sessions of the load client never answer the Close frame, so the stop time of 7.5 s
+includes the close timeout of 5 s.
+
+
+The script `tools/validate/ws_h2_client.py` also holds the full case list. Against
+`examples/ws_echo big` on 2026-10-22 it passed 32 of 32 checks: the echo of text and
+binary messages of 0, 1, 125, 126, 65535, 65536 octets and 4 MiB, a fragmented message,
+a Ping with its Pong, a close with each of the codes 1000, 1001, 1007, 1011, 3000 and
+4999, the forced protocol errors (a reserved bit, an unmasked frame, bad UTF-8, a control
+frame over 125 octets, a fragmented control frame, an unknown opcode, a message of 33 MiB
+against the limit of 32 MiB), and 180 concurrent streams on one connection.
+
 The browser check over HTTP/2 did not run. Chrome uses HTTP/2 only over TLS, and the
 test certificate of the repository is self-signed, so Chrome stops at a certificate
 page. The record of Chrome over HTTP/1.1 above and the `h2`/`wsproto` run above prove

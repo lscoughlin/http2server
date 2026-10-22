@@ -142,6 +142,20 @@ A Linux amd64 run needs an amd64 host (or an amd64 emulator that starts an FPC
 defaults in the `Makefile` and `Taskfile.yaml` (`Makefile:23-25`,
 `Taskfile.yaml:42-50`, `Taskfile.yaml:54-62`) are unverified on hardware.
 
+## Tools for the WebSocket and event-stream runs
+
+| Tool | Version | Use |
+| --- | --- | --- |
+| Autobahn\|Testsuite `wstest` | 0.10.9 (image `crossbario/autobahn-testsuite`, suite 25.10.1) | the `fuzzingclient` run against `examples/ws_echo` over HTTP/1.1; the container runs on the local Docker engine and reaches the server through `host.docker.internal` |
+| Python packages `h2` and `wsproto` | 4.4.1 and 1.3.2 | `tools/validate/ws_h2_client.py`, which drives WebSocket over HTTP/2; the packages live in a virtual environment and `WS_PYTHON` names its interpreter |
+| curl | the host version | `tools/validate/sse_check.sh` reads the event stream on both protocols |
+| Python 3 | the host version | `tools/abuse/ws_abuse.py` and `tools/validate/ws_sse_load.py` use the standard library only |
+
+The Autobahn run uses a configuration that selects the groups 1 to 7, 9 and 10. The groups
+12 and 13 test `permessage-deflate`, which the server does not offer. The load run needs
+`ulimit -n 60000`. The loopback interface offers about 16,000 client ports, so a run
+holds at most about 12,000 connections from one client host.
+
 ## Reproduce commands
 
 ```sh

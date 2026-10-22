@@ -14,7 +14,8 @@ notes:
     a burst without flow control (see doc/design/websocket.md).
   - The server runs until the caller presses Enter, then stops.
   - There are three optional arguments. They are the host (default 127.0.0.1), the port (default 8084) and the
-    word big, which raises the message limits to 32 MiB for a conformance run.
+    word big, which raises the message limits to 32 MiB for a conformance run. The word
+    load raises the limit of detached streams to 30000 for a load run.
 ---
 }
 /// A WebSocket echo server with a browser page
@@ -26,7 +27,7 @@ program ws_echo;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils,
+  SysUtils, Math,
   mormot.core.base,
   Http2Server;
 
@@ -165,6 +166,8 @@ begin
       .WithMessageBucket(TTokenBucketOptions.Create.WithCapacity(1000000)
         .WithRefillPerSecond(1000000));
   Server := THttp2ServerFactory.Create
+    .WithMaxConcurrentStreams(256)
+    .WithMaxDetachedStreams(IfThen((ParamCount >= 3) and (ParamStr(3) = 'load'), 30000, 10000))
     .WithHost(Host)
     .WithPort(Port)
     .WithClearTextAllowed(True)

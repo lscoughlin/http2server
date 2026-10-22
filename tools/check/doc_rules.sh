@@ -109,6 +109,20 @@ else
   echo "PASS the tree shows no imperative sentence"
 fi
 
+# 6. The front matter of every document and the header of every Pascal file parse as
+#    YAML, and each Pascal header opens with the "{**" and "---" lines. The check needs
+#    ruby; a host without it reports a gap.
+if command -v ruby >/dev/null 2>&1; then
+  out=$(ruby tools/check/yaml_headers.rb 2>&1)
+  if [ $? -eq 0 ]; then
+    echo "PASS every document and every Pascal header parses as YAML"
+  else
+    report "a header does not parse as YAML" "$out"
+  fi
+else
+  echo "GAP the YAML check needs ruby, and this host has none"
+fi
+
 if [ "$status" -eq 0 ]; then
   echo "doc rules OK"
 else

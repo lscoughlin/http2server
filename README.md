@@ -5,6 +5,11 @@ clear text with prior knowledge (`h2c`) and over TLS with the ALPN name `h2`. A
 client that does not speak HTTP/2 gets HTTP/1.1 from the same listener and the
 same handler; the factory method `WithHttp11Fallback` turns this off.
 
+Three features go beyond a plain request and response. A handler can detach a stream and serve
+it later from any thread, which gives **server-sent events** (`StartSse`) and **WebSocket**
+(`AcceptWebSocket`). WebSocket works over HTTP/1.1 (RFC 6455) and over HTTP/2 (RFC 8441)
+with one handler code. The examples `sse_clock`, `sse_fanout`, `sse_replay` and `ws_echo` show them.
+
 The design separates a few non-blocking IO threads from a pool of ordinary
 blocking handler threads. The handler contract is synchronous, so a caller
 writes the same code it writes for a threaded server. The seam between the two
@@ -32,6 +37,7 @@ the copied protocol units.
 - `doc/design/public-api.md` holds the surface a caller uses.
 - `doc/design/sse.md` holds the server-sent event stream.
 - `doc/design/http1.md` holds the HTTP/1.1 fallback.
+- `doc/design/websocket.md` holds the WebSocket session, the handshakes and the limits.
 - `doc/verification/validation.md` holds the conformance record.
 - `doc/verification/toolchain.md` holds the compiler and the build.
 
