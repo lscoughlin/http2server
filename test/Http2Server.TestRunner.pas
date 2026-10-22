@@ -45,6 +45,8 @@ uses
   Http2Server.StreamPool.Test,
   Http2Server.Detach.Test,
   Http2Server.DetachLive.Test,
+  Http2Server.Ws.Frames.Test,
+  Http2Server.Ws.Parser.Test,
   Http2Server.Output.Test,
   Http2Server.Licence.Test,
   Http2Server.Encoding.Test,
