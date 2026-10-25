@@ -455,4 +455,10 @@ end;
 initialization
   RegisterTest(TMtlsConfigTest);
   RegisterTest(TMtlsContextTest);
+
+finalization
+  // the PKI directory is a temporary one of this process
+  if GPkiDir <> '' then
+    ExecuteProcess('/bin/rm', ['-rf', GPkiDir]);
+
 end.

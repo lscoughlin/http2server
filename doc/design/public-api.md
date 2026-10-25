@@ -96,7 +96,8 @@ certificates, and nil otherwise. The facade exports `IClientCertificate`,
 `TClientCertPrincipal` with the values `ccpNone`, `ccpSubjectDn` and
 `ccpCommonName`. `IServerRequest` has a new GUID because of the two new
 properties. The observer receives `seTlsHandshakeFailed` when a handshake fails
-while a client certificate mode is on. [mtls](mtls.md) describes the feature.
+while a client certificate mode is on, and `TServerStats.TlsHandshakeFailedTotal`
+counts those failures. [mtls](mtls.md) describes the feature.
 
 ## Detached streams
 

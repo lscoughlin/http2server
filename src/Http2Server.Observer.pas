@@ -127,6 +127,8 @@ type
     TrippedTotal: Int64;
     /// detached streams that are open now
     DetachedStreams: Integer;
+    /// TLS handshakes that failed while a client certificate mode was on
+    TlsHandshakeFailedTotal: Int64;
     /// WebSocket sessions that are open now
     WsSessions: Integer;
     /// WebSocket messages received and sent since the start

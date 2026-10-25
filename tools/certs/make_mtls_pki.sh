@@ -12,6 +12,8 @@
 #   alice.crt, alice.key      a client certificate signed by ca, with SAN names
 #   mallory.crt, mallory.key  a client certificate signed by otherca
 #   expired.crt, expired.key  a client certificate of ca that expired in 2020
+#   special.crt, special.key  a client certificate whose subject holds a comma
+#                             and a multi-valued RDN
 #   selfie.crt, selfie.key    a self-signed client certificate (its own anchor)
 #   trust-selfie.pem          ca.crt and selfie.crt in one file
 set -eu
@@ -85,6 +87,7 @@ EXT
 issue server "/CN=localhost" server.ext ca.key ca.crt
 issue alice "/O=Example/OU=Eng/CN=alice" client.ext ca.key ca.crt
 issue mallory "/CN=mallory" plain.ext otherca.key otherca.crt
+issue special "/O=Acme\, Inc/CN=Doe\, Jane+UID=j7" plain.ext ca.key ca.crt
 issue expired "/CN=expired" plain.ext ca.key ca.crt 20200101000000Z 20200102000000Z
 
 # a self-signed client certificate: it is its own trust anchor

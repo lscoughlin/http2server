@@ -176,6 +176,7 @@ begin
   Result.ResetTotal := 0;
   Result.TrippedTotal := 0;
   Result.DetachedStreams := 0;
+  Result.TlsHandshakeFailedTotal := 0;
   FWsEnv.FillStats(Result);
   if FAsync = nil then
     Exit;
@@ -190,6 +191,7 @@ begin
   Result.OpenStreams := FAsync.OpenStreamTotal;
   Result.ResetTotal := FAsync.ResetTotal;
   Result.TrippedTotal := FAsync.TrippedTotal;
+  Result.TlsHandshakeFailedTotal := FAsync.TlsFailedTotal;
   if FAsync.Channels <> nil then
     Result.DetachedStreams := FAsync.Channels.Count;
 end;

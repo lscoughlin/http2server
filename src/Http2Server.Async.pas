@@ -187,6 +187,8 @@ type
     FResetTotal: Int64;
     /// bucket trips since the build
     FTrippedTotal: Int64;
+    /// TLS handshakes that failed while a client certificate mode was on
+    FTlsFailedTotal: Int64;
     /// guards the connection counter against the IO threads
     FConnectionLock: TCriticalSection;
     function LeastControlBucket: TTokenBucketOptions;
@@ -253,6 +255,9 @@ type
     property ResetTotal: Int64 read FResetTotal;
     /// bucket trips since the build
     property TrippedTotal: Int64 read FTrippedTotal;
+    /// count one failed handshake and tell the observer, on the IO thread
+    procedure TlsHandshakeFailed(const ADetail: string);
+    property TlsFailedTotal: Int64 read FTlsFailedTotal;
   end;
 
 implementation
@@ -405,8 +410,7 @@ begin
     if not result then
     begin
       if FServer.Policy.ClientTrust.Mode <> ccmNone then
-        FServer.Notify(seTlsHandshakeFailed, 0, lkReset,
-          'the TLS handshake failed');
+        FServer.TlsHandshakeFailed('the TLS handshake failed');
       exit;
     end;
     // the identity is read once, after the handshake, from the SSL object of
@@ -432,7 +436,7 @@ begin
     begin
       result := false;
       if FServer.Policy.ClientTrust.Mode <> ccmNone then
-        FServer.Notify(seTlsHandshakeFailed, 0, lkReset, E.Message);
+        FServer.TlsHandshakeFailed(E.Message);
     end;
   end;
 end;
@@ -753,6 +757,7 @@ begin
   FConnectionCount := 0;
   FResetTotal := 0;
   FTrippedTotal := 0;
+  FTlsFailedTotal := 0;
   Options := ASYNC_OPTION_PROD;
   if AFactory.Tls.CertificateFile <> '' then
     include(Options, acoEnableTls);
@@ -867,6 +872,12 @@ begin
   finally
     FConnectionLock.Release;
   end;
+end;
+
+procedure THttp2AsyncServer.TlsHandshakeFailed(const ADetail: string);
+begin
+  InterlockedIncrement64(FTlsFailedTotal);
+  Notify(seTlsHandshakeFailed, 0, lkReset, ADetail);
 end;
 
 procedure THttp2AsyncServer.BucketTripped;

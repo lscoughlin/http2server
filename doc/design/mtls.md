@@ -217,9 +217,10 @@ The DN text comes from the mORMot2 `SubjectName` and `IssuerName`. It lists the
 RDNs from the last element of the RDN sequence to the first, as RFC 4514
 section 2.1 requires. A certificate whose sequence reads `CN`, `O`, `OU` gives
 `OU=Eng,O=Example,CN=alice`. The live
-validation checks this text. The escaping of special characters in a value is
-not verified, so a handler that compares a DN compares the `Sha256` or a SAN
-instead.
+validation checks this text. A comma in a value is escaped with a backslash, as RFC 4514 section 2.4
+requires (the live validation checks `CN=Doe\, Jane`). A handler that identifies
+a client still compares the `Sha256` or a SAN, because a DN text is easy to
+misread.
 
 ### Why a per-connection read
 
@@ -297,7 +298,8 @@ the property only.
 A refused handshake closes the connection before `OnFirstRead` returns True.
 The existing handler for a failed first read ends the connection
 (the `except` branch and the failed-handshake branch of `OnFirstRead`). The observer receives a new event kind,
-`seTlsHandshakeFailed`, when mTLS is on and the handshake fails. The event
+`seTlsHandshakeFailed`, and `TServerStats.TlsHandshakeFailedTotal` counts it, when
+mTLS is on and the handshake fails. The event
 means "a handshake failed while mTLS was on". The server cannot tell a missing
 certificate from an invalid certificate, or from a plain TLS error of a
 scanner, without the OpenSSL error text. The event therefore carries a fixed text,
@@ -307,9 +309,8 @@ or the message of the exception when `OnFirstRead` raises.
 
 The server keeps TLS session resumption on. mORMot2 sets a session id context on
 the server context when it creates it, so OpenSSL accepts a resumed session on a
-server that verifies client certificates. A manual check with `openssl s_client`
-and a saved session resumed both a TLS 1.2 and a TLS 1.3 session with a client
-certificate (2026-10-25). The live validation does not repeat this check.
+server that verifies client certificates. The live validation saves a TLS 1.2 and a TLS 1.3 session with `openssl s_client`
+and resumes each with a client certificate.
 
 ## Limits of this design
 
@@ -336,13 +337,14 @@ The live validation (`make mtls-live`) starts the server on loopback with a PKI
 that `tools/certs/make_mtls_pki.sh` makes, and drives it with the sibling
 client at `../http2client`. A raw TLS client built on the TLS socket of that
 client covers the cases that the client library lacks: an expired certificate,
-HTTP/1.1 over TLS and WebSocket over HTTP/2. The run holds 34 checks:
+HTTP/1.1 over TLS and WebSocket over HTTP/2. The run holds 38 checks:
 
 | Group | Checks |
 | --- | --- |
 | `ccmNone` | a client without a certificate is served; a certificate that nobody asked for gives no identity; the raw HTTP/2 client is served |
 | `ccmOptional` | no certificate gives a nil identity; a valid certificate gives the subject, the issuer, the SAN names and the principal; a certificate of an unknown CA is refused with no handler call; WebSocket over HTTP/2 without a certificate opens and the handler sees nil |
 | `ccmRequired` | no certificate, an unknown CA, a self-signed certificate outside the trust and an expired certificate are refused with no handler call, and the observer counts the failed handshakes; a valid certificate is served; two requests on one connection show one identity; HTTP/1.1 over TLS shows the identity; WebSocket over HTTP/2 shows the identity at `Init` and at the first message; WebSocket over HTTP/2 without a certificate is refused; WebSocket over HTTP/1.1 shows the identity |
+| Wire details | a comma in a DN value is escaped; a saved TLS 1.2 session and a saved TLS 1.3 session resume with the certificate; the stats count the failed handshakes |
 | Trust | a self-signed client in the CA file is served; the root and the self-signed client are served together; an unknown CA stays refused; with the system store only, a client of a private root is refused |
 
 Open gaps:

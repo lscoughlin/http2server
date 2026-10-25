@@ -148,6 +148,19 @@ begin
   end;
 end;
 
+/// whether a saved TLS session resumes with a client certificate
+function ResumptionWorks(const APort: Integer; const AVersion: string): Boolean;
+var
+  Common, Cmd: string;
+begin
+  Common := 'openssl s_client ' + AVersion + ' -connect 127.0.0.1:' + IntToStr(APort) +
+    ' -alpn h2 -cert alice.crt -key alice.key';
+  Cmd := 'cd ' + Pki + ' && rm -f resume.pem && (sleep 1; echo Q) | ' + Common +
+    ' -sess_out resume.pem >/dev/null 2>&1; (sleep 1; echo Q) | ' + Common +
+    ' -sess_in resume.pem 2>&1 | grep -q "^Reused"';
+  Result := ExecuteProcess('/bin/sh', ['-c', Cmd]) = 0;
+end;
+
 function Refused(const AText: string): Boolean;
 begin
   Result := Copy(AText, 1, 8) = 'refused:';
@@ -317,6 +330,9 @@ begin
       IntToStr(Handler.Calls - CallsBefore) + ' calls');
     Check('required: the observer counted each of the four failed handshakes',
       Obs.Failed - FailedBefore = 4, IntToStr(Obs.Failed - FailedBefore));
+    Check('required: the stats count the failed handshakes',
+      Server.Stats.TlsHandshakeFailedTotal = 4,
+      IntToStr(Server.Stats.TlsHandshakeFailedTotal));
 
     Body := ClientGet(Server.Port, 'alice', 2);
     P := Pos(' | ', Body);
@@ -328,6 +344,14 @@ begin
       Contains(First, ';principal=OU=Eng,O=Example,CN=alice;'), First);
     Check('required: two requests on one connection show one identity',
       (First <> '') and (First = Second), Body);
+
+    Body := ClientGet(Server.Port, 'special');
+    Check('required: a comma in a DN value is escaped as RFC 4514 says',
+      Contains(Body, 'CN=Doe\, Jane') and Contains(Body, 'O=Acme\, Inc'), Body);
+    Check('required: a saved TLS 1.2 session resumes with the certificate',
+      ResumptionWorks(Server.Port, '-tls1_2'));
+    Check('required: a saved TLS 1.3 session resumes with the certificate',
+      ResumptionWorks(Server.Port, '-tls1_3'));
 
     // HTTP/1.1 over TLS on the same listener
     H1 := RawHttp1Get(Server.Port, Identity('alice'), '/id');
