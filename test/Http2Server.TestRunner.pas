@@ -76,6 +76,7 @@ uses
   Http2Server.H2Credit.Test,
   Http2Server.H2Flow.Test,
   Http2Server.H2Hpack.Test,
+  Http2Server.H2Lifecycle.Test,
   Http2Server.Server.Test;
 
 const

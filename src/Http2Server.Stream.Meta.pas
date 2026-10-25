@@ -50,6 +50,7 @@ type
     FHasDeclaredLength: Boolean;
     FHasRequestHead: Boolean;
     FRemoteHeaders: THeaderBlock;
+    FTrailers: THeaderBlock;
     FPendingStatus: Integer;
     FPendingHeaders: THeaderBlock;
     FPendingEndStream: Boolean;
@@ -82,6 +83,10 @@ type
     procedure SetRemoteHeaders(const AHeaders: THeaderBlock);
     /// the request header block of this stream
     function RemoteHeaders: THeaderBlock;
+    /// keep the trailer block apart from the request head
+    procedure SetTrailers(const ATrailers: THeaderBlock);
+    /// the trailer block of the request; empty when the request has none
+    function Trailers: THeaderBlock;
     /// record the content-length that the request headers declared
     // - ALength below zero clears the record, which a trailer never carries
     procedure SetDeclaredLength(const ALength: Int64);
@@ -185,6 +190,26 @@ begin
   LockStream;
   try
     Result := FRemoteHeaders;
+  finally
+    UnlockStream;
+  end;
+end;
+
+procedure TStreamMeta.SetTrailers(const ATrailers: THeaderBlock);
+begin
+  LockStream;
+  try
+    FTrailers := ATrailers;
+  finally
+    UnlockStream;
+  end;
+end;
+
+function TStreamMeta.Trailers: THeaderBlock;
+begin
+  LockStream;
+  try
+    Result := FTrailers;
   finally
     UnlockStream;
   end;

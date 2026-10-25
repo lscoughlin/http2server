@@ -51,7 +51,7 @@ type
     procedure ProcessContinuation(const AFrame: TFrame);
     procedure CompleteHeaderBlock;
     function ValidateRequestBlock(const AStream: TServerStream;
-      const AIsTrailer: Boolean): Boolean;
+      const AHeaders: THeaderBlock; const AIsTrailer: Boolean): Boolean;
     procedure ProcessData(const AFrame: TFrame);
     procedure ProcessSettings(const AFrame: TFrame);
     procedure ProcessRstStream(const AFrame: TFrame);
@@ -165,6 +165,13 @@ begin
       end;
     end;
     Inc(Offset, FrameLen);
+    if FTripPending then
+    begin
+      // RFC 9113 section 5.4.1: after a GOAWAY for an error the endpoint closes
+      // the connection, and the IO side waits for the open streams, so they end
+      FTripPending := False;
+      EndAllStreams(ecEnhanceYourCalm);
+    end;
     // A connection error or a trip ends the read loop, because no later frame
     // of the buffer changes the outcome.  A GOAWAY from the peer is not such
     // an end: RFC 9113 section 6.8 lets the peer keep the connection in use
@@ -238,6 +245,7 @@ procedure TServerConnectionCore.ProcessHeaders(const AFrame: TFrame);
 var
   Stream: TServerStream;
   Block: TBytes;
+  Discard: Boolean;
 begin
   // a HEADERS frame needs a stream id, and stream zero is not one
   if AFrame.Header.StreamId = 0 then
@@ -245,6 +253,7 @@ begin
     FailConnection('a HEADERS frame needs a stream id', ecProtocolError);
     Exit;
   end;
+  Discard := False;
   Stream := FindStream(AFrame.Header.StreamId);
   if Stream <> nil then
   begin
@@ -268,27 +277,38 @@ begin
     // RFC 9113 section 5.1.1: a stream id that does not increase is a fault
     if not CheckStreamId(AFrame.Header.StreamId) then
       Exit;
-    if OpenStreamCount >= Integer(FOptions.MaxConcurrentStreams) then
+    // RFC 9113 section 5.1.1: the id is used up from now on, whether or not
+    // the server serves the stream
+    FLastStreamId := AFrame.Header.StreamId;
+    if FGoAwaySent or
+       (OpenStreamCount >= Integer(FOptions.MaxConcurrentStreams)) then
     begin
       // RFC 9113 section 5.1.2: a stream above the limit is refused, and the
-      // connection stays open
+      // connection stays open. After a GOAWAY the server takes no new stream.
+      // The block is still decoded and dropped, because the HPACK state of the
+      // peer already holds its fields (RFC 9113 section 4.3)
       SendRstStream(AFrame.Header.StreamId, ecRefusedStream);
-      Exit;
-    end;
-    Stream := NewStream(AFrame.Header.StreamId);
+      Discard := True;
+    end
+    else
+      Stream := NewStream(AFrame.Header.StreamId);
   end;
   // RFC 9113 section 5.3.1: a HEADERS frame may carry a priority block, and
   // a stream that depends on itself is a stream error
-  if AFrame.IsPriority then
+  if AFrame.IsPriority and
+     (HeaderPriorityDependsOn(AFrame) = AFrame.Header.StreamId) then
   begin
-    if HeaderPriorityDependsOn(AFrame) = AFrame.Header.StreamId then
+    SendRstStream(AFrame.Header.StreamId, ecProtocolError);
+    if Stream <> nil then
     begin
-      SendRstStream(AFrame.Header.StreamId, ecProtocolError);
-      Exit;
+      Stream.Cancel(ecProtocolError);
+      CloseStream(Stream);
     end;
+    Discard := True;
   end;
   Block := ExtractHeaderBlock(AFrame);
   FHpack.BeginBlock(AFrame.Header.StreamId, AFrame.IsEndStream, Block);
+  FDiscardBlock := Discard;
   if AFrame.IsEndHeaders then
     CompleteHeaderBlock;
 end;
@@ -336,12 +356,15 @@ var
   Stream: TServerStream;
   Block: TBytes;
   Headers: THeaderBlock;
-  IsTrailer: Boolean;
+  IsTrailer, Discard: Boolean;
 begin
   Stream := FindStream(FHpack.BlockStreamId);
+  Discard := FDiscardBlock;
+  FDiscardBlock := False;
   Block := FHpack.TakeBlock;
-  if Stream = nil then
-    Exit;
+  // RFC 9113 section 4.3: every header block is decoded, even one that the
+  // server refuses, because the dynamic table of the peer already holds its
+  // fields. A block that is dropped is decoded and its fields are discarded
   try
     Headers := FHpack.Decode(Block);
   except
@@ -357,6 +380,8 @@ begin
       Exit;
     end;
   end;
+  if Discard or (Stream = nil) then
+    Exit;
   // the first header block of a stream is the request head; a later block
   // is the trailer, because ProcessHeaders refuses any other second block
   IsTrailer := Stream.HasRequestHead;
@@ -369,21 +394,42 @@ begin
     CloseStream(Stream);
     Exit;
   end;
+  if IsTrailer then
+  begin
+    // the trailers do not start a request: the handler runs once, for the head,
+    // and the request head stays as it was
+    if not ValidateRequestBlock(Stream, Headers, True) then
+      Exit;
+    Stream.SetTrailers(Headers);
+    if FHpack.BlockEndStream then
+    begin
+      // a handler that waits for the end of the body wakes up now
+      Stream.DeliverData(nil, True);
+      if not Stream.DeclaredLengthMatches then
+      begin
+        SendRstStream(Stream.StreamId, ecProtocolError);
+        Stream.Cancel(ecProtocolError);
+        CloseStream(Stream);
+      end;
+    end;
+    Exit;
+  end;
   Stream.SetRemoteHeaders(Headers);
   if FHpack.BlockEndStream then
     Stream.MarkRemoteEnded;
-  if not ValidateRequestBlock(Stream, IsTrailer) then
+  if not ValidateRequestBlock(Stream, Headers, False) then
     Exit;
   if FEvents <> nil then
     FEvents.RequestReady(Stream);
 end;
 
 function TServerConnectionCore.ValidateRequestBlock(
-  const AStream: TServerStream; const AIsTrailer: Boolean): Boolean;
+  const AStream: TServerStream; const AHeaders: THeaderBlock;
+  const AIsTrailer: Boolean): Boolean;
 var
   Verdict: TRequestVerdict;
 begin
-  Verdict := ValidateRequestHeaders(AStream.RemoteHeaders, AIsTrailer,
+  Verdict := ValidateRequestHeaders(AHeaders, AIsTrailer,
     FOptions.ConnectProtocol);
   if not Verdict.Valid then
   begin
@@ -421,8 +467,9 @@ begin
   end;
   if AFrame.Header.StreamId = 0 then
   begin
-    if N > 0 then
-      FailConnection('a DATA frame needs a stream id', ecProtocolError);
+    // RFC 9113 section 6.1: a DATA frame on stream 0 is a connection error,
+    // whatever its length
+    FailConnection('a DATA frame needs a stream id', ecProtocolError);
     Exit;
   end;
   // the connection window is spent and refilled for every DATA frame, whatever
@@ -440,6 +487,11 @@ begin
   Stream := FindStream(AFrame.Header.StreamId);
   if Stream = nil then
   begin
+    // RFC 9113 section 5.1: an endpoint ignores the frames that arrive after it
+    // sent RST_STREAM. They were in flight before the peer saw the reset, and
+    // the connection window above counts them
+    if FResetIds.Contains(AFrame.Header.StreamId) then
+      Exit;
     // RFC 9113 section 5.1: DATA on an idle or a closed stream is a
     // connection error, and the two states take different codes
     if AFrame.Header.StreamId > FLastStreamId then
@@ -614,8 +666,6 @@ var
   Id: LongWord;
   Code: THttp2ErrorCode;
   Debug: TBytes;
-  Stream: TServerStream;
-  I: Integer;
 begin
   if AFrame.Header.StreamId <> 0 then
   begin
@@ -626,15 +676,11 @@ begin
   // RFC 9113 section 6.8: the peer may keep the connection in use until its
   // last stream ends, so the read loop must not stop on this frame
   FPeerGoAway := True;
-  // the peer opens no stream after GOAWAY, so every open stream is cancelled
-  for I := FStreams.Count - 1 downto 0 do
-  begin
-    Stream := FStreams[I];
-    Stream.Cancel(Code);
-    if FEvents <> nil then
-      FEvents.StreamReset(Stream);
-    CloseStream(Stream);
-  end;
+  // The last stream id of a client GOAWAY names server-initiated streams, and
+  // the server has none, so it limits nothing here. The streams that are open
+  // finish, and the server takes no new one: the GOAWAY below makes the server
+  // refuse a new stream. The IO side closes the connection when the last open
+  // stream has ended.
   // RFC 9113 section 6.8: a receiver of a GOAWAY that has no more use for the
   // connection SHOULD still send a GOAWAY frame before terminating.  The
   // answer names the last stream the server processed, and it is also what

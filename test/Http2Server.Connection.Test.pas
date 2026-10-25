@@ -111,7 +111,7 @@ type
     procedure TestSlowHandlerResetsOnlyItsStream;
     procedure TestPingIsAcknowledged;
     procedure TestPriorityIsIgnored;
-    procedure TestClientGoAwayCancelsOpenStreams;
+    procedure TestClientGoAwayLetsOpenStreamsFinish;
     procedure TestClientGoAwayAnswersAndKeepsReading;
     procedure TestRstStreamKeepsTheConnection;
     procedure TestResetAbuseTripsTheBucket;
@@ -860,7 +860,7 @@ begin
   AssertFalse('the connection stays open', FCore.GoAwaySent);
 end;
 
-procedure TConnectionCoreTest.TestClientGoAwayCancelsOpenStreams;
+procedure TConnectionCoreTest.TestClientGoAwayLetsOpenStreamsFinish;
 var
   Stream: TServerStream;
 begin
@@ -872,9 +872,12 @@ begin
   Stream.AddRef;
   FCore.Feed(Pack(False, [TFrame.Create(ftGoAway, [], 0,
     GoAwayPayload(1, ecNoError))]));
-  AssertEquals('a client GOAWAY closes every stream', 0, FCore.OpenStreams);
-  AssertEquals('a client GOAWAY resets each open stream', 2, FEvents.Resets);
-  AssertTrue('the blocked stream is cancelled', Stream.IsCancelled);
+  // decision D2 of the hardening plan: the open streams finish, and the server
+  // takes no new stream (RFC 9113 section 6.8)
+  AssertEquals('a client GOAWAY leaves the open streams alone', 2,
+    FCore.OpenStreams);
+  AssertEquals('a client GOAWAY resets no stream', 0, FEvents.Resets);
+  AssertFalse('the running stream is not cancelled', Stream.IsCancelled);
   Stream.ReleaseRef;
   AssertTrue('the connection reports its close', FEvents.Closing > 0);
 end;

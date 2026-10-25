@@ -108,8 +108,16 @@ and the queue and pool flags cover the two pools.
 ## The GOAWAY of a stop
 
 The core sends one GOAWAY frame per connection, and no second frame
-(`src/Http2Server.Connection.Core.pas:621-627`). A connection that already sent GOAWAY,
-because of a protocol error, keeps its first frame.
+(`TConnectionCoreBase.SendGoAway`). A connection that already sent GOAWAY,
+because of a protocol error, keeps its first frame. After the frame the core
+refuses every new stream with `REFUSED_STREAM` and still decodes the header
+block of the refused stream.
+
+A GOAWAY from the peer does not cancel any stream (RFC 9113 section 6.8). The
+last stream identifier of a client names server-initiated streams, and the
+server has none. The streams that are open finish. The core answers with its own
+GOAWAY, so it takes no new stream, and the IO side closes the connection when the
+last open stream has ended.
 
 The last stream identifier is truthful. A frame that names a higher identifier
 than the core accepted would tell a peer that streams were served that were

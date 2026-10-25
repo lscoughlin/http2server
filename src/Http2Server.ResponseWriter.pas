@@ -38,6 +38,14 @@ function ResponseHasHeader(const AHeaders: THeaderBlock; const AName: string): B
 // - a name must also be non-empty and hold no space, colon or other control octet
 procedure CheckResponseHeaders(const AHeaders: THeaderBlock);
 
+/// the response fields of an HTTP/2 response
+// - RFC 9113 section 8.2: a field name is lower case. The result holds every
+//   name in lower case
+// - RFC 9113 section 8.2.2: a field that is specific to one HTTP/1.1 connection
+//   (connection, keep-alive, proxy-connection, transfer-encoding, upgrade) is
+//   not legal in HTTP/2, so the call raises EHttpError for it
+function PrepareH2ResponseHeaders(const AHeaders: THeaderBlock): THeaderBlock;
+
 /// AHeaders with the Date field added for a final response that has none
 function WithDate(const AHeaders: THeaderBlock; const AStatus: Integer): THeaderBlock;
 
@@ -117,6 +125,24 @@ begin
       if (C = #13) or (C = #10) or (C = #0) then
         raise EHttpError.Create('a response header value holds CR, LF or NUL');
     end;
+  end;
+end;
+
+function PrepareH2ResponseHeaders(const AHeaders: THeaderBlock): THeaderBlock;
+var
+  I: Integer;
+  Lower: string;
+begin
+  Result := Copy(AHeaders);
+  for I := 0 to High(Result) do
+  begin
+    Lower := LowerCase(Result[I].Name);
+    if (Lower = 'connection') or (Lower = 'keep-alive') or
+       (Lower = 'proxy-connection') or (Lower = 'transfer-encoding') or
+       (Lower = 'upgrade') then
+      raise EHttpError.Create('the response field ' + Lower +
+        ' is specific to one HTTP/1.1 connection and is not legal in HTTP/2');
+    Result[I].Name := Lower;
   end;
 end;
 

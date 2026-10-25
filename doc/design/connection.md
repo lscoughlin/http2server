@@ -79,13 +79,13 @@ The core holds each rule in one place.
 | Frame | Rule | Code |
 | --- | --- | --- |
 | any, during a header block | Only `CONTINUATION` may follow a `HEADERS` frame on the same stream (RFC 9113 section 4.3). Any other frame is `PROTOCOL_ERROR`. | `ProcessFrame` |
-| `DATA` | A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream is `STREAM_CLOSED`. A non-empty frame on a half-closed stream is `STREAM_CLOSED`. | `ProcessData` |
-| `HEADERS` | A frame on a half-closed or closed stream is `STREAM_CLOSED`. A second `HEADERS` frame without `END_STREAM` is `PROTOCOL_ERROR`. A new stream id below `FLastStreamId` is a closed stream. | `ProcessHeaders` |
+| `DATA` | A frame on stream zero is `PROTOCOL_ERROR`, whatever its length. A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream is `STREAM_CLOSED`, except a frame on a stream that the server reset lately: the core ignores it, and the connection window still counts it. A non-empty frame on a half-closed stream is `STREAM_CLOSED`. | `ProcessData` |
+| `HEADERS` | A frame on a half-closed or closed stream is `STREAM_CLOSED`. A second `HEADERS` frame without `END_STREAM` is `PROTOCOL_ERROR`. A new stream id below `FLastStreamId` is a closed stream. A refused stream, and a stream that depends on itself, still has its header block decoded. | `ProcessHeaders` |
 | `PRIORITY` | The payload is five bytes or the frame is `FRAME_SIZE_ERROR`. Stream zero is `PROTOCOL_ERROR`. A stream that depends on itself is a stream error. | `ProcessPriority` (`:205`) |
 | `RST_STREAM` | The payload is four bytes or the frame is `FRAME_SIZE_ERROR`. A frame on an idle stream is `PROTOCOL_ERROR`. | `ProcessRstStream` (`:519`) |
 | `SETTINGS` | An acknowledged frame with a payload is `FRAME_SIZE_ERROR`. A frame is a delta onto the settings of the peer. | `ProcessSettings` |
 | `PING` | Stream zero is required. The payload is eight bytes. An acknowledged frame adds no frame. | `ProcessPing` (`:551`) |
-| `GOAWAY` | Stream zero is required. Every open stream is cancelled, and the core stops. | `ProcessGoAway` (`:568`) |
+| `GOAWAY` | Stream zero is required. The open streams finish, the core answers with its own GOAWAY and takes no new stream. | `ProcessGoAway` |
 | `WINDOW_UPDATE` | A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream carries no action. A stream window above the maximum is a stream error of type `FLOW_CONTROL_ERROR`. | `ProcessWindowUpdate` (`:605`) |
 | `PUSH_PROMISE` | A server never receives this frame. It is `PROTOCOL_ERROR` (RFC 9113 section 8.2). | `ProcessFrame` |
 
@@ -119,6 +119,28 @@ moves the state and the accessor `State` reads the flags.
 core, the admission queue and the running handler. The reference count keeps
 a reset that arrives during a handler run from freeing the stream under the
 handler.
+
+## The refusal and reset rules
+
+**The block of a refused stream.** A header block always runs through the HPACK
+decoder, because the dynamic table of the peer already holds its fields
+(RFC 9113 section 4.3). A stream above the concurrent-stream limit, a stream
+after a GOAWAY and a stream that depends on itself get an `RST_STREAM`, and the
+core then decodes the block and drops the fields. The stream id counts as used
+for the ordering rule of RFC 9113 section 5.1.1 from the HEADERS frame on, so a
+refused id cannot be opened again. A stream that depends on itself is closed and
+frees its slot.
+
+**The reset set.** The core remembers the last 256 stream ids for which it sent an
+`RST_STREAM` (`TStreamIdSet`). A `DATA` frame for such an id was in flight before
+the peer saw the reset, so the core ignores it (RFC 9113 section 5.1). The set
+holds a fixed number of ids and drops the oldest, so a peer cannot grow it.
+
+**The trailers.** The request head is the first header block of a stream. It
+raises `RequestReady`, which admits the request to the handler pool once. A later
+block is the trailer block: the core validates it, keeps it apart from the head
+(`TServerStream.Trailers`), wakes a handler that waits for the end of the body
+and checks the declared content length. The request head stays as it was.
 
 ## The request rules
 

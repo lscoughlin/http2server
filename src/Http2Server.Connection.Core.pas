@@ -32,7 +32,7 @@ uses
   Http2Server.FlowControl, Http2Server.Limits, Http2Server.Seam,
   Http2Server.Stream, Http2Server.StreamHost, Http2Server.Headers,
   Http2Server.Output,
-  Http2Server.HpackConnection;
+  Http2Server.HpackConnection, Http2Server.StreamIdSet;
 
 type
   /// the per-connection values the core needs
@@ -140,6 +140,15 @@ type
     FGoAwaySent: Boolean;
     /// the peer sent GOAWAY, so the read loop continues to its last stream
     FPeerGoAway: Boolean;
+    /// the streams that the server reset lately. Frames of the peer that were in
+    // flight before it saw the reset are ignored, as RFC 9113 section 5.1 allows
+    FResetIds: TStreamIdSet;
+    /// the header block under assembly is decoded and dropped, because the
+    // server refused or closed its stream; the decoder state must still advance
+    FDiscardBlock: Boolean;
+    /// a bucket tripped inside a frame handler, and the open streams must end
+    // once the handler has returned
+    FTripPending: Boolean;
     FTripKind: TLimitKind;
     FConnUpdatePending: LongWord;
     /// the waker that the IO side installs; nil until the server registers one
@@ -174,6 +183,8 @@ type
       const AErrorCode: THttp2ErrorCode);
     procedure FailConnection(const AMessage: string;
       const AErrorCode: THttp2ErrorCode);
+    /// cancel and close every open stream, with AErrorCode
+    procedure EndAllStreams(const AErrorCode: THttp2ErrorCode);
     procedure CloseStream(const AStream: TServerStream);
     procedure ReapClosedStreams;
     /// queue an RST_STREAM for a stream that the local side refused
@@ -234,6 +245,8 @@ type
     function ConnectionWindowSize: Int64;
     /// the octets the peer may still send on one stream window
     function StreamWindowSize(const AStreamId: LongWord): Int64;
+    /// how many stream ids the set of locally reset streams holds (test seam)
+    function ResetSetCount: Integer;
     /// the HPACK table size that the request decoder accepts now (test seam)
     function HpackDecoderMaxSize: LongWord;
     /// the HPACK table size that the response encoder uses now (test seam)
@@ -261,6 +274,8 @@ implementation
 const
   /// the longest wait of Orphan for a call in flight, in milliseconds
   cOrphanWaitMs = 10000;
+  /// how many reset stream ids the core remembers
+  cResetSetCapacity = 256;
 
 { TCoreStreamHost }
 
@@ -389,6 +404,7 @@ begin
   FRefusalHost := FHost as IRefusalHost;
   FStreams := TObjectList<TServerStream>.Create(False);
   FById := TDictionary<LongWord, TServerStream>.Create;
+  FResetIds := TStreamIdSet.Create(cResetSetCapacity);
   FHpack := THpackConnection.Create(FOptions.MaxHeaderListSize,
     FOptions.MaxHeaderTableSize, FOptions.MaxFrameSize);
   FSettings := TConnectionSettings.Defaults;
@@ -421,6 +437,9 @@ begin
   // RFC 9113 section 10.5: a peer that exceeds an abuse limit is told to stop
   FTripKind := AKind;
   SendGoAway(FLastStreamId, ecEnhanceYourCalm);
+  // the frame handler that charged the bucket still uses its stream, so the
+  // streams end after it returns: the read loop of Feed does that
+  FTripPending := True;
   FClosing := True;
   if FEvents <> nil then
   begin
@@ -475,6 +494,7 @@ begin
   FStreams.Free;
   FSend.Free;
   FRecv.Free;
+  FResetIds.Free;
   FHpack.Free;
   // the lock lives on while a stream holds the owner
   FConnLock := nil;
@@ -656,21 +676,15 @@ procedure TConnectionCoreBase.SendRstStream(const AStreamId: LongWord;
   const AErrorCode: THttp2ErrorCode);
 begin
   QueueFrame(BuildRstStreamFrame(AStreamId, AErrorCode));
+  // frames of the peer that were in flight before it saw this reset are ignored
+  FResetIds.Add(AStreamId);
 end;
 
-procedure TConnectionCoreBase.FailConnection(const AMessage: string;
-  const AErrorCode: THttp2ErrorCode);
+procedure TConnectionCoreBase.EndAllStreams(const AErrorCode: THttp2ErrorCode);
 var
   I: Integer;
   Stream: TServerStream;
 begin
-  // a connection error names the last stream the server processed
-  SendGoAway(FLastStreamId, AErrorCode);
-  // RFC 9113 section 5.4.1: after sending the GOAWAY frame for an error
-  // condition, the endpoint MUST close the TCP connection.  The IO side
-  // closes only when no stream is open, so every open stream ends here.  A
-  // connection error that left a stream open would send its GOAWAY and then
-  // hold the socket, and the peer would wait for a close that never comes.
   for I := FStreams.Count - 1 downto 0 do
   begin
     Stream := FStreams[I];
@@ -679,6 +693,19 @@ begin
       FEvents.StreamReset(Stream);
     CloseStream(Stream);
   end;
+end;
+
+procedure TConnectionCoreBase.FailConnection(const AMessage: string;
+  const AErrorCode: THttp2ErrorCode);
+begin
+  // a connection error names the last stream the server processed
+  SendGoAway(FLastStreamId, AErrorCode);
+  // RFC 9113 section 5.4.1: after sending the GOAWAY frame for an error
+  // condition, the endpoint MUST close the TCP connection.  The IO side
+  // closes only when no stream is open, so every open stream ends here.  A
+  // connection error that left a stream open would send its GOAWAY and then
+  // hold the socket, and the peer would wait for a close that never comes.
+  EndAllStreams(AErrorCode);
   FClosing := True;
   if FEvents <> nil then
     FEvents.ConnectionClosing;
@@ -729,6 +756,11 @@ begin
   finally
     UnlockConn;
   end;
+end;
+
+function TConnectionCoreBase.ResetSetCount: Integer;
+begin
+  Result := FResetIds.Count;
 end;
 
 function TConnectionCoreBase.HpackDecoderMaxSize: LongWord;

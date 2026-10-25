@@ -354,7 +354,8 @@ begin
   if FRegistry <> nil then
     FRegistry.Remove(Self as IDuplexChannel);
   CheckResponseHeaders(AHeaders);
-  FStream.QueueResponseHeaders(AStatus, WithDate(AHeaders, AStatus), Length(ABody) = 0);
+  FStream.QueueResponseHeaders(AStatus,
+    WithDate(PrepareH2ResponseHeaders(AHeaders), AStatus), Length(ABody) = 0);
   if Length(ABody) > 0 then
   begin
     FStream.TryWrite(ABody);
@@ -380,7 +381,8 @@ begin
     FLock.Release;
   end;
   CheckResponseHeaders(AHeaders);
-  FStream.QueueResponseHeaders(AStatus, WithDate(AHeaders, AStatus), False);
+  FStream.QueueResponseHeaders(AStatus,
+    WithDate(PrepareH2ResponseHeaders(AHeaders), AStatus), False);
   if Length(Hold) > 0 then
     FStream.TryWrite(Hold);
 end;

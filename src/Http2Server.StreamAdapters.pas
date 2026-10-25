@@ -289,7 +289,8 @@ begin
   if AStatus >= 200 then
     FStatus := AStatus;
   CheckResponseHeaders(AHeaders);
-  FStream.QueueResponseHeaders(AStatus, WithDate(AHeaders, AStatus), AEndStream);
+  FStream.QueueResponseHeaders(AStatus,
+    WithDate(PrepareH2ResponseHeaders(AHeaders), AStatus), AEndStream);
 end;
 
 procedure TServerStreamResponse.Write(const AData: TBytes);

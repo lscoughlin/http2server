@@ -1016,9 +1016,11 @@ begin
   try
     Client.SendPreface;
     Empty := nil;
-    // an empty DATA frame on stream zero only charges the empty-DATA bucket
+    // an empty DATA frame on an open stream only charges the empty-DATA bucket;
+    // on stream zero it would be a PROTOCOL_ERROR at once
+    Client.SendFrame(Client.OpenFrame(1, '/'));
     for I := 0 to 11 do
-      Client.SendFrame(BuildDataFrame(0, Empty, False));
+      Client.SendFrame(BuildDataFrame(1, Empty, False));
     AssertTrue('the empty DATA flood ends in GOAWAY',
       Client.WaitGoAway(Code, Last, ResponseTimeoutMs));
     AssertEquals('the GOAWAY code is ENHANCE_YOUR_CALM',
