@@ -62,7 +62,9 @@ uses
   Http2Server.ClientCert,
   Http2Server.Mtls.Types,
   Http2Server.Async.Events,
-  Http2Server.Async.Options;
+  Http2Server.Async.Options,
+  Http2Server.Async.Counters,
+  Http2Server.Async.Waker;
 
 const
   /// the time a staged close waits for the peer to close first, in seconds
@@ -73,21 +75,6 @@ const
 type
   THttp2AsyncServer = class;
   THttp2AsyncConnection = class;
-
-  /// the write waker of one connection
-  ///
-  /// A handler thread calls Signal after it queues output.  The waker drains
-  /// the core and hands the bytes to the mORMot2 write path, which sends at
-  /// once when the socket is ready and subscribes for the write event when it
-  /// is not.  The connection carries the edge-triggered flag, so Signal takes
-  /// effect once per transition from "no output" to "output".
-  THttp2ConnectionWaker = class(TInterfacedObject, IWriteWaker)
-  private
-    FConnection: THttp2AsyncConnection;   // weak reference
-  public
-    constructor Create(const AConnection: THttp2AsyncConnection);
-    procedure Signal;
-  end;
 
   /// the protocol that a connection speaks, once it is known
   TConnectionMode = (cmUndecided, cmHttp2, cmHttp1);
@@ -129,6 +116,8 @@ type
     FSendLock: TCriticalSection;
     procedure StartHttp2;
     procedure StartHttp1;
+    /// the method the waker calls: drain the core and write
+    procedure WakeOutput;
     function OnReadHttp1: TPollAsyncSocketOnReadWrite;
     function PendingWriteBytes: Int64;
     function PullOutput(out AData: TBytes): Boolean;
@@ -179,19 +168,8 @@ type
     FStarted: Boolean;
     /// the observer of the server; nil when the caller set none
     FObserver: IHttp2ServerObserver;
-    /// the open connections now
-    FConnectionCount: Integer;
-    /// open streams now, counted across every connection
-    FOpenStreams: Integer;
-    /// streams the peer or the server reset since the build
-    FResetTotal: Int64;
-    /// bucket trips since the build
-    FTrippedTotal: Int64;
-    /// TLS handshakes that failed while a client certificate mode was on
-    FTlsFailedTotal: Int64;
-    /// guards the connection counter against the IO threads
-    FConnectionLock: TCriticalSection;
-    function LeastControlBucket: TTokenBucketOptions;
+    /// the connection, reset, trip and handshake counters
+    FCounters: TServerCounters;
   protected
     /// the idle period before OnLastOperationIdle runs, in seconds
     // - the base class returns zero, which disables the event, so the server
@@ -228,11 +206,11 @@ type
     // - the observer runs on the thread that raised the event, so it must be
     //   set before Start and never changed while the server runs
     property Observer: IHttp2ServerObserver read FObserver write FObserver;
-    /// the connections that are open now
-    property ConnectionCount: Integer read FConnectionCount;
-    /// count one accepted connection, on the IO thread
+    /// the counters of the server; they live as long as the server object
+    property Counters: TServerCounters read FCounters;
+    /// count one accepted connection and tell the observer, on the IO thread
     procedure ConnectionOpened;
-    /// count one closed connection, on the IO thread
+    /// count one closed connection and tell the observer, on the IO thread
     procedure ConnectionClosed;
     /// send one event to the observer, on the thread that raised it
     procedure Notify(const AEvent: TServerEvent); overload;
@@ -247,17 +225,8 @@ type
     procedure CloseChannels(const AMode: TChannelClose);
     /// the streams that are open on every connection now
     function OpenStreamTotal: Integer;
-    /// count one stream reset, on the thread that saw it
-    procedure StreamResetted;
-    /// count one bucket trip, on the thread that saw it
-    procedure BucketTripped;
-    /// streams the peer or the server reset since the build
-    property ResetTotal: Int64 read FResetTotal;
-    /// bucket trips since the build
-    property TrippedTotal: Int64 read FTrippedTotal;
     /// count one failed handshake and tell the observer, on the IO thread
     procedure TlsHandshakeFailed(const ADetail: string);
-    property TlsFailedTotal: Int64 read FTlsFailedTotal;
   end;
 
 implementation
@@ -268,26 +237,12 @@ const
   /// the write timeout a handler-thread wake-up tolerates, in milliseconds
   cWriteTimeoutMs = 1000;
 
-{ THttp2ConnectionWaker }
-
-constructor THttp2ConnectionWaker.Create(const AConnection: THttp2AsyncConnection);
-begin
-  inherited Create;
-  FConnection := AConnection;
-end;
-
-procedure THttp2ConnectionWaker.Signal;
-begin
-  if FConnection = nil then
-    exit;
-  // the first check is the edge-triggered flag inside the core, which keeps
-  // one wake-up per transition.  SendPendingOutput performs the drain and the
-  // mORMot2 write, and it retries once when the write lock went to the IO
-  // thread, which is the second check of the wake-up pattern
-  FConnection.SendPendingOutput;
-end;
-
 { THttp2AsyncConnection }
+
+procedure THttp2AsyncConnection.WakeOutput;
+begin
+  SendPendingOutput;
+end;
 
 procedure THttp2AsyncConnection.AfterCreate;
 begin
@@ -324,11 +279,11 @@ begin
      TControlBucketOption.Create(lkContinuation,
        FServer.Factory.ContinuationBucket)]);
   FEvents := THttp2ConnectionEvents.Create(FServer.Handlers, FServer.Notify,
-    FServer.StreamResetted, FServer.BucketTripped,
+    FServer.Counters.StreamResetted, FServer.Counters.BucketTripped,
     PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
   FCore := TServerConnectionCore.Create(Options, FEvents, Limits,
     FServer.Factory.Clock);
-  FWaker := THttp2ConnectionWaker.Create(Self);
+  FWaker := TMethodWaker.Create(WakeOutput);
   FCore.SetWriteWaker(FWaker);
   FMode := cmHttp2;
 end;
@@ -348,7 +303,7 @@ begin
   FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers,
     PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
   Core := TH1Core.Create(Options, FH1Events);
-  FWaker := THttp2ConnectionWaker.Create(Self);
+  FWaker := TMethodWaker.Create(WakeOutput);
   Core.SetWriteWaker(FWaker);
   Core.SetPendingProbe(PendingWriteBytes);
   // a TLS connection cannot close its write side alone, so it closes at once
@@ -742,7 +697,8 @@ begin
   FFactory := AFactory;
   FPolicy := BuildTlsPolicy(FFactory);
   FCoreOptions := BuildConnectionCoreOptions(FFactory);
-  FControlBucket := LeastControlBucket;
+  FControlBucket := LeastControlBucket(FFactory);
+  FCounters := TServerCounters.Create;
   FHandlers := THandlerPool.Create(AFactory);
   FChannelImpl := TChannelRegistry.Create(AFactory.MaxDetachedStreams,
     AFactory.ChannelQueueLimit, AFactory.ChannelLowWater);
@@ -752,12 +708,7 @@ begin
   FHandlers.ChannelRegistry := FChannels;
   FStreamPool := TStreamPool.Create(AFactory.StreamPoolSize);
   FChannelImpl.SourceProvider := FStreamPool.NewSource;
-  FConnectionLock := TCriticalSection.Create;
   FObserver := nil;
-  FConnectionCount := 0;
-  FResetTotal := 0;
-  FTrippedTotal := 0;
-  FTlsFailedTotal := 0;
   Options := ASYNC_OPTION_PROD;
   if AFactory.Tls.CertificateFile <> '' then
     include(Options, acoEnableTls);
@@ -779,9 +730,10 @@ begin
   FStreamPool := nil;
   FChannels := nil;
   FChannelImpl := nil;
-  FConnectionLock.Free;
-  FConnectionLock := nil;
   inherited Destroy;
+  // the connections close inside the inherited destructor and still count
+  FCounters.Free;
+  FCounters := nil;
 end;
 
 function THttp2AsyncServer.GetLastOperationIdleSeconds: cardinal;
@@ -810,49 +762,15 @@ begin
     result := Seconds(FFactory.HeaderTimeoutMs);
 end;
 
-function THttp2AsyncServer.LeastControlBucket: TTokenBucketOptions;
-
-  function Least(const A, B: TTokenBucketOptions): TTokenBucketOptions;
-  begin
-    if B.Capacity < A.Capacity then
-      result := B
-    else
-      result := A;
-  end;
-
-begin
-  // the core holds one control bucket for every non-reset limit kind, while
-  // the factory offers five.  The least capacity is the conservative choice:
-  // the server enforces the strictest of the five configured control limits
-  result := Least(Least(FFactory.PingBucket, FFactory.SettingsBucket),
-    Least(FFactory.EmptyDataBucket, FFactory.WindowUpdateBucket));
-  result := Least(result, FFactory.ContinuationBucket);
-end;
-
 procedure THttp2AsyncServer.ConnectionOpened;
 begin
-  if FConnectionLock = nil then
-    exit;
-  FConnectionLock.Acquire;
-  try
-    Inc(FConnectionCount);
-  finally
-    FConnectionLock.Release;
-  end;
+  FCounters.ConnectionOpened;
   Notify(seConnectionAccepted, 0, lkReset, 'the socket is accepted');
 end;
 
 procedure THttp2AsyncServer.ConnectionClosed;
 begin
-  if FConnectionLock = nil then
-    exit;
-  FConnectionLock.Acquire;
-  try
-    if FConnectionCount > 0 then
-      Dec(FConnectionCount);
-  finally
-    FConnectionLock.Release;
-  end;
+  FCounters.ConnectionClosed;
   Notify(seConnectionClosed, 0, lkReset, 'the connection ended');
 end;
 
@@ -862,34 +780,10 @@ begin
     FObserver.OnEvent(AEvent);
 end;
 
-procedure THttp2AsyncServer.StreamResetted;
-begin
-  if FConnectionLock = nil then
-    exit;
-  FConnectionLock.Acquire;
-  try
-    Inc(FResetTotal);
-  finally
-    FConnectionLock.Release;
-  end;
-end;
-
 procedure THttp2AsyncServer.TlsHandshakeFailed(const ADetail: string);
 begin
-  InterlockedIncrement64(FTlsFailedTotal);
+  FCounters.TlsFailed;
   Notify(seTlsHandshakeFailed, 0, lkReset, ADetail);
-end;
-
-procedure THttp2AsyncServer.BucketTripped;
-begin
-  if FConnectionLock = nil then
-    exit;
-  FConnectionLock.Acquire;
-  try
-    Inc(FTrippedTotal);
-  finally
-    FConnectionLock.Release;
-  end;
 end;
 
 procedure THttp2AsyncServer.BroadcastGoAway(

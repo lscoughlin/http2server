@@ -31,8 +31,8 @@ listening socket and the handler pool.
 
 ## Start
 
-`THttp2Server.Start` (`src/Http2Server.Server.pas:117`) sets its started flag
-and calls `THttp2AsyncServer.Start` (`src/Http2Server.Async.pas:968`).
+`THttp2Server.Start` (`src/Http2Server.Server.pas`) sets its started flag
+and calls `THttp2AsyncServer.Start` (`src/Http2Server.Async.pas`).
 
 The async start binds the port on its own thread and waits up to five seconds
 for the bind. A failed bind raises from the wait, so `Start` does not return a
@@ -49,7 +49,7 @@ a stopped server is built again rather than started again.
 ## The port
 
 A factory port of 0 asks the operating system for a free port.
-`THttp2AsyncServer.BoundPort` (`src/Http2Server.Async.pas:1001`) reads the port
+`THttp2AsyncServer.BoundPort` reads the port
 back from the bound socket, so `IHttp2Server.Port` answers the real port after
 `Start`.
 
@@ -64,12 +64,12 @@ completed no request for the whole period, which bounds the work that a peer
 can hold with a partial header block.
 
 `THttp2AsyncServer.GetLastOperationIdleSeconds`
-(`src/Http2Server.Async.pas:780`) answers the earlier of the two, in whole
+answers the earlier of the two, in whole
 seconds, so the idle event runs at the stricter of the two periods. A period
 below one second rounds up to one second, because the event runs once per
 second.
 
-`THttp2AsyncConnection.OnLastOperationIdle` (`src/Http2Server.Async.pas:612`)
+`THttp2AsyncConnection.OnLastOperationIdle`
 applies both rules and asks the IO side to remove the connection.
 
 ## Stop
@@ -78,7 +78,7 @@ applies both rules and asks the IO side to remove the connection.
 order.
 
 1. The stop flag is set, so a second call returns at once.
-2. `BroadcastGoAway` (`src/Http2Server.Async.pas:914`) reads the live
+2. `THttp2AsyncServer.BroadcastGoAway` reads the live
    connections and queues a GOAWAY frame on each one. The last stream
    identifier in the frame is the highest identifier that the core accepted, so
    a peer keeps the streams below it and expects no new stream. The waker then

@@ -98,8 +98,8 @@ exception in another thread.
 
 A stream is a `TServerStream` (`src/Http2Server.Stream.pas`). Its state is
 one of `ssIdle`, `ssOpen`, `ssHalfClosedRemote`, `ssHalfClosedLocal`,
-`ssClosed`, `ssResetting` (`src/Http2Server.Stream.pas:41-53`). The core
-moves the state and the accessor `State` (`:339`) reads the flags.
+`ssClosed`, `ssResetting` (`TStreamState` in `src/Http2Server.Stream.pas`). The core
+moves the state and the accessor `State` reads the flags.
 
 - `NewStream` (`:740`) creates the stream in `ssOpen`, adds it to `FStreams`
   and to the index `FById`, and gives it the first reference.

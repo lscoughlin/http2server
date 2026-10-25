@@ -187,11 +187,11 @@ begin
     Result.RefusedTotal := FAsync.Handlers.RefusedTotal;
     Result.TimedOutTotal := FAsync.Handlers.TimedOutTotal;
   end;
-  Result.OpenConnections := FAsync.ConnectionCount;
+  Result.OpenConnections := FAsync.Counters.Connections;
   Result.OpenStreams := FAsync.OpenStreamTotal;
-  Result.ResetTotal := FAsync.ResetTotal;
-  Result.TrippedTotal := FAsync.TrippedTotal;
-  Result.TlsHandshakeFailedTotal := FAsync.TlsFailedTotal;
+  Result.ResetTotal := FAsync.Counters.Resets;
+  Result.TrippedTotal := FAsync.Counters.Trips;
+  Result.TlsHandshakeFailedTotal := FAsync.Counters.TlsFailedTotal;
   if FAsync.Channels <> nil then
     Result.DetachedStreams := FAsync.Channels.Count;
 end;

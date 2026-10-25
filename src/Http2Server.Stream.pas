@@ -34,7 +34,8 @@ uses
   SysUtils, Classes, SyncObjs,
   mormot.core.base, mormot.core.os,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter,
-  Http2Server.Hpack, Http2Server.Duplex, Http2Server.StreamHost, Http2Server.ClientCert;
+  Http2Server.Hpack, Http2Server.Duplex, Http2Server.StreamHost,
+  Http2Server.ClientCert, Http2Server.Stream.Meta;
 
 type
   /// the RFC 9113 section 5.1 state of one stream, as the server sees it
@@ -58,21 +59,11 @@ type
   /// touches a buffer.  A handler-side call takes that lock for the length of
   /// one buffer operation only, so the IO thread is never blocked by a
   /// handler that sleeps in its own code.
-  TServerStream = class
+  TServerStream = class(TStreamMeta)
   private
-    /// the connection lock, shared by every stream of one connection
-    FConnLock: TCriticalSection;
-    /// keeps the connection lock alive
-    FLockOwner: IInterface;
-    /// the per-stream lock; a handler takes it with the connection lock for one
-    /// buffer operation and never holds either across a wait
-    FStreamLock: TCriticalSection;
-    FLockNested: Boolean;
-    FHost: IStreamHost;
     /// the refusal channel; the core sets it, a bare test stream leaves it nil
     FRefusalHost: IRefusalHost;
     FWaiter: IStreamWaiter;
-    FStreamId: LongWord;
     FRemoteAddress: string;
     FClientCertificate: IClientCertificate;
     FInbound: TBytes;
@@ -87,28 +78,10 @@ type
     FLocalEnded: Boolean;
     FReset: Boolean;
     FResetCode: THttp2ErrorCode;
-    /// how many nested holds of the per-stream lock are live now
-    FLockDepth: Integer;
-    /// the deepest hold of the per-stream lock seen so far (test seam)
-    FMaxLockDepth: Integer;
-    /// how many holders keep this stream alive
-    // - the core holds one, a queue entry holds one, and a running handler
-    //   holds one, so the stream is freed when the last holder releases it
-    FRefCount: Integer;
     FReadTimeoutMs: Integer;
     FWriteTimeoutMs: Integer;
     FConsumedSinceUpdate: LongWord;
     FUpdateThreshold: LongWord;
-    FDeclaredLength: Int64;
-    FReceivedLength: Int64;
-    FHasDeclaredLength: Boolean;
-    FHasRequestHead: Boolean;
-    FRemoteHeaders: THeaderBlock;
-    FPendingStatus: Integer;
-    FPendingHeaders: THeaderBlock;
-    FPendingEndStream: Boolean;
-    FHasPendingHeaders: Boolean;
-    FFinishRequested: Boolean;
     /// the receiver of a detached stream; nil for an ordinary stream
     // - with a sink set, inbound DATA goes to the sink and not into the buffer
     FSink: IChannelSink;
@@ -121,10 +94,6 @@ type
     function DoWrite(const ABuffer; const ACount: Integer): Boolean;
     /// raise EStreamCancelled when the waiter reports a cancellation
     procedure RaiseIfCancelled;
-    /// take the per-stream lock and count the hold
-    procedure LockStream;
-    /// release the per-stream lock and count the release
-    procedure UnlockStream;
     procedure CompactInbound;
     procedure CompactOutbound;
   public
@@ -136,10 +105,6 @@ type
       const AHost: IStreamHost; const AInboundLimit, AOutboundLimit: Integer);
     destructor Destroy; override;
 
-    /// take one reference; the stream is freed when the last one is released
-    procedure AddRef;
-    /// release one reference and free the stream at zero
-    procedure ReleaseRef;
     /// register the waiter; the default is a TBlockingWaiter
     procedure SetWaiter(const AWaiter: IStreamWaiter);
     /// the waiter of this stream
@@ -162,37 +127,6 @@ type
     procedure MarkLocalEnded;
     /// mark the remote side as ended, as a received END_STREAM does
     procedure MarkRemoteEnded;
-    /// take the request header block the decoder produced
-    procedure SetRemoteHeaders(const AHeaders: THeaderBlock);
-    /// the request header block of this stream
-    function RemoteHeaders: THeaderBlock;
-    /// record the content-length that the request headers declared
-    // - ALength below zero clears the record, which a trailer never carries
-    procedure SetDeclaredLength(const ALength: Int64);
-    /// count ACount body bytes, and report a content-length fault
-    function CountReceivedBody(const ACount: Integer): Boolean;
-    /// report a fault when the body length differs from the declaration
-    function DeclaredLengthMatches: Boolean;
-    /// true once the request head of this stream arrived
-    function HasRequestHead: Boolean;
-    /// record that the request head of this stream arrived
-    procedure MarkRequestHead;
-    /// hold a plain response header block until the IO thread encodes it
-    procedure QueueResponseHeaders(const AStatus: Integer;
-      const AHeaders: THeaderBlock; const AEndStream: Boolean);
-    /// take the pending response header block; False when none is pending
-    // - the IO thread calls this under the connection lock and then encodes
-    //   the block itself, because the HPACK encoder is connection state
-    function TakePendingHeaders(out AStatus: Integer; out AHeaders: THeaderBlock;
-      out AEndStream: Boolean): Boolean;
-    /// record that the handler asked for the end of the response
-    procedure RequestFinish;
-    /// true when the handler asked for the end of the response
-    function WantsFinish: Boolean;
-    /// true when a plain response header block waits for the IO thread
-    function HasPendingHeaders: Boolean;
-    /// clear the end-of-response request, after the last frame carried it
-    procedure ClearFinish;
     /// reset the stream: set the flag, wake a blocked handler and queue the
     /// cancel hook of the stream on a cancel-worker thread
     // - True means this call performed the reset; a second call answers
@@ -244,7 +178,6 @@ type
     /// the peer address and the client certificate, set by the connection events
     property RemoteAddress: string read FRemoteAddress write FRemoteAddress;
     property ClientCertificate: IClientCertificate read FClientCertificate write FClientCertificate;
-    property StreamId: LongWord read FStreamId;
     /// the state of the RFC 9113 section 5.1 machine
     function State: TStreamState;
     /// inbound bytes buffered and not yet read
@@ -268,11 +201,6 @@ type
     /// the consumed amount that asks for a stream WINDOW_UPDATE
     property UpdateThreshold: LongWord read FUpdateThreshold
       write FUpdateThreshold;
-    /// the deepest hold of the per-stream lock seen so far
-    // - a handler call holds the lock for one buffer operation only, so a
-    //   value above one would mean a lock held across a nested operation, and
-    //   a value of zero at the wait point means no lock is held across a wait
-    property MaxLockDepth: Integer read FMaxLockDepth;
   end;
 
 implementation
@@ -289,11 +217,7 @@ constructor TServerStream.Create(const AStreamId: LongWord;
   const ALock: TCriticalSection; const AHost: IStreamHost;
   const AInboundLimit, AOutboundLimit: Integer);
 begin
-  inherited Create;
-  FConnLock := ALock;
-  FStreamLock := TCriticalSection.Create;
-  FHost := AHost;
-  FStreamId := AStreamId;
+  inherited Create(AStreamId, ALock, AHost);
   FInboundLimit := AInboundLimit;
   FOutboundLimit := AOutboundLimit;
   FWaiter := TBlockingWaiter.Create;
@@ -302,27 +226,11 @@ begin
   FWriteTimeoutMs := DefaultWriteTimeoutMs;
   FUpdateThreshold := DefaultUpdateThreshold;
   FDrainLowWater := AOutboundLimit div 2;
-  // the core holds the first reference
-  FRefCount := 1;
-end;
-
-procedure TServerStream.AddRef;
-begin
-  InterlockedIncrement(FRefCount);
-end;
-
-procedure TServerStream.ReleaseRef;
-begin
-  // the last holder frees the stream.  The stream lock is not held, because
-  // the lock object dies with the stream.
-  if InterlockedDecrement(FRefCount) = 0 then
-    Self.Free;
 end;
 
 destructor TServerStream.Destroy;
 begin
   FWaiter := nil;
-  FStreamLock.Free;
   inherited Destroy;
 end;
 
@@ -539,157 +447,6 @@ begin
   end;
 end;
 
-procedure TServerStream.SetRemoteHeaders(const AHeaders: THeaderBlock);
-begin
-  LockStream;
-  try
-    FRemoteHeaders := AHeaders;
-  finally
-    UnlockStream;
-  end;
-end;
-
-function TServerStream.RemoteHeaders: THeaderBlock;
-begin
-  LockStream;
-  try
-    Result := FRemoteHeaders;
-  finally
-    UnlockStream;
-  end;
-end;
-
-procedure TServerStream.SetDeclaredLength(const ALength: Int64);
-begin
-  LockStream;
-  try
-    FDeclaredLength := ALength;
-    FReceivedLength := 0;
-    FHasDeclaredLength := ALength >= 0;
-  finally
-    UnlockStream;
-  end;
-end;
-
-function TServerStream.CountReceivedBody(const ACount: Integer): Boolean;
-begin
-  LockStream;
-  try
-    FReceivedLength := FReceivedLength + ACount;
-    Result := (not FHasDeclaredLength) or (FReceivedLength <= FDeclaredLength);
-  finally
-    UnlockStream;
-  end;
-end;
-
-function TServerStream.DeclaredLengthMatches: Boolean;
-begin
-  LockStream;
-  try
-    Result := (not FHasDeclaredLength) or (FReceivedLength = FDeclaredLength);
-  finally
-    UnlockStream;
-  end;
-end;
-
-function TServerStream.HasRequestHead: Boolean;
-begin
-  LockStream;
-  try
-    Result := FHasRequestHead;
-  finally
-    UnlockStream;
-  end;
-end;
-
-procedure TServerStream.MarkRequestHead;
-begin
-  LockStream;
-  try
-    FHasRequestHead := True;
-  finally
-    UnlockStream;
-  end;
-end;
-
-procedure TServerStream.QueueResponseHeaders(const AStatus: Integer;
-  const AHeaders: THeaderBlock; const AEndStream: Boolean);
-begin
-  LockStream;
-  try
-    FPendingStatus := AStatus;
-    FPendingHeaders := AHeaders;
-    FPendingEndStream := AEndStream;
-    FHasPendingHeaders := True;
-  finally
-    UnlockStream;
-  end;
-  // the handler queued headers, so the IO side must wake to encode them
-  if Assigned(FHost) then
-    FHost.OutputPending(FStreamId);
-end;
-
-function TServerStream.TakePendingHeaders(out AStatus: Integer;
-  out AHeaders: THeaderBlock; out AEndStream: Boolean): Boolean;
-begin
-  LockStream;
-  try
-    Result := FHasPendingHeaders;
-    if not Result then
-      Exit;
-    AStatus := FPendingStatus;
-    AHeaders := FPendingHeaders;
-    AEndStream := FPendingEndStream;
-    FHasPendingHeaders := False;
-    FPendingHeaders := nil;
-  finally
-    UnlockStream;
-  end;
-end;
-
-procedure TServerStream.RequestFinish;
-begin
-  LockStream;
-  try
-    FFinishRequested := True;
-  finally
-    UnlockStream;
-  end;
-  // a finish with an empty buffer still owes the peer an END_STREAM frame
-  if Assigned(FHost) then
-    FHost.OutputPending(FStreamId);
-end;
-
-function TServerStream.HasPendingHeaders: Boolean;
-begin
-  LockStream;
-  try
-    Result := FHasPendingHeaders;
-  finally
-    UnlockStream;
-  end;
-end;
-
-function TServerStream.WantsFinish: Boolean;
-begin
-  LockStream;
-  try
-    Result := FFinishRequested;
-  finally
-    UnlockStream;
-  end;
-end;
-
-procedure TServerStream.ClearFinish;
-begin
-  LockStream;
-  try
-    FFinishRequested := False;
-  finally
-    UnlockStream;
-  end;
-end;
-
 function TServerStream.IsFinished: Boolean;
 begin
   LockStream;
@@ -752,26 +509,6 @@ end;
 procedure TServerStream.SetRefusalHost(const AHost: IRefusalHost);
 begin
   FRefusalHost := AHost;
-end;
-
-procedure TServerStream.LockStream;
-begin
-  // the connection lock comes first, so the IO thread and a handler thread
-  // always take the two locks in the same order
-  if (FConnLock <> nil) and not FLockNested then
-    FConnLock.Acquire;
-  FStreamLock.Acquire;
-  Inc(FLockDepth);
-  if FLockDepth > FMaxLockDepth then
-    FMaxLockDepth := FLockDepth;
-end;
-
-procedure TServerStream.UnlockStream;
-begin
-  Dec(FLockDepth);
-  FStreamLock.Release;
-  if (FConnLock <> nil) and not FLockNested then
-    FConnLock.Release;
 end;
 
 procedure TServerStream.RaiseIfCancelled;

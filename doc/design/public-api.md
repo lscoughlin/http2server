@@ -68,8 +68,8 @@ factory answers an `IHttp2Server` that is not yet started.
 - `Stats` answers the live counters.
 - `IsRunning` is true between `Start` and `Stop`.
 
-The implementation is `THttp2Server` (`src/Http2Server.Server.pas:61`), which
-owns one `THttp2AsyncServer` (`src/Http2Server.Async.pas:161`).
+The implementation is `THttp2Server` (`src/Http2Server.Server.pas`), which
+owns one `THttp2AsyncServer` (`src/Http2Server.Async.pas`).
 
 ## The handler
 

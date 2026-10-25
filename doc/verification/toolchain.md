@@ -84,6 +84,15 @@ one named suite to the global test registry
 (`test/Http2Server.TestRunner.pas:80-87`). The suite holds the test cases of
 the units of the library.
 
+The unit `test/Http2Server.H2Peer.pas` is a strict in-memory HTTP/2 peer for the
+connection core. It sends SETTINGS with chosen entries, trailers, padded DATA,
+PRIORITY, WINDOW_UPDATE with any increment, RST_STREAM, PING and GOAWAY. It
+reads every frame of the server, decodes the header blocks with a table that the
+test caps, and models its own receive windows. It records a violation when a
+block cannot be decoded or when the server sends more DATA than a window allows.
+The tests of the hardening stories use it, and `test/Http2Server.H2Peer.Test.pas`
+holds one smoke test for each helper.
+
 The runner registration order is important. `RegisterTests` adds a named
 `TTestSuite` to `GetTestRegistry` before `TTestRunner.Run` reads the registry
 (`test/Http2Server.RunTests.pas:22-32`). A suite that is absent from the

@@ -170,16 +170,17 @@ mORMot2 runs the server handshake at the first read of each connection, inside
 `INetTls.AfterAccept`, and it bounds the `SSL_accept` loop with a 5000 ms
 deadline (`mormot.lib.openssl11.pas:12146-12167`). A larger factory value can
 never take effect, so `EffectiveHandshakeTimeoutMs` clamps the factory value to
-that bound (`src/Http2Server.Tls.pas:128-139`). The server also sets the socket
-send and receive deadlines to the clamped value before the handshake runs
-(`src/Http2Server.Async.pas:405-415`). A client that opens a socket and sends
+that bound (`EffectiveHandshakeTimeoutMs` in `src/Http2Server.Tls.pas`). The
+server also sets the socket send and receive deadlines to the clamped value
+before the handshake runs (`SetHandshakeDeadline` in
+`src/Http2Server.Async.Options.pas`). A client that opens a socket and sends
 nothing holds one IO thread for a bounded time only, and other clients still
 complete their handshakes on other threads.
 
 After the handshake the connection checks the negotiated name. The name `h2`
 starts the HTTP/2 core. Any other name starts the HTTP/1.1 core when the fallback
 is on, and the connection is refused when the fallback is off
-(`src/Http2Server.Async.pas:419-429`).
+(`THttp2AsyncConnection.OnFirstRead` in `src/Http2Server.Async.pas`).
 
 ## Open verification
 

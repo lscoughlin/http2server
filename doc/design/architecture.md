@@ -134,7 +134,14 @@ together with no name clash.
 | `Http2Server.pas` | 146 | facade | the public surface, re-exported from the units below |
 | `Http2Server.Server.pas` | 182 | server | `THttp2Server`, the start and stop path |
 | `Http2Server.Observer.pas` | 121 | server | the events, the observer and the statistics |
-| `Http2Server.Async.pas` | 791 | IO | the mORMot2 async subclasses and the core bridge |
+| `Http2Server.Async.pas` | 887 | IO | the mORMot2 async subclasses and the core bridge |
+| `Http2Server.Async.Options.pas` | 118 | IO | the TLS policy, the core options, the control bucket and the handshake deadline, built from the factory |
+| `Http2Server.Async.Counters.pas` | 84 | IO | the connection, reset, trip and handshake counters |
+| `Http2Server.Async.Waker.pas` | 64 | IO | the write waker of one connection |
+| `Http2Server.Stream.Meta.pas` | 324 | seam | the base of the server stream: locks, reference count, request head and pending response head |
+| `Http2Server.ClientCert.pas` | 275 | TLS | the identity of a verified client certificate |
+| `Http2Server.Mtls.Types.pas` | 101 | TLS | the client certificate modes and their pure maps |
+| `Http2Server.Tls.Client.pas` | 163 | TLS | the client certificate trust and verify mode of the server context |
 | `Http2Server.Tls.pas` | 176 | TLS | the `INetTls` plug-in of a connection |
 | `Http2Server.Alpn.pas` | 276 | TLS | the `SSL_CTX_set_alpn_select_cb` binding and callback |
 | `Http2Server.Admission.pas` | 709 | admission | the bounded queue and the handler pool |

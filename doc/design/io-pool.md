@@ -62,7 +62,7 @@ than the constructor, which mORMot2 reintroduces with its own signature
 
 **The IO thread count.** The server passes the factory value
 `IOThreads` as `aThreadPoolCount` to the `TAsyncServer` constructor
-(`src/Http2Server.Async.pas:757-758`). A count above one makes one thread do
+(`THttp2AsyncServer.Create` in `src/Http2Server.Async.pas`). A count above one makes one thread do
 `atpReadPoll` and the rest `atpReadPending`; a count of one makes a single
 thread do `atpReadSingle` (`mormot.net.async.pas:3034-3042`). mORMot2 always
 adds one accept thread and one write thread to the count
@@ -76,34 +76,35 @@ class returns zero from `GetLastOperationIdleSeconds`, so the event is
 disabled until a subclass enables it (`mormot.net.async.pas:3830-3833`). The
 server overrides that method to return the earlier of the factory idle
 timeout and the factory header timeout, so the one callback serves both rules
-(`src/Http2Server.Async.pas:780-804`). It overrides `OnLastOperationIdle` to
-close the connection of a spent timeout (`src/Http2Server.Async.pas:612-662`).
+(`THttp2AsyncServer.GetLastOperationIdleSeconds`). It overrides
+`OnLastOperationIdle` to close the connection of a spent timeout
+(`THttp2AsyncConnection.OnLastOperationIdle`).
 
 **The backlog.** mORMot2 binds with the global `DefaultListenBacklog`
 (`mormot.net.sock.pas:3495`). The server sets it from the factory value
-`Backlog` before it binds (`src/Http2Server.Async.pas:761`).
+`Backlog` before it binds (`THttp2AsyncServer.Create`).
 
 ## The connection core bridge
 
 `THttp2AsyncConnection` owns one `TServerConnectionCore`
-(`src/Http2Server.Async.pas:94`). `StartHttp2` builds the core from the
-factory values that `THttp2AsyncServer` prepared at its own construction
-(`src/Http2Server.Async.pas:297-326`). `AfterCreate` does not build the core,
+(`THttp2AsyncConnection` in `src/Http2Server.Async.pas`). `StartHttp2` builds the
+core from the factory values that `THttp2AsyncServer` prepared at its own
+construction (`BuildConnectionCoreOptions` in `src/Http2Server.Async.Options.pas`). `AfterCreate` does not build the core,
 because the protocol of the connection is not yet known at that time.
 
-The read path is `OnRead` (`src/Http2Server.Async.pas:438-499`). mORMot2
+The read path is `THttp2AsyncConnection.OnRead`. mORMot2
 already decrypted the socket bytes and placed them in `fRd`, so the method
 copies that buffer into the core with `Feed` and resets `fRd`. The core keeps
 its own partial-frame buffer, so a frame that straddles two reads is
 reassembled there. After the feed the method calls `SendPendingOutput`, which
 turns handler output into frames.
 
-The write path is `SendPendingOutput` (`src/Http2Server.Async.pas:530-610`).
+The write path is `THttp2AsyncConnection.SendPendingOutput`.
 It drains the core through `DrainPending`, takes the bytes with `TakeOutput`,
 and hands them to the mORMot2 write path. The drain runs under the connection
 core lock, which every stream also takes, so the HPACK encoder keeps one owner
 per connection. The core calls the drain itself at the end of every `Feed`
-(`src/Http2Server.Connection.pas:174`), so the response to one request
+(`TServerConnectionCore.Feed`), so the response to one request
 leaves in the same IO turn as the request.
 
 ## The second core
@@ -129,10 +130,11 @@ undecided mode, as for a new connection, and the next first read chooses the pro
 ## The write wake-up
 
 The write wake-up follows the mORMot2 pattern. A handler write reaches the
-stream host callback (`src/Http2Server.Stream.pas:925`), the core raises one
+stream host callback (`TServerStream.DoWrite`), the core raises one
 edge-triggered flag per transition from "no output" to "output"
-(`src/Http2Server.Connection.Core.pas:557-570`), and the waker drains the core and
-calls the mORMot2 write path (`src/Http2Server.Async.pas:271-280`).
+(`TConnectionCoreBase.NotifyWantsWrite`), and the waker (`TMethodWaker` in
+`src/Http2Server.Async.Waker.pas`) drains the core and calls the mORMot2 write
+path.
 
 An IO thread that blocks in `epoll_wait` on Linux or `poll` on macOS sleeps
 until a socket event arrives. New output on an already writable socket is not
@@ -146,12 +148,11 @@ picked up by the retry at the end of the lock owner
 (`mormot.net.async.pas:2764-2776`, `...:4102-4114`). The server follows the
 same rule: the send loop records a wake-up that arrives while it runs, and it
 repeats until no late wake-up and no queued output remain
-(`src/Http2Server.Async.pas:541-602`). A second call of the mORMot2 write path
-covers the case where the write lock went to the IO thread
-(`src/Http2Server.Async.pas:567-573`).
+(`THttp2AsyncConnection.SendPendingOutput`). A second call of the mORMot2 write
+path covers the case where the write lock went to the IO thread (the same method).
 
 The stream host callback is the bridge between the two sides
-(`src/Http2Server.Connection.Core.pas:73-88`). The host holds the core as a raw
+(`TCoreStreamHost` in `src/Http2Server.Connection.Core.pas`). The host holds the core as a raw
 pointer and not as an interface, so the core and the host form no reference
 cycle.
 
@@ -161,23 +162,24 @@ The server uses TLS route A. mORMot2 enables TLS with the `acoEnableTls`
 option and sets the server context after the socket binds; the handshake then
 runs at the first read of each connection
 (`mormot.net.async.pas:4312-4313`, `...:4247-4270`). The server adds the option
-when the factory names a certificate (`src/Http2Server.Async.pas:755-756`), and
+when the factory names a certificate (`THttp2AsyncServer.Create`), and
 it installs the server context and the ALPN callback in `Start`
-(`src/Http2Server.Async.pas:968-980`). The route itself is the subject of
+(`THttp2AsyncServer.Start`). The route itself is the subject of
 [tls](tls.md).
 
 The handshake blocks the IO thread that runs it. mORMot2 bounds the
 `SSL_accept` loop with a 5000 ms deadline
 (`mormot.lib.openssl11.pas:12146-12167`). The server clamps the factory
-handshake timeout to that bound (`src/Http2Server.Tls.pas:128-139`), and it
-also sets the socket send and receive deadlines to the same value before the
-handshake starts (`src/Http2Server.Async.pas:398-411`). A client that opens a
+handshake timeout to that bound (`EffectiveHandshakeTimeoutMs` in
+`src/Http2Server.Tls.pas`), and it also sets the socket send and receive
+deadlines to the same value before the handshake starts (`SetHandshakeDeadline`
+in `src/Http2Server.Async.Options.pas`). A client that opens a
 socket and sends nothing therefore holds one IO thread for a bounded time
 only.
 
 A TLS connection must select `h2`. `OnFirstRead` calls the base method, which
 runs the handshake, and then refuses the connection when the negotiated name
-is not `h2` (`src/Http2Server.Async.pas:416-429`). No HTTP/1.1 request ever
+is not `h2` and the HTTP/1.1 fallback is off (`THttp2AsyncConnection.OnFirstRead`). No HTTP/1.1 request ever
 reaches the HTTP/2 state machine.
 
 ## The thread rule
@@ -186,15 +188,15 @@ A handler must never run on an IO thread. Such a handler would hold the
 connection lock for the length of its work and would stall every other
 connection on that IO thread. The seam carries the rule
 (`src/Http2Server.Seam.pas:174-189`). The IO callbacks mark their thread at
-entry (`src/Http2Server.Async.pas:442`, `...:503`), and the handler pool
-checks the mark before it calls a handler
-(`src/Http2Server.Admission.pas:681`). The check raises in every build,
+entry (`OnRead` and `AfterWrite` of `THttp2AsyncConnection`), and the handler
+pool checks the mark before it calls a handler (`THandlerPool` in
+`src/Http2Server.Admission.pas`). The check raises in every build,
 so a violation fails loudly and never reaches production silently.
 
 ## The idle and header timeouts
 
 `THttp2AsyncConnection.OnLastOperationIdle` runs once per second on a quiet
-connection (`src/Http2Server.Async.pas:612-662`). It closes a connection whose
+connection. It closes a connection whose
 first header block did not complete within the factory `HeaderTimeoutMs`, and
 it closes an idle connection with no open stream and no queued output. The
 close is `TAsyncConnections.ConnectionRemove` (`mormot.net.async.pas:3699`),

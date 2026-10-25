@@ -22,7 +22,8 @@ interface
 uses
   SysUtils,
   mormot.core.base, mormot.net.sock,
-  Http2Server.Config, Http2Server.Connection, Http2Server.Tls;
+  Http2Server.Config, Http2Server.Connection, Http2Server.Tls,
+  Http2Server.Limits;
 
 /// the TLS policy of the listener, with the client certificate settings
 function BuildTlsPolicy(const AFactory: THttp2ServerFactory): TTlsPolicy;
@@ -30,6 +31,12 @@ function BuildTlsPolicy(const AFactory: THttp2ServerFactory): TTlsPolicy;
 /// the options that every connection core of the server uses
 function BuildConnectionCoreOptions(
   const AFactory: THttp2ServerFactory): TConnectionCoreOptions;
+
+/// the single control bucket that the core charges for every non-reset kind
+// - the factory offers five control buckets. The least capacity is the
+//   conservative choice: the server enforces the strictest of the five
+function LeastControlBucket(
+  const AFactory: THttp2ServerFactory): TTokenBucketOptions;
 
 /// set the socket deadlines of the handshake, after the mORMot2 bound
 // - a deadline is a convenience: Darwin answers EINVAL for SO_RCVTIMEO on a
@@ -72,6 +79,23 @@ begin
   result.ConnectionUpdateThreshold := AFactory.InitialConnectionWindow div 2;
   result.StreamUpdateThreshold := AFactory.InitialStreamWindow div 2;
   result.ConnectProtocol := AFactory.WebSocketsEnabled;
+end;
+
+function LeastControlBucket(
+  const AFactory: THttp2ServerFactory): TTokenBucketOptions;
+
+  function Least(const A, B: TTokenBucketOptions): TTokenBucketOptions;
+  begin
+    if B.Capacity < A.Capacity then
+      result := B
+    else
+      result := A;
+  end;
+
+begin
+  result := Least(Least(AFactory.PingBucket, AFactory.SettingsBucket),
+    Least(AFactory.EmptyDataBucket, AFactory.WindowUpdateBucket));
+  result := Least(result, AFactory.ContinuationBucket);
 end;
 
 procedure SetHandshakeDeadline(const ASocket: TNetSocket;

@@ -22,7 +22,7 @@
         </SyntaxOptions>
       </Parsing>
     </CompilerOptions>
-    <Files Count="66">
+    <Files Count="69">
       <Item1>
         <Filename Value="src/Http2Server.pas"/>
         <UnitName Value="Http2Server"/>
@@ -287,6 +287,18 @@
         <Filename Value="src/Http2Server.Async.Options.pas"/>
         <UnitName Value="Http2Server.Async.Options"/>
       </Item66>
+      <Item67>
+        <Filename Value="src/Http2Server.Async.Counters.pas"/>
+        <UnitName Value="Http2Server.Async.Counters"/>
+      </Item67>
+      <Item68>
+        <Filename Value="src/Http2Server.Async.Waker.pas"/>
+        <UnitName Value="Http2Server.Async.Waker"/>
+      </Item68>
+      <Item69>
+        <Filename Value="src/Http2Server.Stream.Meta.pas"/>
+        <UnitName Value="Http2Server.Stream.Meta"/>
+      </Item69>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>
