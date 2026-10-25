@@ -26,7 +26,8 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs, Generics.Collections, fpcunit, testregistry,
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Duplex,
-  Http2Server.StreamPool, Http2Server.Sse.Encoder, Http2Server.Sse;
+  Http2Server.StreamPool, Http2Server.Sse.Encoder, Http2Server.Sse,
+  Http2Server.ClientCert;
 
 type
   /// a channel that records what the stream does to it
@@ -82,6 +83,10 @@ type
   TFakeRequest = class(TInterfacedObject, IServerRequest)
   public
     Header: THeaderBlock;
+    Who: string;
+    function GetPrincipal: string;
+    procedure SetPrincipal(const AValue: string);
+    function GetClientCertificate: IClientCertificate;
     function Method: string;
     function Scheme: string;
     function Authority: string;
@@ -360,6 +365,21 @@ begin
 end;
 
 { TFakeRequest }
+
+function TFakeRequest.GetPrincipal: string;
+begin
+  Result := Who;
+end;
+
+procedure TFakeRequest.SetPrincipal(const AValue: string);
+begin
+  Who := AValue;
+end;
+
+function TFakeRequest.GetClientCertificate: IClientCertificate;
+begin
+  Result := nil;
+end;
 
 function TFakeRequest.Method: string;
 begin

@@ -555,7 +555,7 @@ procedure TWsRig.OnReport(const AEvent: TServerEvent);
 const
   Names: array[TServerEventKind] of string = ('', '', '', '', '', '', '', '', '', '',
     'handler-exception', '', '', 'ws-opened', 'ws-rejected', 'ws-closed', 'ws-failed',
-    'ws-bucket');
+    'ws-bucket', 'tls-handshake-failed');
 begin
   EventLock.Acquire;
   try
@@ -580,7 +580,7 @@ function TWsRig.EventCount(const AKind: TServerEventKind): Integer;
 const
   Names: array[TServerEventKind] of string = ('', '', '', '', '', '', '', '', '', '',
     'handler-exception', '', '', 'ws-opened', 'ws-rejected', 'ws-closed', 'ws-failed',
-    'ws-bucket');
+    'ws-bucket', 'tls-handshake-failed');
 var
   I: Integer;
 begin

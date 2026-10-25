@@ -26,6 +26,8 @@ uses
   Http2Server.Hpack,
   Http2Server.Headers,
   Http2Server.Seam,
+  Http2Server.ClientCert,
+  Http2Server.AccessLog,
   Http2Server.ResponseWriter,
   Http2Server.Waiter,
   Http2Server.Stream,
@@ -57,9 +59,13 @@ type
   TServerStreamRequest = class(TInterfacedObject, IServerRequest, IH2ConnectRequest)
   private
     FStream: TServerStream;
+    FPrincipal: string;
     function PseudoValue(const AName: string): string;
   public
     constructor Create(const AStream: TServerStream);
+    function GetPrincipal: string;
+    procedure SetPrincipal(const AValue: string);
+    function GetClientCertificate: IClientCertificate;
     function Method: string;
     function Scheme: string;
     function Authority: string;
@@ -77,8 +83,11 @@ type
   ///
   /// SendHeaders holds the response block for the IO side, which owns the
   /// HPACK encoder.  A body writer is pulled when the handler calls Finish.
-  TServerStreamResponse = class(TInterfacedObject, IServerResponse, IH2Upgradable)
+  TServerStreamResponse = class(TInterfacedObject, IServerResponse, IH2Upgradable,
+    IAccessLogProbe)
   private
+    FStatus: Integer;
+    FBodyOctets: Int64;
     FStream: TServerStream;
     FBodyWriter: IBodyWriter;
     FHeadersSent: Boolean;
@@ -102,6 +111,11 @@ type
     function StreamId: LongWord;
     function Detach: IDuplexChannel;
     function WsEnvironment: IInterface;
+    // IAccessLogProbe
+    function LoggedStatus: Integer;
+    function LoggedBodyOctets: Int64;
+    function LoggedRemoteAddress: string;
+    function LoggedProtocol: string;
     /// the report of a detach, for the observer of the server
     property OnDetach: TDetachNotify read FOnDetach write FOnDetach;
     /// true once the handler detached the stream
@@ -118,6 +132,27 @@ constructor TServerStreamRequest.Create(const AStream: TServerStream);
 begin
   inherited Create;
   FStream := AStream;
+  // the certificate belongs to the connection; its principal text is empty
+  // unless the caller asked for one
+  if (AStream <> nil) and (AStream.ClientCertificate <> nil) then
+    FPrincipal := AStream.ClientCertificate.PrincipalText;
+end;
+
+function TServerStreamRequest.GetClientCertificate: IClientCertificate;
+begin
+  Result := nil;
+  if FStream <> nil then
+    Result := FStream.ClientCertificate;
+end;
+
+function TServerStreamRequest.GetPrincipal: string;
+begin
+  Result := FPrincipal;
+end;
+
+procedure TServerStreamRequest.SetPrincipal(const AValue: string);
+begin
+  FPrincipal := AValue;
 end;
 
 function TServerStreamRequest.PseudoValue(const AName: string): string;
@@ -250,6 +285,9 @@ procedure TServerStreamResponse.SendHeaders(const AStatus: Integer;
 begin
   CheckNotDetached;
   FHeadersSent := True;
+  // an interim status (1xx) is not the final status
+  if AStatus >= 200 then
+    FStatus := AStatus;
   CheckResponseHeaders(AHeaders);
   FStream.QueueResponseHeaders(AStatus, WithDate(AHeaders, AStatus), AEndStream);
 end;
@@ -258,12 +296,15 @@ procedure TServerStreamResponse.Write(const AData: TBytes);
 begin
   CheckNotDetached;
   FStream.Write(AData);
+  Inc(FBodyOctets, Length(AData));
 end;
 
 procedure TServerStreamResponse.Write(const ABuffer; const ACount: Integer);
 begin
   CheckNotDetached;
   FStream.Write(ABuffer, ACount);
+  if ACount > 0 then
+    Inc(FBodyOctets, ACount);
 end;
 
 procedure TServerStreamResponse.SetBodyWriter(const AWriter: IBodyWriter);
@@ -279,8 +320,31 @@ begin
   CheckNotDetached;
   if FBodyWriter <> nil then
     while FBodyWriter.NextChunk(Chunk) do
+    begin
       FStream.Write(Chunk);
+      Inc(FBodyOctets, Length(Chunk));
+    end;
   FStream.RequestFinish;
+end;
+
+function TServerStreamResponse.LoggedStatus: Integer;
+begin
+  Result := FStatus;
+end;
+
+function TServerStreamResponse.LoggedBodyOctets: Int64;
+begin
+  Result := FBodyOctets;
+end;
+
+function TServerStreamResponse.LoggedRemoteAddress: string;
+begin
+  Result := FStream.RemoteAddress;
+end;
+
+function TServerStreamResponse.LoggedProtocol: string;
+begin
+  Result := 'HTTP/2.0';
 end;
 
 procedure TServerStreamResponse.RegisterCancelHook(const AHook: TCancelHook);

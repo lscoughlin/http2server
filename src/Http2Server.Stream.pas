@@ -34,7 +34,7 @@ uses
   SysUtils, Classes, SyncObjs,
   mormot.core.base, mormot.core.os,
   Http2Server.Errors, Http2Server.Seam, Http2Server.Waiter,
-  Http2Server.Hpack, Http2Server.Duplex, Http2Server.StreamHost;
+  Http2Server.Hpack, Http2Server.Duplex, Http2Server.StreamHost, Http2Server.ClientCert;
 
 type
   /// the RFC 9113 section 5.1 state of one stream, as the server sees it
@@ -64,17 +64,17 @@ type
     FConnLock: TCriticalSection;
     /// keeps the connection lock alive
     FLockOwner: IInterface;
-    /// the per-stream lock; a handler takes it together with the connection
-    /// lock for one buffer operation and never holds either across a wait, so
-    /// a blocked handler read leaves the connection open to the IO thread
+    /// the per-stream lock; a handler takes it with the connection lock for one
+    /// buffer operation and never holds either across a wait
     FStreamLock: TCriticalSection;
     FLockNested: Boolean;
     FHost: IStreamHost;
-    /// the refusal channel; the core sets it, and a test that builds a bare
-    /// stream leaves it nil
+    /// the refusal channel; the core sets it, a bare test stream leaves it nil
     FRefusalHost: IRefusalHost;
     FWaiter: IStreamWaiter;
     FStreamId: LongWord;
+    FRemoteAddress: string;
+    FClientCertificate: IClientCertificate;
     FInbound: TBytes;
     FInboundStart: Integer;
     FInboundCount: Integer;
@@ -241,9 +241,9 @@ type
     function HasRemoteEnded: Boolean;
     /// the outbound byte count at or below which a refused writer is told
     property DrainLowWater: Integer read FDrainLowWater write FDrainLowWater;
-
-    // ---- state ----
-
+    /// the peer address and the client certificate, set by the connection events
+    property RemoteAddress: string read FRemoteAddress write FRemoteAddress;
+    property ClientCertificate: IClientCertificate read FClientCertificate write FClientCertificate;
     property StreamId: LongWord read FStreamId;
     /// the state of the RFC 9113 section 5.1 machine
     function State: TStreamState;

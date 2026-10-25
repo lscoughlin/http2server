@@ -60,6 +60,12 @@ RFC 8441 cites RFC 7540. The matching sections of RFC 9113 are:
 | 8.3 | 8.5 | The CONNECT method |
 | 11.3 | 11 | The "HTTP/2 Settings" registry. RFC 9113 section 11 keeps the registry and does not restate it |
 
+## HTTP authentication
+
+| File | RFC | Title | Use |
+| --- | --- | --- | --- |
+| `rfc7617.txt` | 7617 | The 'Basic' HTTP Authentication Scheme | Section 2 defines the credential: base64 of `user-id:password`, where the user-id holds no colon. The access log reads the user-id. |
+
 ## Server-sent events
 
 | File | Source | Use |
@@ -72,6 +78,16 @@ RFC 8441 cites RFC 7540. The matching sections of RFC 9113 are:
 | --- | --- | --- |
 | `rfc6454.txt` | RFC 6454, The Web Origin Concept | The origin triple, the `Origin` header grammar and the comparison rule. |
 | `iana-websocket-registry.xml` | `https://www.iana.org/assignments/websocket/websocket.xml`, retrieved 2026-10-22 | The WebSocket close codes (1012 to 1014 are assigned), opcodes, version numbers and header registrations. |
+
+## Transport security and certificates
+
+All three copies are the plain-text files of `https://www.rfc-editor.org/rfc/`, retrieved on 2026-10-25.
+
+| File | RFC | Title | Use |
+| --- | --- | --- | --- |
+| `rfc8446.txt` | 8446 | The Transport Layer Security (TLS) Protocol Version 1.3 | Section 4.3.2 (CertificateRequest), 4.4.2 (Certificate), 4.4.3 (CertificateVerify) and 4.6.2 (post-handshake authentication). The mutual TLS design reads them. |
+| `rfc5280.txt` | 5280 | Internet X.509 Public Key Infrastructure Certificate and CRL Profile | Section 4.1.2 (certificate fields), 4.2.1.6 (subject alternative name) and 6 (path validation). |
+| `rfc4514.txt` | 4514 | Lightweight Directory Access Protocol (LDAP): String Representation of Distinguished Names | The text form of a distinguished name, which the client certificate record uses. |
 
 ## Other sources
 

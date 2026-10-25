@@ -59,7 +59,10 @@ uses
   Http2Server.Http1.Select,
   Http2Server.Http1.Core,
   Http2Server.Http1.Driver,
-  Http2Server.Async.Events;
+  Http2Server.ClientCert,
+  Http2Server.Mtls.Types,
+  Http2Server.Async.Events,
+  Http2Server.Async.Options;
 
 const
   /// the time a staged close waits for the peer to close first, in seconds
@@ -102,6 +105,8 @@ type
     FWaker: IWriteWaker;
     /// the protocol of the connection; undecided until the first octets
     FMode: TConnectionMode;
+    /// the verified client certificate of this connection; nil when none
+    FClientCert: IClientCertificate;
     /// the HTTP/1.1 core; nil on an HTTP/2 connection
     FH1: TH1Driver;
     FH1Events: IH1Events;
@@ -184,8 +189,6 @@ type
     FTrippedTotal: Int64;
     /// guards the connection counter against the IO threads
     FConnectionLock: TCriticalSection;
-    function BuildPolicy: TTlsPolicy;
-    function BuildCoreOptions: TConnectionCoreOptions;
     function LeastControlBucket: TTokenBucketOptions;
   protected
     /// the idle period before OnLastOperationIdle runs, in seconds
@@ -316,7 +319,8 @@ begin
      TControlBucketOption.Create(lkContinuation,
        FServer.Factory.ContinuationBucket)]);
   FEvents := THttp2ConnectionEvents.Create(FServer.Handlers, FServer.Notify,
-    FServer.StreamResetted, FServer.BucketTripped);
+    FServer.StreamResetted, FServer.BucketTripped,
+    PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
   FCore := TServerConnectionCore.Create(Options, FEvents, Limits,
     FServer.Factory.Clock);
   FWaker := THttp2ConnectionWaker.Create(Self);
@@ -336,7 +340,8 @@ begin
     Options.Scheme := 'http';
   Options.OutboundLimit := FServer.Factory.ChannelQueueLimit;
   Options.WriteStallMs := FServer.Factory.IdleTimeoutMs;
-  FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers);
+  FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers,
+    PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
   Core := TH1Core.Create(Options, FH1Events);
   FWaker := THttp2ConnectionWaker.Create(Self);
   Core.SetWriteWaker(FWaker);
@@ -361,6 +366,7 @@ begin
   FEvents := nil;
   FInSend := False;
   FSendRequested := False;
+  FClientCert := nil;
   FMode := cmUndecided;
   FServer := nil;
 end;
@@ -380,8 +386,6 @@ begin
 end;
 
 function THttp2AsyncConnection.OnFirstRead(aOwner: TPollAsyncSockets): boolean;
-var
-  Ms: LongWord;
 begin
   // The mORMot2 read path calls this method and never catches what it
   // raises: an exception here reaches TAsyncConnectionsThread.DoExecute,
@@ -393,27 +397,23 @@ begin
   // refusal, and a refused connection is closed by the caller.
   result := false;
   try
-    // the accepted socket is blocking while TLS is on, so the socket
-    // deadline and the mORMot2 SSL_accept deadline together bound the
-    // handshake.  A client that stalls holds its IO thread for a bounded
-    // time only.
-    // A deadline is a convenience: Darwin answers EINVAL for SO_RCVTIMEO on
-    // a socket whose peer already sent RST, so a failure here forbids no
-    // valid connection and must not raise.
-    try
-      Ms := EffectiveHandshakeTimeoutMs(FServer.Policy.HandshakeTimeoutMs);
-      if Ms > 0 then
-      begin
-        fSocket.SetReceiveTimeout(Integer(Ms));
-        fSocket.SetSendTimeout(Integer(Ms));
-      end;
-    except
-      on ENetSock do
-        ;   // no deadline is set; the connection still proceeds
-    end;
+    // the accepted socket is blocking while TLS is on, so the socket deadline
+    // and the mORMot2 SSL_accept deadline together bound the handshake.  A
+    // client that stalls holds its IO thread for a bounded time only
+    SetHandshakeDeadline(fSocket, FServer.Policy.HandshakeTimeoutMs);
     result := inherited OnFirstRead(aOwner);
     if not result then
+    begin
+      if FServer.Policy.ClientTrust.Mode <> ccmNone then
+        FServer.Notify(seTlsHandshakeFailed, 0, lkReset,
+          'the TLS handshake failed');
       exit;
+    end;
+    // the identity is read once, after the handshake, from the SSL object of
+    // this connection. It never changes after this line
+    if (fSecure <> nil) and (FServer.Policy.ClientTrust.Mode <> ccmNone) then
+      FClientCert := ReadClientCertificate(fSecure,
+        FServer.Policy.ClientTrust.Principal);
     // a TLS connection that negotiated h2 speaks HTTP/2. Any other TLS
     // connection speaks HTTP/1.1 when the fallback is on, and is refused when it
     // is off, so no HTTP/1.1 request reaches the HTTP/2 state machine. A cleartext
@@ -429,7 +429,11 @@ begin
     on E: Exception do
       // an unreadable socket is refused, and the refusal keeps the read
       // thread alive, which is worth more than any one connection
+    begin
       result := false;
+      if FServer.Policy.ClientTrust.Mode <> ccmNone then
+        FServer.Notify(seTlsHandshakeFailed, 0, lkReset, E.Message);
+    end;
   end;
 end;
 
@@ -732,8 +736,8 @@ var
   Options: TAsyncConnectionsOptions;
 begin
   FFactory := AFactory;
-  FPolicy := BuildPolicy;
-  FCoreOptions := BuildCoreOptions;
+  FPolicy := BuildTlsPolicy(FFactory);
+  FCoreOptions := BuildConnectionCoreOptions(FFactory);
   FControlBucket := LeastControlBucket;
   FHandlers := THandlerPool.Create(AFactory);
   FChannelImpl := TChannelRegistry.Create(AFactory.MaxDetachedStreams,
@@ -755,7 +759,7 @@ begin
   inherited Create(IntToStr(AFactory.Port), nil, nil, THttp2AsyncConnection,
     'http2', nil, Options, AFactory.IOThreads);
   // the backlog of the factory reaches bind() through this mORMot2 global
-  // (mormot.net.sock.pas:3470, 8623, read 2026-10-07)
+  // (mormot.net.sock.pas:3495, 8715, read 2026-10-07)
   DefaultListenBacklog := AFactory.Backlog;
   MaxConnections := MaxInt;
 end;
@@ -799,38 +803,6 @@ begin
      ((result = 0) or
       (Seconds(FFactory.HeaderTimeoutMs) < result)) then
     result := Seconds(FFactory.HeaderTimeoutMs);
-end;
-
-function THttp2AsyncServer.BuildPolicy: TTlsPolicy;
-begin
-  result.CertificateFile := FFactory.Tls.CertificateFile;
-  result.KeyFile := FFactory.Tls.KeyFile;
-  result.KeyPassword := FFactory.Tls.KeyPassword;
-  result.HandshakeTimeoutMs := LongWord(FFactory.Tls.HandshakeTimeoutMs);
-  result.AllowClearText := FFactory.ClearTextAllowed;
-  result.AllowHttp11 := FFactory.Http11Fallback;
-  result.IgnoreCertificateErrors := True;
-end;
-
-function THttp2AsyncServer.BuildCoreOptions: TConnectionCoreOptions;
-begin
-  result.ConnectionWindow := LongInt(FFactory.InitialConnectionWindow);
-  result.InitialStreamWindow := LongInt(FFactory.InitialStreamWindow);
-  result.MaxConcurrentStreams := FFactory.MaxConcurrentStreams;
-  result.MaxFrameSize := FFactory.MaxFrameSize;
-  result.MaxHeaderListSize := FFactory.MaxHeaderListSize;
-  result.MaxHeaderTableSize := FFactory.HeaderTableSize;
-  result.MaxContinuations := FFactory.MaxContinuationFrames;
-  // the header block bound is twice the header list bound, so one block that
-  // meets the list limit always fits
-  result.MaxHeaderBlockBytes := FFactory.MaxHeaderListSize * 2;
-  // the inbound buffer is the initial stream window, so a peer cannot buffer
-  // more than the server granted it
-  result.InboundBufferLimit := Integer(FFactory.InitialStreamWindow);
-  result.OutboundBufferLimit := Integer(FFactory.InitialStreamWindow);
-  result.ConnectionUpdateThreshold := FFactory.InitialConnectionWindow div 2;
-  result.StreamUpdateThreshold := FFactory.InitialStreamWindow div 2;
-  result.ConnectProtocol := FFactory.WebSocketsEnabled;
 end;
 
 function THttp2AsyncServer.LeastControlBucket: TTokenBucketOptions;

@@ -142,6 +142,17 @@ tasks:
       - '{{.FPC}} {{.FPCFLAGS}} -Fu./test -FE{{.BIN}} test/Http2Server.RunTests.pas'
       - '{{.BIN}}/Http2Server.RunTests --all --format=plain --sparse'
 
+  mtls-live:
+    desc: Live validation of mutual TLS against the sibling client (needs ../http2client and openssl)
+    deps:
+      - build
+    cmds:
+      - mkdir -p {{.BIN}}
+      - rm -rf {{.BIN}}/mtls-pki
+      - sh tools/certs/make_mtls_pki.sh {{.BIN}}/mtls-pki
+      - '{{.FPC}} {{.FPCFLAGS}} -Fu../http2client/src -Fu./test/mtls -FE{{.BIN}} test/mtls/Http2Server.MtlsLive.pas'
+      - '{{.BIN}}/Http2Server.MtlsLive {{.BIN}}/mtls-pki'
+
   validate:
     desc: Build the example server and run the external HTTP/2 conformance tools
     deps:

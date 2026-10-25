@@ -108,7 +108,7 @@ The path shows how the layers cooperate.
 
 1. An IO thread accepts the socket and the connection core consumes the
    preface. The core sends the server SETTINGS frame
-   (`src/Http2Server.Connection.pas:109`).
+   (`src/Http2Server.Connection.pas:119-120`).
 2. A `HEADERS` frame starts a header block and `CONTINUATION` frames extend
    it. The HPACK decoder runs on the IO thread under the connection lock.
 3. The core validates the request fields against RFC 9113 section 8.1. An

@@ -1,0 +1,94 @@
+{**
+---
+license: LGPL-2.1-only WITH Independent-modules-exception
+copyright: Copyright 2026 Liam Seamus Coughlin
+keywords: async, options, tls policy, connection core, handshake deadline
+notes:
+  - This unit turns the factory into the option records that the async server
+    hands to the TLS layer and to each connection core.
+  - The functions read the factory and hold no state, so the async server unit
+    stays under the file size limit.
+---
+}
+/// The option records of the async server, built from the factory
+unit Http2Server.Async.Options;
+
+{$mode delphi}{$H+}
+{$modeswitch advancedrecords}
+{$interfaces com}
+
+interface
+
+uses
+  SysUtils,
+  mormot.core.base, mormot.net.sock,
+  Http2Server.Config, Http2Server.Connection, Http2Server.Tls;
+
+/// the TLS policy of the listener, with the client certificate settings
+function BuildTlsPolicy(const AFactory: THttp2ServerFactory): TTlsPolicy;
+
+/// the options that every connection core of the server uses
+function BuildConnectionCoreOptions(
+  const AFactory: THttp2ServerFactory): TConnectionCoreOptions;
+
+/// set the socket deadlines of the handshake, after the mORMot2 bound
+// - a deadline is a convenience: Darwin answers EINVAL for SO_RCVTIMEO on a
+//   socket whose peer already sent RST, so a failure here forbids no valid
+//   connection and never raises
+procedure SetHandshakeDeadline(const ASocket: TNetSocket;
+  const ARequestedMs: LongWord);
+
+implementation
+
+function BuildTlsPolicy(const AFactory: THttp2ServerFactory): TTlsPolicy;
+begin
+  result.CertificateFile := AFactory.Tls.CertificateFile;
+  result.KeyFile := AFactory.Tls.KeyFile;
+  result.KeyPassword := AFactory.Tls.KeyPassword;
+  result.HandshakeTimeoutMs := LongWord(AFactory.Tls.HandshakeTimeoutMs);
+  result.AllowClearText := AFactory.ClearTextAllowed;
+  result.AllowHttp11 := AFactory.Http11Fallback;
+  result.IgnoreCertificateErrors := True;
+  result.ClientTrust := AFactory.Tls.ClientTrust;
+end;
+
+function BuildConnectionCoreOptions(
+  const AFactory: THttp2ServerFactory): TConnectionCoreOptions;
+begin
+  result.ConnectionWindow := LongInt(AFactory.InitialConnectionWindow);
+  result.InitialStreamWindow := LongInt(AFactory.InitialStreamWindow);
+  result.MaxConcurrentStreams := AFactory.MaxConcurrentStreams;
+  result.MaxFrameSize := AFactory.MaxFrameSize;
+  result.MaxHeaderListSize := AFactory.MaxHeaderListSize;
+  result.MaxHeaderTableSize := AFactory.HeaderTableSize;
+  result.MaxContinuations := AFactory.MaxContinuationFrames;
+  // the header block bound is twice the header list bound, so one block that
+  // meets the list limit always fits
+  result.MaxHeaderBlockBytes := AFactory.MaxHeaderListSize * 2;
+  // the inbound buffer is the initial stream window, so a peer cannot buffer
+  // more than the server granted it
+  result.InboundBufferLimit := Integer(AFactory.InitialStreamWindow);
+  result.OutboundBufferLimit := Integer(AFactory.InitialStreamWindow);
+  result.ConnectionUpdateThreshold := AFactory.InitialConnectionWindow div 2;
+  result.StreamUpdateThreshold := AFactory.InitialStreamWindow div 2;
+  result.ConnectProtocol := AFactory.WebSocketsEnabled;
+end;
+
+procedure SetHandshakeDeadline(const ASocket: TNetSocket;
+  const ARequestedMs: LongWord);
+var
+  Ms: LongWord;
+begin
+  Ms := EffectiveHandshakeTimeoutMs(ARequestedMs);
+  if Ms = 0 then
+    exit;
+  try
+    ASocket.SetReceiveTimeout(Integer(Ms));
+    ASocket.SetSendTimeout(Integer(Ms));
+  except
+    on ENetSock do
+      ;   // no deadline is set; the connection still proceeds
+  end;
+end;
+
+end.

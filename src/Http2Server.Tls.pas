@@ -38,7 +38,9 @@ uses
   mormot.core.os,
   mormot.lib.openssl11,
   mormot.net.sock,
-  Http2Server.Alpn;
+  Http2Server.Alpn,
+  Http2Server.Mtls.Types,
+  Http2Server.Tls.Client;
 
 const
   /// the longest handshake the mORMot2 INetTls layer permits, in milliseconds
@@ -75,6 +77,8 @@ type
     AllowHttp11: boolean;
     /// when TRUE the peer certificate is not verified
     IgnoreCertificateErrors: boolean;
+    /// the client certificate trust and verify mode; ccmNone asks for nothing
+    ClientTrust: TClientTrust;
   end;
 
 /// the transport that this policy offers for a connection
@@ -171,6 +175,11 @@ begin
   // so the ALPN callback can only be installed after this call returns
   ABound.DoTlsAfter(cstaBind);
   result := Http2AlpnAttach(ABound, APolicy.AllowHttp11);
+  // the client certificate trust and the verify mode follow the ALPN callback
+  // on the same context. A mode of ccmNone leaves the context untouched
+  if result then
+    result := ApplyClientTrust(PSSL_CTX(ABound.TLS.AcceptCert),
+      APolicy.ClientTrust);
 end;
 
 end.

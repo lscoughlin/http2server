@@ -17,6 +17,7 @@ related_docs:
   - doc/design/protocol.md
   - doc/design/fpc-runtime.md
   - doc/design/io-pool.md
+  - doc/design/mtls.md
 invariants:
   - A client that offers no acceptable ALPN protocol is refused with a
     fatal alert, so no HTTP/1.1 request ever reaches an HTTP/2 code path.
@@ -55,12 +56,12 @@ it in the `AcceptCert` field of the `TNetTlsContext` record
 context outlives every connection, and `AfterAccept` reuses it.
 
 **`AcceptCert` is public.** `AcceptCert` is a public field of the
-`TNetTlsContext` record (`third_party/mORMot2/src/net/mormot.net.sock.pas:1177`).
+`TNetTlsContext` record (`third_party/mORMot2/src/net/mormot.net.sock.pas:1180`).
 A caller that holds the context reaches the server `SSL_CTX` with a pointer
 cast, so a hook after `AfterBind` needs no new mORMot2 entry point.
 
-**Where to install the callback.** `DOpenSslNetTlsSetupCtx` runs inside
-`AfterBind` and sets only the servername callback
+**Where to install the callback.** `AfterBind` runs `SetupCtx` and
+sets only the servername callback
 (`third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:11938-11943`). It sets
 no ALPN select callback, so a caller can install one after `AfterBind` returns.
 The server does this through `Http2AlpnAttach`, which reads the context from a
@@ -68,7 +69,7 @@ bound `TCrtSocket`.
 
 **The handshake blocks the calling thread.** `AfterAccept` calls
 `CheckProc(@SSL_accept, 'AfterAccept SSL_accept')`
-(`third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:11953-12009`).
+(`third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:11953-12020`).
 `CheckProc` loops on `SSL_accept` and, on a `WANT_READ` or `WANT_WRITE`,
 calls `fSocket.WaitFor(100, ne)` (`...:12169-12188`, `...:12146-12167`). The
 loop carries a deadline of 5000 ms and raises a timeout exception when it
@@ -79,40 +80,40 @@ most.
 **The stalled-client cost.** Because the handshake blocks its IO thread for up
 to 5 seconds, a client that stalls delays only the thread that accepted it.
 The async server accepts asynchronously when TLS is on
-(`third_party/mORMot2/src/net/mormot.net.async.pas:4387`, `async=false` for the
+(`third_party/mORMot2/src/net/mormot.net.async.pas:4390`, `async=false` for the
 accept), and the handshake runs at the first read in
-`OnFirstReadDoTls` (`...:4244-4266`). A second client still completes its
+`OnFirstReadDoTls` (`...:4247-4270`). A second client still completes its
 handshake on another thread.
 
 **How the async server reports no data.** `INetTls.ReceivePending` returns the
 bytes held in the TLS buffer, `0` when that buffer is empty but socket-level
 data may still be unciphered, and `-1` when no TLS connection is open
-(`third_party/mORMot2/src/net/mormot.net.sock.pas:1213-1219`). `INetTls.Send`
+(`third_party/mORMot2/src/net/mormot.net.sock.pas:1216-1222`). `INetTls.Send`
 returns `nrRetry` when the socket is not ready, and the caller retries the same
-buffer (`...:1220-1225`).
+buffer (`...:1223-1228`).
 
 **The per-connection object.** The async server holds one `INetTls` instance
 per connection, in the `fSecure` field of `TPollAsyncConnection`
-(`third_party/mORMot2/src/net/mormot.net.async.pas:121`, `...:4261`). The
+(`third_party/mORMot2/src/net/mormot.net.async.pas:121`, `...:4264`). The
 instance is created by `NewNetTls`, which `mormot.lib.openssl11` points at
 `NewOpenSslNetTls` once OpenSSL loads
-(`third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:12316-12318`).
+(`third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:12313-12318`).
 
 ## The binding
 
 `Http2Server.Alpn` resolves `SSL_CTX_set_alpn_select_cb` from libssl. The
 mORMot2 `libssl` handle is a private variable of
-`mormot.lib.openssl11` (`third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:3153`),
+`mormot.lib.openssl11` (`third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:3154`),
 and no public accessor names it, so the unit loads libssl a second time. The
 second load uses the same path rules as mORMot2: `OPENSSL_LIBPATH` first, then
 the platform library names `LIB_SSL4`, `LIB_SSL3` and `LIB_SSL1`
-(`...:143-245`). A second `dlopen` of an already-loaded library returns the
+(`...:150-243`). A second `dlopen` of an already-loaded library returns the
 same handle, so no second copy of the library enters the process.
 
 `Http2AlpnBindingAvailable` reports whether the symbol resolved
-(`src/Http2Server.Alpn.pas:203-244`). `Http2AlpnAttachCtx` installs the
+(`src/Http2Server.Alpn.pas:211-252`). `Http2AlpnAttachCtx` installs the
 callback on a server context, and `Http2AlpnAttach` reads that context from a
-bound `TCrtSocket` (`src/Http2Server.Alpn.pas:246-262`).
+bound `TCrtSocket` (`src/Http2Server.Alpn.pas:254-272`).
 
 ## The select rule
 
@@ -125,19 +126,19 @@ alert. A malformed list — a zero length entry, or an entry that claims more
 octets than remain — is refused in the same way.
 
 The decision is a pure function, `Http2AlpnSelectOffset`, which returns the
-offset of the chosen entry or `-1` (`src/Http2Server.Alpn.pas:91-136`). The
+offset of the chosen entry or `-1` (`src/Http2Server.Alpn.pas:98-143`). The
 OpenSSL callback is a thin wrapper over it, so a test reaches every branch of
 the rule with no handshake and no socket.
 
 The callback argument is a record with a process lifetime, because the OpenSSL
 manual page requires that the argument outlive the handshake
-(`src/Http2Server.Alpn.pas:87`).
+(`src/Http2Server.Alpn.pas:85-91`).
 
 ## The negotiated name
 
 `Http2AlpnSelected` reads the negotiated name with `SSL_get0_alpn_selected`
 through the `PSSL` returned by `INetTls.GetRawTls`
-(`src/Http2Server.Alpn.pas:185-201`). An empty result means that no protocol
+(`src/Http2Server.Alpn.pas:193-209`). An empty result means that no protocol
 was selected.
 
 ## The TLS plug-in of a connection
@@ -157,25 +158,28 @@ socket and no OpenSSL.
 (`src/Http2Server.Tls.pas:154-174`). The order is fixed: mORMot2 creates the
 server `SSL_CTX` inside `AfterBind`, so the server records the certificate and
 the key, calls `DoTlsAfter(cstaBind)`, and only then installs the ALPN
-callback on the context that `AfterBind` stored in `AcceptCert`. The call
-answers False when no certificate is named or the certificate file is absent.
+callback on the context that `AfterBind` stored in `AcceptCert`. When a client
+certificate mode is set, `ApplyClientTrust` follows the ALPN callback on the same
+context: it loads the trust anchors, sets the verify mode and disables
+renegotiation ([mtls](mtls.md)). The call answers False when no certificate is
+named, the certificate file is absent, or the client CA file cannot be loaded.
 
 ## The handshake deadline
 
 mORMot2 runs the server handshake at the first read of each connection, inside
 `INetTls.AfterAccept`, and it bounds the `SSL_accept` loop with a 5000 ms
-deadline (`mormot.lib.openssl11.pas:12146-12166`). A larger factory value can
+deadline (`mormot.lib.openssl11.pas:12146-12167`). A larger factory value can
 never take effect, so `EffectiveHandshakeTimeoutMs` clamps the factory value to
 that bound (`src/Http2Server.Tls.pas:128-139`). The server also sets the socket
 send and receive deadlines to the clamped value before the handshake runs
-(`src/Http2Server.Async.pas:273-293`). A client that opens a socket and sends
+(`src/Http2Server.Async.pas:405-415`). A client that opens a socket and sends
 nothing holds one IO thread for a bounded time only, and other clients still
 complete their handshakes on other threads.
 
 After the handshake the connection checks the negotiated name. The name `h2`
 starts the HTTP/2 core. Any other name starts the HTTP/1.1 core when the fallback
 is on, and the connection is refused when the fallback is off
-(`src/Http2Server.Async.pas:273-293`).
+(`src/Http2Server.Async.pas:419-429`).
 
 ## Open verification
 
@@ -197,6 +201,6 @@ this host is macOS aarch64.
 | Claim | Source | Read |
 |---|---|---|
 | The callback signature, the return codes, and the protocol list wire format | OpenSSL manual page `SSL_CTX_set_alpn_select_cb(3ssl)` | 2026-10-07 |
-| The `INetTls` surface | `third_party/mORMot2/src/net/mormot.net.sock.pas:1185-1240` | 2026-10-07 |
+| The `INetTls` surface | `third_party/mORMot2/src/net/mormot.net.sock.pas:1183-1233` | 2026-10-07 |
 | The server `SSL_CTX` and its lifetime | `third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:11918-11949` | 2026-10-07 |
 | The blocking handshake and its 5000 ms deadline | `...:11953-12009`, `...:12146-12188` | 2026-10-07 |

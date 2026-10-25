@@ -29,7 +29,7 @@ uses
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Duplex,
   Http2Server.Limits, Http2Server.Observer, Http2Server.Ws.Options,
   Http2Server.Ws.Types, Http2Server.Ws.Frames, Http2Server.Ws.Parser,
-  Http2Server.Ws.Reader, Http2Server.Ws.Close;
+  Http2Server.Ws.Reader, Http2Server.Ws.Close, Http2Server.ClientCert;
 
 type
   TWsState = (wsInit, wsOpen, wsClosing, wsEnded);
@@ -51,9 +51,14 @@ type
     FMethod, FScheme, FAuthority, FPath: string;
     FHeaders: THeaderBlock;
     FCancelled: Boolean;
+    FPrincipal: string;
+    FClientCert: IClientCertificate;
   public
     constructor Create(const ARequest: IServerRequest);
     procedure Cancel;
+    function GetPrincipal: string;
+    procedure SetPrincipal(const AValue: string);
+    function GetClientCertificate: IClientCertificate;
     function Method: string;
     function Scheme: string;
     function Authority: string;
@@ -150,6 +155,23 @@ begin
   FAuthority := ARequest.Authority;
   FPath := ARequest.Path;
   FHeaders := Copy(ARequest.Headers);
+  FPrincipal := ARequest.Principal;
+  FClientCert := ARequest.ClientCertificate;
+end;
+
+function TWsRequestSnapshot.GetClientCertificate: IClientCertificate;
+begin
+  Result := FClientCert;
+end;
+
+function TWsRequestSnapshot.GetPrincipal: string;
+begin
+  Result := FPrincipal;
+end;
+
+procedure TWsRequestSnapshot.SetPrincipal(const AValue: string);
+begin
+  FPrincipal := AValue;
 end;
 
 procedure TWsRequestSnapshot.Cancel;

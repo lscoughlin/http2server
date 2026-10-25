@@ -81,7 +81,7 @@ authority for the dependency, not the directory contents.
 with `consoletestrunner` (`test/Http2Server.RunTests.pas:18`). The
 registration unit `Http2Server.TestRunner` exposes `RegisterTests`, which adds
 one named suite to the global test registry
-(`test/Http2Server.TestRunner.pas:35-41`). The suite holds the test cases of
+(`test/Http2Server.TestRunner.pas:80-87`). The suite holds the test cases of
 the units of the library.
 
 The runner registration order is important. `RegisterTests` adds a named

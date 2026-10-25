@@ -36,12 +36,14 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
   Http2Server.Errors,
+  Http2Server.AccessLog,
   Http2Server.Frames,
   Http2Server.FlowControl,
   Http2Server.Limits,
   Http2Server.Duplex,
   Http2Server.Http1.Limits,
   Http2Server.Ws.Options,
+  Http2Server.Mtls.Types,
   Http2Server.Seam;
 
 type
@@ -64,6 +66,12 @@ type
     FKeyPassword: string;
     FAlpnProtocols: TArray<string>;
     FHandshakeTimeoutMs: Integer;
+    FClientCertMode: TClientCertMode;
+    FClientCaFile: string;
+    FClientTrustSystemStore: Boolean;
+    FClientPartialChain: Boolean;
+    FClientVerifyDepth: Integer;
+    FClientCertPrincipal: TClientCertPrincipal;
   public
     /// the defaults of the TLS settings
     class function Create: TTlsServerOptions; static;
@@ -79,12 +87,35 @@ type
     /// the time a TLS handshake may take, in milliseconds
     function WithHandshakeTimeoutMs(
       const AValue: Integer): TTlsServerOptions;
+    /// whether the server asks a client for a certificate (mutual TLS)
+    function WithClientCertMode(
+      const AValue: TClientCertMode): TTlsServerOptions;
+    /// the PEM file with the trust anchors for client certificates
+    function WithClientCaFile(const AValue: string): TTlsServerOptions;
+    /// whether the operating system store adds trust anchors
+    function WithClientTrustSystemStore(
+      const AValue: Boolean): TTlsServerOptions;
+    /// whether a leaf or intermediate trust anchor is enough
+    function WithClientPartialChain(const AValue: Boolean): TTlsServerOptions;
+    /// the longest accepted chain between a client and a trust anchor
+    function WithClientVerifyDepth(const AValue: Integer): TTlsServerOptions;
+    /// what the server writes to Principal for a verified client
+    function WithClientCertPrincipal(
+      const AValue: TClientCertPrincipal): TTlsServerOptions;
 
     property CertificateFile: string read FCertificateFile;
     property KeyFile: string read FKeyFile;
     property KeyPassword: string read FKeyPassword;
     property AlpnProtocols: TArray<string> read FAlpnProtocols;
     property HandshakeTimeoutMs: Integer read FHandshakeTimeoutMs;
+    property ClientCertMode: TClientCertMode read FClientCertMode;
+    property ClientCaFile: string read FClientCaFile;
+    property ClientTrustSystemStore: Boolean read FClientTrustSystemStore;
+    property ClientPartialChain: Boolean read FClientPartialChain;
+    property ClientVerifyDepth: Integer read FClientVerifyDepth;
+    property ClientCertPrincipal: TClientCertPrincipal read FClientCertPrincipal;
+    /// the client certificate settings as the TLS layer reads them
+    function ClientTrust: TClientTrust;
   end;
 
   /// the request queue settings
@@ -156,6 +187,7 @@ type
     FHeaderTimeoutMs: Integer;
     FGracefulStopTimeoutMs: Integer;
     FHandler: IHttp2Handler;
+    FAccessLogWriter: IAccessLogWriter;
     FClock: IMonotonicClock;
   public
     /// the record with the chosen defaults
@@ -284,6 +316,9 @@ type
 
     /// the handler that serves every request; required
     function WithHandler(const AValue: IHttp2Handler): THttp2ServerFactory;
+    /// the receiver of the access log records; nil (the default) writes no log
+    // - TStdOutAccessLogWriter prints one Common Log Format line per request
+    function WithAccessLogWriter(const AValue: IAccessLogWriter): THttp2ServerFactory;
     /// the clock of the token buckets and of the timeouts
     function WithClock(const AValue: IMonotonicClock): THttp2ServerFactory;
 
@@ -360,6 +395,7 @@ type
     // ---- wiring ----
 
     property Handler: IHttp2Handler read FHandler;
+    property AccessLogWriter: IAccessLogWriter read FAccessLogWriter;
     property Clock: IMonotonicClock read FClock;
   end;
 
@@ -377,6 +413,12 @@ begin
   SetLength(Result.FAlpnProtocols, 1);
   Result.FAlpnProtocols[0] := 'h2';
   Result.FHandshakeTimeoutMs := 10000;
+  Result.FClientCertMode := ccmNone;
+  Result.FClientCaFile := '';
+  Result.FClientTrustSystemStore := False;
+  Result.FClientPartialChain := False;
+  Result.FClientVerifyDepth := 4;
+  Result.FClientCertPrincipal := ccpNone;
 end;
 
 function TTlsServerOptions.WithCertificateFile(
@@ -412,6 +454,58 @@ function TTlsServerOptions.WithHandshakeTimeoutMs(
 begin
   Result := Self;
   Result.FHandshakeTimeoutMs := AValue;
+end;
+
+function TTlsServerOptions.WithClientCertMode(
+  const AValue: TClientCertMode): TTlsServerOptions;
+begin
+  Result := Self;
+  Result.FClientCertMode := AValue;
+end;
+
+function TTlsServerOptions.WithClientCaFile(
+  const AValue: string): TTlsServerOptions;
+begin
+  Result := Self;
+  Result.FClientCaFile := AValue;
+end;
+
+function TTlsServerOptions.WithClientTrustSystemStore(
+  const AValue: Boolean): TTlsServerOptions;
+begin
+  Result := Self;
+  Result.FClientTrustSystemStore := AValue;
+end;
+
+function TTlsServerOptions.WithClientPartialChain(
+  const AValue: Boolean): TTlsServerOptions;
+begin
+  Result := Self;
+  Result.FClientPartialChain := AValue;
+end;
+
+function TTlsServerOptions.WithClientVerifyDepth(
+  const AValue: Integer): TTlsServerOptions;
+begin
+  Result := Self;
+  Result.FClientVerifyDepth := AValue;
+end;
+
+function TTlsServerOptions.WithClientCertPrincipal(
+  const AValue: TClientCertPrincipal): TTlsServerOptions;
+begin
+  Result := Self;
+  Result.FClientCertPrincipal := AValue;
+end;
+
+function TTlsServerOptions.ClientTrust: TClientTrust;
+begin
+  Result.Mode := FClientCertMode;
+  Result.CaFile := FClientCaFile;
+  Result.SystemStore := FClientTrustSystemStore;
+  Result.PartialChain := FClientPartialChain;
+  Result.Depth := FClientVerifyDepth;
+  Result.Principal := FClientCertPrincipal;
 end;
 
 { TQueueOptions }
@@ -513,6 +607,7 @@ begin
   Result.FHeaderTimeoutMs := 30000;
   Result.FGracefulStopTimeoutMs := 10000;
   Result.FHandler := nil;
+  Result.FAccessLogWriter := nil;
   Result.FClock := TMonotonicClock.Create;
 end;
 
@@ -762,6 +857,13 @@ begin
   Result.FHandler := AValue;
 end;
 
+function THttp2ServerFactory.WithAccessLogWriter(
+  const AValue: IAccessLogWriter): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FAccessLogWriter := AValue;
+end;
+
 function THttp2ServerFactory.WithClock(
   const AValue: IMonotonicClock): THttp2ServerFactory;
 begin
@@ -820,6 +922,21 @@ begin
       Add('the TLS certificate file is empty while cleartext is off');
     if FTls.KeyFile = '' then
       Add('the TLS key file is empty while cleartext is off');
+  end;
+  if FTls.ClientCertMode <> ccmNone then
+  begin
+    if (FTls.ClientCaFile = '') and not FTls.ClientTrustSystemStore then
+      Add('the client certificate mode has no trust anchor');
+    if (FTls.ClientCaFile <> '') and not FileExists(FTls.ClientCaFile) then
+      Add('the client CA file is not present');
+    if (FTls.ClientVerifyDepth < 1) or
+       (FTls.ClientVerifyDepth > cMaxClientVerifyDepth) then
+      Add('the client verify depth is outside 1 to ' +
+        IntToStr(cMaxClientVerifyDepth));
+    if FTls.CertificateFile = '' then
+      Add('the client certificate mode needs a TLS certificate file');
+    if (FTls.ClientCertMode = ccmRequired) and FClearTextAllowed then
+      Add('the required client certificate mode needs cleartext off');
   end;
   if (FMaxFrameSize < MinAllowedFrameSize) or
      (FMaxFrameSize > MaxAllowedFrameSize) then

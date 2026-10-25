@@ -51,7 +51,7 @@ The server adds four classes to the client set:
 `EStreamCancelled` and `EStreamReset` descend from `EHttpStreamError`, so a
 catch of the stream error class catches both. A caller that requires the
 stream identifier reads the `StreamId` property of the base class
-(`src/Http2Server.Errors.pas:88-104`).
+(`src/Http2Server.Errors.pas:61-84`).
 
 ## Frames
 
@@ -60,7 +60,7 @@ stream identifier reads the `StreamId` property of the base class
 
 The unit carries the payload builders, the payload parsers and the stream
 read and write routines. `ReadFrame` enforces the received-frame limit
-(`src/Http2Server.Frames.pas:445`): a frame header that states a length above
+(`src/Http2Server.Frames.pas:792-802`): a frame header that states a length above
 the limit raises `EHttpProtocolError` with `ecFrameSizeError` before the
 server reads the payload. This check is what stops a peer from asking the
 server to allocate an unbounded buffer.
@@ -104,7 +104,7 @@ field of 32 octets, plus the name length, plus the value length. A large list
 is a denial-of-service vector, so the decoder stops as soon as the running
 total passes the cap. `THpackCodec.MaxHeaderListSize` holds the cap, and a
 zero value removes it. The check runs inside the append step
-(`src/Http2Server.Hpack.pas:726-736`), so the decoder raises
+(`src/Http2Server.Hpack.pas:725-736`), so the decoder raises
 `EHttpProtocolError` with `ecEnhanceYourCalm` part way through a hostile
 block instead of building the full list first.
 

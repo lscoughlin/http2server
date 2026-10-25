@@ -57,6 +57,8 @@ IServerRequest  = interface
   function  IsCancelled: Boolean;
   function  StreamId: LongWord;
   function  Headers: THeaderBlock;
+  property  Principal: string;   // read-write; see access-log.md
+  property  ClientCertificate: IClientCertificate;   // read-only; nil when none; see mtls.md
   ...
 end;
 

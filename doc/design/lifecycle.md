@@ -31,8 +31,8 @@ listening socket and the handler pool.
 
 ## Start
 
-`THttp2Server.Start` (`src/Http2Server.Server.pas:107`) sets its started flag
-and calls `THttp2AsyncServer.Start` (`src/Http2Server.Async.pas:717`).
+`THttp2Server.Start` (`src/Http2Server.Server.pas:117`) sets its started flag
+and calls `THttp2AsyncServer.Start` (`src/Http2Server.Async.pas:968`).
 
 The async start binds the port on its own thread and waits up to five seconds
 for the bind. A failed bind raises from the wait, so `Start` does not return a
@@ -49,7 +49,7 @@ a stopped server is built again rather than started again.
 ## The port
 
 A factory port of 0 asks the operating system for a free port.
-`THttp2AsyncServer.BoundPort` (`src/Http2Server.Async.pas:738`) reads the port
+`THttp2AsyncServer.BoundPort` (`src/Http2Server.Async.pas:1001`) reads the port
 back from the bound socket, so `IHttp2Server.Port` answers the real port after
 `Start`.
 
@@ -64,21 +64,21 @@ completed no request for the whole period, which bounds the work that a peer
 can hold with a partial header block.
 
 `THttp2AsyncServer.GetLastOperationIdleSeconds`
-(`src/Http2Server.Async.pas:530`) answers the earlier of the two, in whole
+(`src/Http2Server.Async.pas:780`) answers the earlier of the two, in whole
 seconds, so the idle event runs at the stricter of the two periods. A period
 below one second rounds up to one second, because the event runs once per
 second.
 
-`THttp2AsyncConnection.OnLastOperationIdle` (`src/Http2Server.Async.pas:466`)
+`THttp2AsyncConnection.OnLastOperationIdle` (`src/Http2Server.Async.pas:612`)
 applies both rules and asks the IO side to remove the connection.
 
 ## Stop
 
-`THttp2Server.Stop` (`src/Http2Server.Server.pas:131`) runs five steps in
+`THttp2Server.Stop` (`src/Http2Server.Server.pas:144`) runs five steps in
 order.
 
 1. The stop flag is set, so a second call returns at once.
-2. `BroadcastGoAway` (`src/Http2Server.Async.pas:663`) reads the live
+2. `BroadcastGoAway` (`src/Http2Server.Async.pas:914`) reads the live
    connections and queues a GOAWAY frame on each one. The last stream
    identifier in the frame is the highest identifier that the core accepted, so
    a peer keeps the streams below it and expects no new stream. The waker then
@@ -88,7 +88,7 @@ order.
    not hold the wait of the next step until the timeout. A WebSocket session
    sends Close 1001 instead and waits for the reply; at the final stop the
    application hears `Closed(1001)`.
-4. `WaitForStreams` (`src/Http2Server.Server.pas:118`) polls the open stream
+4. `WaitForStreams` (`src/Http2Server.Server.pas:128`) polls the open stream
    total and the count of detached channels every twenty milliseconds until both
    reach zero or the graceful stop timeout passes. A quiet server stops at once, and a busy server gets the
    full period.
@@ -108,7 +108,7 @@ and the queue and pool flags cover the two pools.
 ## The GOAWAY of a stop
 
 The core sends one GOAWAY frame per connection, and no second frame
-(`src/Http2Server.Connection.Core.pas:415`). A connection that already sent GOAWAY,
+(`src/Http2Server.Connection.Core.pas:621-627`). A connection that already sent GOAWAY,
 because of a protocol error, keeps its first frame.
 
 The last stream identifier is truthful. A frame that names a higher identifier

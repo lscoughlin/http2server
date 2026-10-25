@@ -22,7 +22,7 @@
         </SyntaxOptions>
       </Parsing>
     </CompilerOptions>
-    <Files Count="60">
+    <Files Count="66">
       <Item1>
         <Filename Value="src/Http2Server.pas"/>
         <UnitName Value="Http2Server"/>
@@ -263,6 +263,30 @@
         <Filename Value="src/Http2Server.Ws.Utf8.pas"/>
         <UnitName Value="Http2Server.Ws.Utf8"/>
       </Item60>
+      <Item61>
+        <Filename Value="src/Http2Server.AccessLog.pas"/>
+        <UnitName Value="Http2Server.AccessLog"/>
+      </Item61>
+      <Item62>
+        <Filename Value="src/Http2Server.AccessLog.Handler.pas"/>
+        <UnitName Value="Http2Server.AccessLog.Handler"/>
+      </Item62>
+      <Item63>
+        <Filename Value="src/Http2Server.Mtls.Types.pas"/>
+        <UnitName Value="Http2Server.Mtls.Types"/>
+      </Item63>
+      <Item64>
+        <Filename Value="src/Http2Server.ClientCert.pas"/>
+        <UnitName Value="Http2Server.ClientCert"/>
+      </Item64>
+      <Item65>
+        <Filename Value="src/Http2Server.Tls.Client.pas"/>
+        <UnitName Value="Http2Server.Tls.Client"/>
+      </Item65>
+      <Item66>
+        <Filename Value="src/Http2Server.Async.Options.pas"/>
+        <UnitName Value="Http2Server.Async.Options"/>
+      </Item66>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>

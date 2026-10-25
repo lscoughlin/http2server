@@ -50,21 +50,21 @@ for the bytes to write. The class `THttp2AsyncConnection`
 
 ## The input path
 
-`Feed` (`src/Http2Server.Connection.pas:68`) adds the new bytes to the input
+`Feed` (`src/Http2Server.Connection.pas:79`) adds the new bytes to the input
 buffer and then walks the frames.
 
 1. The client connection preface comes first. The preface may arrive in
    pieces, so `Feed` copies the bytes into a preface buffer and waits until
    the buffer holds `ClientPrefaceSize` bytes. It then calls
-   `CheckClientPreface` (`:102`). A mismatch sends GOAWAY with
+   `CheckClientPreface` (`:113`). A mismatch sends GOAWAY with
    `PROTOCOL_ERROR`. The server SETTINGS frame is the first frame the server
-   sends (`src/Http2Server.Connection.pas:109`).
+   sends (`src/Http2Server.Connection.pas:120`).
 2. A frame header is nine bytes. A partial frame stays in the input buffer
    and waits for the next call.
 3. A frame whose length is above `SETTINGS_MAX_FRAME_SIZE` is a connection
    error of type `FRAME_SIZE_ERROR`, and the core removes no payload for it
-   (`src/Http2Server.Connection.pas:121-124`; RFC 9113 section 4.2).
-4. `ProcessFrame` (`src/Http2Server.Connection.pas:169`) dispatches on the
+   (`src/Http2Server.Connection.pas:130-137`; RFC 9113 section 4.2).
+4. `ProcessFrame` (`src/Http2Server.Connection.pas:180`) dispatches on the
    frame type.
 
 The input buffer never grows without a bound. `TConnectionCoreOptions`
@@ -81,15 +81,15 @@ The core holds each rule in one place.
 | any, during a header block | Only `CONTINUATION` may follow a `HEADERS` frame on the same stream (RFC 9113 section 4.3). Any other frame is `PROTOCOL_ERROR`. | `ProcessFrame` |
 | `DATA` | A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream is `STREAM_CLOSED`. A non-empty frame on a half-closed stream is `STREAM_CLOSED`. | `ProcessData` |
 | `HEADERS` | A frame on a half-closed or closed stream is `STREAM_CLOSED`. A second `HEADERS` frame without `END_STREAM` is `PROTOCOL_ERROR`. A new stream id below `FLastStreamId` is a closed stream. | `ProcessHeaders` |
-| `PRIORITY` | The payload is five bytes or the frame is `FRAME_SIZE_ERROR`. Stream zero is `PROTOCOL_ERROR`. A stream that depends on itself is a stream error. | `ProcessPriority` (`:697`) |
-| `RST_STREAM` | The payload is four bytes or the frame is `FRAME_SIZE_ERROR`. A frame on an idle stream is `PROTOCOL_ERROR`. | `ProcessRstStream` (`:1000`) |
-| `SETTINGS` | An acknowledged frame with a payload is `FRAME_SIZE_ERROR`. | `ProcessSettings` (`:959`) |
-| `PING` | Stream zero is required. The payload is eight bytes. An acknowledged frame adds no frame. | `ProcessPing` (`:1032`) |
-| `GOAWAY` | Stream zero is required. Every open stream is cancelled, and the core stops. | `ProcessGoAway` (`:1049`) |
-| `WINDOW_UPDATE` | A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream carries no action. A stream window above the maximum is a stream error of type `FLOW_CONTROL_ERROR`. | `ProcessWindowUpdate` (`:1077`) |
+| `PRIORITY` | The payload is five bytes or the frame is `FRAME_SIZE_ERROR`. Stream zero is `PROTOCOL_ERROR`. A stream that depends on itself is a stream error. | `ProcessPriority` (`:205`) |
+| `RST_STREAM` | The payload is four bytes or the frame is `FRAME_SIZE_ERROR`. A frame on an idle stream is `PROTOCOL_ERROR`. | `ProcessRstStream` (`:519`) |
+| `SETTINGS` | An acknowledged frame with a payload is `FRAME_SIZE_ERROR`. | `ProcessSettings` (`:478`) |
+| `PING` | Stream zero is required. The payload is eight bytes. An acknowledged frame adds no frame. | `ProcessPing` (`:551`) |
+| `GOAWAY` | Stream zero is required. Every open stream is cancelled, and the core stops. | `ProcessGoAway` (`:568`) |
+| `WINDOW_UPDATE` | A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream carries no action. A stream window above the maximum is a stream error of type `FLOW_CONTROL_ERROR`. | `ProcessWindowUpdate` (`:605`) |
 | `PUSH_PROMISE` | A server never receives this frame. It is `PROTOCOL_ERROR` (RFC 9113 section 8.2). | `ProcessFrame` |
 
-The core names each fault through `FailConnection` (`:573`). That method
+The core names each fault through `FailConnection` (`:636`). That method
 sends GOAWAY, sets `FClosing`, and reports the close to the observer. The IO
 side closes the connection after the output drains. A fault never raises an
 exception in another thread.
@@ -99,17 +99,17 @@ exception in another thread.
 A stream is a `TServerStream` (`src/Http2Server.Stream.pas`). Its state is
 one of `ssIdle`, `ssOpen`, `ssHalfClosedRemote`, `ssHalfClosedLocal`,
 `ssClosed`, `ssResetting` (`src/Http2Server.Stream.pas:41-53`). The core
-moves the state and the accessor `State` (`:317`) reads the flags.
+moves the state and the accessor `State` (`:339`) reads the flags.
 
-- `NewStream` (`:661`) creates the stream in `ssOpen`, adds it to `FStreams`
+- `NewStream` (`:740`) creates the stream in `ssOpen`, adds it to `FStreams`
   and to the index `FById`, and gives it the first reference.
-- `CheckStreamId` (`:643`) rejects a new stream id that is even, or that is
+- `CheckStreamId` (`:722`) rejects a new stream id that is even, or that is
   not above the highest id the core accepted. It runs before the closed-
   stream check, so a repeated id stays a repeated id.
 - A request header block that ends marks `MarkRequestHead` and the declared
   length. A `DATA` frame that ends with `END_STREAM` marks the remote end.
   A response that ends marks the local end. The state follows those marks.
-- `CloseStream` (`:630`) removes the stream from `FById` and from `FStreams`
+- `CloseStream` (`:709`) removes the stream from `FById` and from `FStreams`
   and drops the reference of the core. A queue entry and a running handler
   hold their own references, so the stream lives until the last holder
   releases it.
@@ -122,7 +122,7 @@ handler.
 
 ## The request rules
 
-A complete request header block passes `ValidateRequestBlock` (`:855`). The
+A complete request header block passes `ValidateRequestBlock` (`:372`). The
 function calls `ValidateRequestHeaders`
 (`src/Http2Server.RequestValidation.pas`) and reads a verdict.
 
@@ -167,19 +167,19 @@ document [seam](seam.md) states that rule.
 (`src/Http2Server.FlowControl.pas`) and one `TOutputDrain`
 (`src/Http2Server.Output.pas`). The drain takes one turn per call and gives
 each stream a share of the connection window. The core queues the resulting
-frames in `FOutput`, and `TakeOutput` (`:509`) answers them to the IO side.
+frames in `FOutput`, and `TakeOutput` (`:572`) answers them to the IO side.
 
 The wake-up is edge-triggered. The flag `FWakePending` guards one signal per
-transition from "no output" to "output" (`:494`). The document
+transition from "no output" to "output" (`:563`). The document
 [output](output.md) holds the full rule.
 
 ## The connection events
 
 The core reports each state change through the interface `IConnectionEvents`
-(`src/Http2Server.Connection.Core.pas:56`): a stream that opens, a stream that is
+(`src/Http2Server.Connection.Core.pas:59`): a stream that opens, a stream that is
 refused, a stream that resets, a stream that completes, a connection that
 closes and a bucket that trips. The class `THttp2ConnectionEvents`
-(`src/Http2Server.Async.pas:270`) turns each call into an observer event. The
+(`src/Http2Server.Async.Events.pas:45`) turns each call into an observer event. The
 document [public-api](public-api.md) holds the event list.
 
 ## Detached streams

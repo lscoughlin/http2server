@@ -36,6 +36,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs, Generics.Collections,
   Http2Server.Errors,
+  Http2Server.AccessLog, Http2Server.AccessLog.Handler,
   Http2Server.Hpack,
   Http2Server.Headers,
   Http2Server.Limits,
@@ -156,6 +157,8 @@ type
     FOptions: TQueueOptions;
     FQueue: TRequestQueue;
     FHandler: IHttp2Handler;
+    /// the writer for the records of refused requests; nil writes none
+    FAccessLog: IAccessLogWriter;
     FThreads: TObjectList<THandlerThread>;
     FLock: TCriticalSection;
     FActive: TList<TServerStream>;
@@ -177,6 +180,7 @@ type
     procedure DetachNotify(const AStream: TServerStream; const ARefused: Boolean);
     function TakeOne: Boolean;
     procedure AnswerRefusal(const AStream: TServerStream);
+    procedure LogJobRefusal(const AJob: IHandlerJob);
     procedure ReportError(const AStream: TServerStream;
       const ABeforeHeaders: Boolean);
     procedure MarkBusy(const AStream: TServerStream);
@@ -464,6 +468,10 @@ begin
   inherited Create;
   FOptions := AFactory.Queue;
   FHandler := AFactory.Handler;
+  // a nil writer leaves the handler as it is: no wrapper, no cost
+  FAccessLog := AFactory.AccessLogWriter;
+  if (FHandler <> nil) and (AFactory.AccessLogWriter <> nil) then
+    FHandler :=TAccessLoggingHandler.Create(FHandler, AFactory.AccessLogWriter);
   FGracefulTimeoutMs := AFactory.GracefulStopTimeoutMs;
   FPoolStopped := False;
   FLock := TCriticalSection.Create;
@@ -590,8 +598,38 @@ begin
   end;
 end;
 
-procedure THandlerPool.AnswerRefusal(const AStream: TServerStream);
+procedure THandlerPool.LogJobRefusal(const AJob: IHandlerJob);
+var
+  Req: IServerRequest;
+  Probe: IAccessLogProbe;
 begin
+  if FAccessLog = nil then
+    Exit;
+  if not Supports(AJob, IServerRequest, Req) then
+    Exit;
+  if not Supports(AJob, IAccessLogProbe, Probe) then
+    Probe := nil;
+  // an HTTP/1.1 job always answers 503
+  WriteRefusalRecord(FAccessLog, Req, Probe, 503);
+end;
+
+procedure THandlerPool.AnswerRefusal(const AStream: TServerStream);
+var
+  Req: IServerRequest;
+  Probe: IAccessLogProbe;
+begin
+  if FAccessLog <> nil then
+  begin
+    // the record comes first: the answer can end the stream
+    Req := TServerStreamRequest.Create(AStream);
+    Probe := TServerStreamResponse.Create(AStream);
+    if FOptions.RefusalMode = rmHttp503 then
+      WriteRefusalRecord(FAccessLog, Req, Probe, 503)
+    else
+      WriteRefusalRecord(FAccessLog, Req, Probe, 0);
+    Probe := nil;
+    Req := nil;
+  end;
   case FOptions.RefusalMode of
     rmRefuseStream:
       // Refuse, not Cancel: the peer learns of the refusal only from the
@@ -652,6 +690,7 @@ begin
       FLock.Release;
     end;
     Notify(seRequestTimedOut, nil, 'the queue wait limit passed');
+    LogJobRefusal(Job);
     Job.Refuse(jrTimedOut);
     Exit;
   end;
@@ -707,6 +746,7 @@ begin
       FLock.Release;
     end;
     Notify(seQueueFull, nil, 'the queue was full');
+    LogJobRefusal(AJob);
     AJob.Refuse(jrQueueFull);
   end;
 end;
@@ -856,7 +896,10 @@ begin
   Entries := FQueue.DrainEntries;
   for I := 0 to High(Entries) do
     if Entries[I].Job <> nil then
-      Entries[I].Job.Refuse(jrStopped)
+    begin
+      LogJobRefusal(Entries[I].Job);
+      Entries[I].Job.Refuse(jrStopped);
+    end
     else
     begin
       AnswerRefusal(Entries[I].Stream);

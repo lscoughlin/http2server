@@ -95,14 +95,14 @@ one unit is visible to the other.
 ## The facade unit
 
 `src/Http2Server.pas` is the public facade of the library
-(`src/Http2Server.pas:12-18`). The unit declares type aliases for the public types of the library and the
+(`src/Http2Server.pas:14-18`). The unit declares type aliases for the public types of the library and the
 helper that turns a factory into a server. The build line and the test runner
 link this unit. The units of the library are recorded in `doc/design/`.
 
 ## File headers
 
 Each Pascal file starts with a pasdoc comment that wraps YAML front matter
-(`src/Http2Server.pas:1-27`). The front matter holds a `license` key and a
+(`src/Http2Server.pas:1-13`). The front matter holds a `license` key and a
 `copyright` key. The licence value is the SPDX expression of the library,
 `LGPL-2.1-only WITH Independent-modules-exception`. The file `NOTICE` names
 the full licence name and the third-party components.

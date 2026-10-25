@@ -27,12 +27,15 @@ interface
 uses
   SysUtils,
   Http2Server.Errors,
+  Http2Server.AccessLog,
   Http2Server.Frames,
   Http2Server.Hpack,
   Http2Server.Duplex,
   Http2Server.Limits,
   Http2Server.Observer,
   Http2Server.Seam,
+  Http2Server.Mtls.Types,
+  Http2Server.ClientCert,
   Http2Server.Config,
   Http2Server.Encoding,
   Http2Server.Server,
@@ -60,6 +63,11 @@ type
   TQueueRefusalMode = Http2Server.Config.TQueueRefusalMode;
   TTokenBucketOptions = Http2Server.Limits.TTokenBucketOptions;
 
+  /// mutual TLS: the modes, the principal setting and the client identity
+  TClientCertMode = Http2Server.Mtls.Types.TClientCertMode;
+  TClientCertPrincipal = Http2Server.Mtls.Types.TClientCertPrincipal;
+  IClientCertificate = Http2Server.ClientCert.IClientCertificate;
+
   /// the handler contract
   IHttp2Handler = Http2Server.Seam.IHttp2Handler;
   IServerRequest = Http2Server.Seam.IServerRequest;
@@ -68,6 +76,11 @@ type
   IStreamWaiter = Http2Server.Seam.IStreamWaiter;
   TCancelHook = Http2Server.Seam.TCancelHook;
   TWaitResult = Http2Server.Seam.TWaitResult;
+
+  /// the access log: the record, the writer contract and the default writer
+  TAccessLogRecord = Http2Server.AccessLog.TAccessLogRecord;
+  IAccessLogWriter = Http2Server.AccessLog.IAccessLogWriter;
+  TStdOutAccessLogWriter = Http2Server.AccessLog.TStdOutAccessLogWriter;
 
   /// the detached stream: bytes in both directions without a handler thread
   IDuplexChannel = Http2Server.Duplex.IDuplexChannel;
@@ -128,9 +141,22 @@ type
   end;
 
 const
+  // the values of TQueueRefusalMode, for the same reason as the event kinds below
+  rmRefuseStream = Http2Server.Config.rmRefuseStream;
+  rmHttp503 = Http2Server.Config.rmHttp503;
+
+  // the values of TClientCertMode and TClientCertPrincipal
+  ccmNone = Http2Server.Mtls.Types.ccmNone;
+  ccmOptional = Http2Server.Mtls.Types.ccmOptional;
+  ccmRequired = Http2Server.Mtls.Types.ccmRequired;
+  ccpNone = Http2Server.Mtls.Types.ccpNone;
+  ccpSubjectDn = Http2Server.Mtls.Types.ccpSubjectDn;
+  ccpCommonName = Http2Server.Mtls.Types.ccpCommonName;
+
   // an enum type alias does not carry the enum values, so every value of
   // TServerEventKind appears here as a constant
   seConnectionAccepted = Http2Server.Observer.seConnectionAccepted;
+  seTlsHandshakeFailed = Http2Server.Observer.seTlsHandshakeFailed;
   seConnectionClosed = Http2Server.Observer.seConnectionClosed;
   seStreamOpened = Http2Server.Observer.seStreamOpened;
   seStreamRefused = Http2Server.Observer.seStreamRefused;
@@ -204,6 +230,14 @@ function IsEncoded(const ACoding: TContentEncoding): Boolean;
 /// compact AData for ACoding, or return AData when the coding is identity
 function CompressFor(const ACoding: TContentEncoding;
   const AData: TBytes): TBytes;
+
+/// the Apache Common Log Format line of a record
+// - see Http2Server.AccessLog.FormatCommonLog
+function FormatCommonLog(const ARecord: TAccessLogRecord): string;
+
+/// the user name of a Basic `authorization` header, or '' when none
+// - see Http2Server.AccessLog.BasicAuthUser
+function BasicAuthUser(const AHeaders: THeaderBlock): string;
 
 /// the first value of AName in AHeaders, or '' when the name is absent
 ///
@@ -292,6 +326,16 @@ function CompressFor(const ACoding: TContentEncoding;
   const AData: TBytes): TBytes;
 begin
   Result := Http2Server.Encoding.CompressFor(ACoding, AData);
+end;
+
+function FormatCommonLog(const ARecord: TAccessLogRecord): string;
+begin
+  Result := Http2Server.AccessLog.FormatCommonLog(ARecord);
+end;
+
+function BasicAuthUser(const AHeaders: THeaderBlock): string;
+begin
+  Result := Http2Server.AccessLog.BasicAuthUser(AHeaders);
 end;
 
 function HeaderValueOf(const AHeaders: THeaderBlock;

@@ -35,14 +35,14 @@ its value, so a stored factory is safe to copy and to fork.
 
 ## The factory record
 
-`THttp2ServerFactory` is a record (`src/Http2Server.Config.pas:116`). Its
+`THttp2ServerFactory` is a record (`src/Http2Server.Config.pas:122`). Its
 fields are private and its properties are read-only, so a caller changes a
 setting only through a `WithX` method.
 
 `Create` is a static class function that returns the record with the defaults
-(`src/Http2Server.Config.pas:391`). The defaults appear once, in that body.
+(`src/Http2Server.Config.pas:457-524`). The defaults appear once, in that body.
 The two option records hold their own defaults in their own `Create` bodies
-(`src/Http2Server.Config.pas:312`, `src/Http2Server.Config.pas:362`). The
+(`src/Http2Server.Config.pas:376`, `src/Http2Server.Config.pas:425`). The
 figure below shows the three records and their relation.
 
 ```mermaid
@@ -62,14 +62,14 @@ protocol bounds instead: `MinAllowedFrameSize` and `MaxAllowedFrameSize`
 `MaxWindowSize` (`src/Http2Server.FlowControl.pas:28`). A connection reads the
 remaining values from a settings record that the factory fills, as the
 connection core states for `TConnectionCoreOptions`
-(`src/Http2Server.Connection.Core.pas:40-53`).
+(`src/Http2Server.Connection.Core.pas:41-57`).
 
 The test `TestDefaultsOnlyInCreate` reads the source of this unit and fails on
 a numeric literal of two digits or more outside a `Create` body
-(`test/Http2Server.Config.Test.pas:754`). The test covers this unit only.
+(`test/Http2Server.Config.Test.pas:801`). The test covers this unit only.
 `Http2Server.Stream.pas` holds its own constants (`DefaultReadTimeoutMs`,
 `DefaultWriteTimeoutMs` and `DefaultUpdateThreshold` in
-`src/Http2Server.Stream.pas:281-285`), which a stream uses until the factory
+`src/Http2Server.Stream.pas:281-286`), which a stream uses until the factory
 sets a value.
 
 ### The listener settings
@@ -84,13 +84,13 @@ sets a value.
 | `Http11` | `WithHttp11Limits` | the record `THttp11Limits`: the limits of the HTTP/1.1 parser (see [http1](http1.md)) |
 | `ClearTextAllowed` | `WithClearTextAllowed` | allows cleartext connections (HTTP/2 with prior knowledge, and HTTP/1.1 when the fallback is on); off by default |
 
-The listener settings are declared at `src/Http2Server.Config.pas:149-159`.
+The listener settings are declared at `src/Http2Server.Config.pas:124-128`.
 
 ### The TLS settings
 
 `TTlsServerOptions` is a record with its own fluent methods
-(`src/Http2Server.Config.pas:55`). `THttp2ServerFactory.WithTls` accepts the
-record whole (`src/Http2Server.Config.pas:466`).
+(`TTlsServerOptions` in `src/Http2Server.Config.pas`). `THttp2ServerFactory.WithTls`
+accepts the record whole.
 
 | Setting | `WithX` | Meaning |
 |---|---|---|
@@ -100,8 +100,20 @@ record whole (`src/Http2Server.Config.pas:466`).
 | `AlpnProtocols` | `WithAlpnProtocols` | the ALPN protocol names, in preference order |
 | `HandshakeTimeoutMs` | `WithHandshakeTimeoutMs` | the time a handshake may take |
 
+The client certificate settings follow in the same record. They default to no
+client certificate. [mtls](mtls.md) describes them.
+
+| Setting | `WithX` | Default | Meaning |
+|---|---|---|---|
+| `ClientCertMode` | `WithClientCertMode` | `ccmNone` | whether the server asks for a client certificate: `ccmNone`, `ccmOptional` or `ccmRequired` |
+| `ClientCaFile` | `WithClientCaFile` | empty | the PEM file with the trust anchors for client certificates |
+| `ClientTrustSystemStore` | `WithClientTrustSystemStore` | False | the operating system store adds trust anchors |
+| `ClientPartialChain` | `WithClientPartialChain` | False | a leaf or intermediate trust anchor is enough |
+| `ClientVerifyDepth` | `WithClientVerifyDepth` | 4 | the longest accepted chain, 1 to 16 |
+| `ClientCertPrincipal` | `WithClientCertPrincipal` | `ccpNone` | what the server writes to `Principal` for a verified client |
+
 The default ALPN list holds the single name `h2`
-(`src/Http2Server.Config.pas:314-321`). [tls](tls.md) describes how the
+(`TTlsServerOptions.Create`). [tls](tls.md) describes how the
 ALPN name reaches OpenSSL.
 
 ### The pool settings
@@ -125,8 +137,8 @@ hooks run at the same time.
 ### The queue settings
 
 `TQueueOptions` is a record with its own fluent methods
-(`src/Http2Server.Config.pas:90`). `THttp2ServerFactory.WithQueue` accepts the
-record whole (`src/Http2Server.Config.pas:494`).
+(`src/Http2Server.Config.pas:96`). `THttp2ServerFactory.WithQueue` accepts the
+record whole (`src/Http2Server.Config.pas:624`).
 
 | Setting | `WithX` | Meaning |
 |---|---|---|
@@ -134,7 +146,7 @@ record whole (`src/Http2Server.Config.pas:494`).
 | `MaxWaitMs` | `WithMaxWaitMs` | the greatest wait of a queued request |
 | `RefusalMode` | `WithRefusalMode` | the action when the queue is full |
 
-`TQueueRefusalMode` has two values (`src/Http2Server.Config.pas:44`). The
+`TQueueRefusalMode` has two values (`src/Http2Server.Config.pas:50-53`). The
 value `rmRefuseStream` resets the stream with `REFUSED_STREAM`. The value
 `rmHttp503` answers HTTP 503. The two answers differ in the retry rule. RFC
 9113 §5.1.2 states that the error code decides whether automatic retry is
@@ -155,7 +167,7 @@ the free handlers is refused at once.
 | `MaxContinuationFrames` | `WithMaxContinuationFrames` | the greatest count of `CONTINUATION` frames in one header block |
 | `HeaderTableSize` | `WithHeaderTableSize` | `SETTINGS_HEADER_TABLE_SIZE` of the HPACK codecs |
 
-The stream settings are declared at `src/Http2Server.Config.pas:185-206`. The
+The stream settings are declared at `src/Http2Server.Config.pas:143-149`. The
 protocol limits come from the protocol units, not from the factory:
 `MinAllowedFrameSize` and `MaxAllowedFrameSize`
 (`src/Http2Server.Frames.pas:42`, `src/Http2Server.Frames.pas:44`), and
@@ -166,8 +178,8 @@ settings in `TConnectionSettings` (`src/Http2Server.Frames.pas:94`).
 
 The factory holds one `TTokenBucketOptions` per limited client action: the
 reset bucket and one bucket per control frame kind
-(`src/Http2Server.Config.pas:134-139`). Each bucket has its own `WithX`
-method (`src/Http2Server.Config.pas:557-600`). `TTokenBucketOptions` is the
+(`src/Http2Server.Config.pas:150-155`). Each bucket has its own `WithX`
+method (`src/Http2Server.Config.pas:702-742`). `TTokenBucketOptions` is the
 fluent record of `src/Http2Server.Limits.pas:71`; [limits](limits.md)
 describes the bucket itself.
 
@@ -182,7 +194,7 @@ describes the bucket itself.
 
 The reset bucket has two costs. `CostBeforeDispatch` applies to a reset before
 a handler runs, and `CostAfterDispatch` applies to a reset after a handler
-runs (`src/Http2Server.Limits.pas:224`). The other buckets take their cost
+runs (`src/Http2Server.Limits.pas:376-381`). The other buckets take their cost
 from the caller of `TryTake`.
 
 ### The timeout settings
@@ -193,17 +205,18 @@ from the caller of `TryTake`.
 | `HeaderTimeoutMs` | `WithHeaderTimeout` | the time the header block of a request may take |
 | `GracefulStopTimeoutMs` | `WithGracefulStopTimeout` | the time a graceful stop waits for the open streams |
 
-The timeout settings are declared at `src/Http2Server.Config.pas:229-237`.
+The timeout settings are declared at `src/Http2Server.Config.pas:156-158`.
 
 ### The wiring
 
 | Setting | `WithX` | Meaning |
 |---|---|---|
 | `Handler` | `WithHandler` | the handler that serves every request; required |
+| `AccessLogWriter` | `WithAccessLogWriter` | the receiver of the access log records; nil (the default) writes no log, see [access-log](access-log.md) |
 | `Clock` | `WithClock` | the clock of the token buckets and of the timeouts |
 
-The wiring is declared at `src/Http2Server.Config.pas:239-244`. `IHttp2Handler`
-is the handler contract (`src/Http2Server.Seam.pas:150`). `IMonotonicClock` is the
+The wiring is declared at `src/Http2Server.Config.pas:159-161`. `IHttp2Handler`
+is the handler contract (`src/Http2Server.Seam.pas:168-172`). `IMonotonicClock` is the
 clock interface, and `TMonotonicClock` is its real implementation
 (`src/Http2Server.Limits.pas:40`, `src/Http2Server.Limits.pas:47`). `Create`
 builds the default clock, so a caller sets no clock for a normal server.
@@ -211,7 +224,7 @@ builds the default clock, so a caller sets no clock for a normal server.
 ## Validation
 
 `Validate(out AProblems: TArray<string>): Boolean` collects every problem of
-the settings into one list (`src/Http2Server.Config.pas:627`). The answer is
+the settings into one list (`src/Http2Server.Config.pas:786`). The answer is
 `True` and the list is empty when every setting is correct. The answer is
 `False` and the list holds one message per problem when a setting is wrong.
 The method does not stop at the first problem.
@@ -229,6 +242,11 @@ The rules are:
 | the maximum queue wait is at least 0 | the maximum queue wait is below 0 |
 | the certificate file is present when cleartext is off | the certificate file is empty |
 | the key file is present when cleartext is off | the key file is empty |
+| a client certificate mode has a trust anchor | the mode is not `ccmNone`, the CA file is empty and the system store is off |
+| the client CA file exists | the CA file is named and absent |
+| the client verify depth is 1 to 16 | the depth is outside the range |
+| a client certificate mode has a server certificate | the mode is not `ccmNone` and the certificate file is empty |
+| the required mode runs with cleartext off | the mode is `ccmRequired` and cleartext is allowed |
 | the frame size is 16384 to 16777215 | the frame size is outside the range |
 | the initial stream window is at most 2^31-1 | the stream window is above the limit |
 | the initial connection window is at most 2^31-1 | the connection window is above the limit |
@@ -237,7 +255,7 @@ The rules are:
 Port 0 is legal, and it asks the operating system for a free port. The
 certificate and the key are not required when `ClearTextAllowed` is set, as
 `TestValidateCleartextNeedsNoCertificate` shows
-(`test/Http2Server.Config.Test.pas:376`).
+(`test/Http2Server.Config.Test.pas:423`).
 
 A caller that builds a server raises `EServerConfigError` when `Validate`
 answers `False` (`src/Http2Server.Errors.pas:79`). The message holds the whole
@@ -253,7 +271,7 @@ The values are:
 | Group | Defaults |
 |---|---|
 | Listener | host `0.0.0.0`, port 8443, backlog 128, cleartext off |
-| TLS | no certificate, no key, no password, ALPN `h2`, handshake timeout 10000 ms |
+| TLS | no certificate, no key, no password, ALPN `h2`, handshake timeout 10000 ms, no client certificate (`ccmNone`), verify depth 4, principal `ccpNone` |
 | Pools | 4 IO threads, 8 handler threads, 2 cancel workers |
 | Queue | depth 64, maximum wait 5000 ms, refusal by `REFUSED_STREAM` |
 | Streams | 100 concurrent streams, 65535 stream window, 65535 connection window, 16384 frame size, 65536 header list size, 16 `CONTINUATION` frames, 4096 header table |

@@ -56,7 +56,7 @@ time needs no real wait.
 
 `TTokenBucketOptions` is a fluent record
 (`src/Http2Server.Limits.pas:71`). `Create` returns a zeroed record
-(`src/Http2Server.Limits.pas:195`). Each `WithX` method returns a new record
+(`src/Http2Server.Limits.pas:217-223`). Each `WithX` method returns a new record
 with one field changed. The fields are:
 
 | Field | Meaning |
@@ -78,17 +78,17 @@ The configuration unit holds the defaults.
 
 `TTokenBucket` is a class with one method, `TryTake`
 (`src/Http2Server.Limits.pas:100`). The bucket starts full. `TryTake`
-refills from the clock (`src/Http2Server.Limits.pas:245`), then takes
+refills from the clock (`src/Http2Server.Limits.pas:274`), then takes
 `ACost` tokens when the bucket holds enough. The method returns `True` on a
 successful take and `False` on an empty bucket.
 
 The refill has two guards. A repeated or lower clock value adds no token, so
 time never runs backwards. A long idle time cannot raise the tokens above
-the capacity (`src/Http2Server.Limits.pas:264`).
+the capacity (`src/Http2Server.Limits.pas:291-294`).
 
 The trip state is sticky. The first empty-bucket answer sets `Tripped`, and
 every later `TryTake` returns `False` without a refill
-(`src/Http2Server.Limits.pas:268`). The connection is closing, so no later
+(`src/Http2Server.Limits.pas:298-299`). The connection is closing, so no later
 take can succeed.
 
 `TTokenBucket` has no lock. The caller holds the connection lock. Every call
@@ -119,9 +119,9 @@ size. One shared bucket of the least capacity closes a healthy connection
 that streams a large body.
 
 `Charge(AKind, ACost)` sends a cost to the bucket of `AKind`
-(`src/Http2Server.Limits.pas:312`). The reset bucket has two costs, so
+(`src/Http2Server.Limits.pas:361`). The reset bucket has two costs, so
 `ChargeReset(AAfterDispatch)` selects the cost that matches the dispatch
-state (`src/Http2Server.Limits.pas:326`).
+state (`src/Http2Server.Limits.pas:375`).
 
 The trip state of the set is sticky in the same way as the bucket. The first
 empty-bucket answer sets `Tripped`, and every later `Charge` returns `False`
@@ -173,26 +173,26 @@ streaming pool and uses no token bucket.
 ## The default limits
 
 `THttp2ServerFactory.Create` sets the default of every bucket
-(`src/Http2Server.Config.pas:419`). The reset bucket holds 1000 tokens, with
+(`src/Http2Server.Config.pas:457`). The reset bucket holds 1000 tokens, with
 a refill of 100 tokens a second, a cost of one token before dispatch and
-five tokens after it (`src/Http2Server.Config.pas:420`).
+five tokens after it (`src/Http2Server.Config.pas:492-496`).
 
 The `SETTINGS`, `empty DATA` and `CONTINUATION` buckets each hold 100 tokens,
-with a refill of 10 tokens a second (`src/Http2Server.Config.pas:429`). The
-`PING` bucket holds the same values (`src/Http2Server.Config.pas:425`). Each
+with a refill of 10 tokens a second (`src/Http2Server.Config.pas:500-505` and `515-517`). The
+`PING` bucket holds the same values (`src/Http2Server.Config.pas:497-499`). Each
 of these kinds is a flood signal with no legitimate high rate, so a small
 bucket is the correct default.
 
 The `WINDOW_UPDATE` bucket holds 10000 tokens, with a refill of 4000 tokens
-a second (`src/Http2Server.Config.pas:440`). The capacity admits a whole
+a second (`src/Http2Server.Config.pas:512-514`). The capacity admits a whole
 burst of a few megabytes, and the refill rate sits above the measured
 rate of 2450 frames a second with headroom. A small bucket of 100 tokens
 closed a healthy connection on a body of less than two megabytes: 107
 control frames arrived before the body ended. The measurement is in
 [validation](../verification/validation.md).
 
-The queue depth of 64 (`src/Http2Server.Config.pas:369`) and the IO thread
-count of 4 (`src/Http2Server.Config.pas:409`) come from the same seam
+The queue depth of 64 (`src/Http2Server.Config.pas:431`) and the IO thread
+count of 4 (`src/Http2Server.Config.pas:471`) come from the same seam
 measurement. The listener, stream and timeout values are the chosen protocol
 and operational bounds: RFC 9113 section 6.5.2 sets 100 concurrent streams as
 the customary value, 16384 is the frame size that RFC 9113 section 4.2

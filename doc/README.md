@@ -43,6 +43,7 @@ library.
 | --- | --- |
 | [configuration](design/configuration.md) | The factory record, the option records it carries and the validation rules. |
 | [public-api](design/public-api.md) | The factory, the server, the handler contract and the observation events. |
+| [access-log](design/access-log.md) | The access log record, the writer contract, the principal and the Common Log Format text. |
 | [lifecycle](design/lifecycle.md) | The life of one server from `Start` to `Stop`, the GOAWAY broadcast and the drain wait. |
 | [seam](design/seam.md) | The handler-facing interfaces, the blocking waiter, the cancel workers and the per-stream buffers. |
 | [admission](design/admission.md) | The bounded queue, the handler pool, the refusal modes and the counters. |
@@ -55,6 +56,7 @@ library.
 | [limits](design/limits.md) | The token buckets that bound the work a peer may ask for. |
 | [io-pool](design/io-pool.md) | The mORMot2 async subclasses, the write wake-up and the thread rule. |
 | [tls](design/tls.md) | The route to ALPN, the TLS plug-in of a connection and the OpenSSL binding. |
+| [mtls](design/mtls.md) | Mutual TLS: the client certificate modes, the identity record, the path to the handler and the WebSocket handshake over HTTP/2. |
 | [fpc-runtime](design/fpc-runtime.md) | The Free Pascal facts the library rests on: compiler modes, the thread manager and the build line. |
 | [future-coroutines](design/future-coroutines.md) | The deferred coroutine option, the research result and the open items. |
 

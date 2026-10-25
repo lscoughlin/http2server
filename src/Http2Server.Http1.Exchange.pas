@@ -34,7 +34,8 @@ uses
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Duplex,
   Http2Server.HandlerJob, Http2Server.Http1.Guard, Http2Server.Http1.Host,
   Http2Server.Http1.ResponseHead, Http2Server.Http1.Channel,
-  Http2Server.Http1.SocketChannel;
+  Http2Server.Http1.SocketChannel, Http2Server.AccessLog,
+  Http2Server.ClientCert;
 
 type
   TH1ExchangeOptions = record
@@ -48,8 +49,14 @@ type
   end;
 
   TH1Exchange = class(TInterfacedObject, IServerRequest, IServerResponse,
-    IHandlerJob, IH1ChannelOwner, IH1UpgradeOwner, IH1Upgradable)
+    IHandlerJob, IH1ChannelOwner, IH1UpgradeOwner, IH1Upgradable, IAccessLogProbe,
+    IAccessLogRemoteSink, IClientCertificateSink)
   private
+    FPrincipal: string;
+    FClientCert: IClientCertificate;
+    FRemoteAddress: string;
+    FStatus: Integer;
+    FBodyOctets: Int64;
     FLink: THostLink;
     FLinkRef: IInterface;
     FHead: TH1Head;
@@ -135,6 +142,16 @@ type
     function BodyIsComplete: Boolean;
     function IsCancelled: Boolean;
     function StreamId: LongWord;
+    function GetPrincipal: string;
+    procedure SetPrincipal(const AValue: string);
+    function GetClientCertificate: IClientCertificate;
+    procedure SetClientCertificate(const AValue: IClientCertificate);
+
+    // IAccessLogProbe
+    function LoggedStatus: Integer;
+    function LoggedBodyOctets: Int64;
+    function LoggedRemoteAddress: string;
+    function LoggedProtocol: string;
 
     // IServerResponse
     procedure SendHeaders(const AStatus: Integer; const AHeaders: THeaderBlock;
@@ -152,6 +169,8 @@ type
     procedure Cancel;
 
     property Head: TH1Head read FHead;
+    // IAccessLogRemoteSink
+    procedure SetLoggedRemoteAddress(const AValue: string);
   end;
 
 implementation
@@ -298,6 +317,53 @@ end;
 function TH1Exchange.StreamId: LongWord;
 begin
   Result := FOrdinal;
+end;
+
+function TH1Exchange.GetClientCertificate: IClientCertificate;
+begin
+  Result := FClientCert;
+end;
+
+procedure TH1Exchange.SetClientCertificate(const AValue: IClientCertificate);
+begin
+  FClientCert := AValue;
+  if (AValue <> nil) and (AValue.PrincipalText <> '') then
+    FPrincipal := AValue.PrincipalText;
+end;
+
+function TH1Exchange.GetPrincipal: string;
+begin
+  Result := FPrincipal;
+end;
+
+procedure TH1Exchange.SetPrincipal(const AValue: string);
+begin
+  FPrincipal := AValue;
+end;
+
+procedure TH1Exchange.SetLoggedRemoteAddress(const AValue: string);
+begin
+  FRemoteAddress := AValue;
+end;
+
+function TH1Exchange.LoggedStatus: Integer;
+begin
+  Result := FStatus;
+end;
+
+function TH1Exchange.LoggedBodyOctets: Int64;
+begin
+  Result := FBodyOctets;
+end;
+
+function TH1Exchange.LoggedRemoteAddress: string;
+begin
+  Result := FRemoteAddress;
+end;
+
+function TH1Exchange.LoggedProtocol: string;
+begin
+  Result := 'HTTP/1.' + IntToStr(FHead.Line.Minor);
 end;
 
 function TH1Exchange.Read(var ABuffer; const ACount: Integer): Integer;
@@ -498,6 +564,7 @@ begin
       raise EStreamCancelled.Create('the exchange ended before the response');
     raise EHttpError.Create('the response headers were sent already');
   end;
+  FStatus := AStatus;
   FFraming := Framing;
   FKeep := Framing.Keep;
   FRemaining := Framing.Remaining;
@@ -553,6 +620,7 @@ begin
       Dec(FRemaining, ACount);
   end;
   Emit(Frame);
+  Inc(FBodyOctets, ACount);
 end;
 
 procedure TH1Exchange.Write(const ABuffer; const ACount: Integer);
@@ -616,6 +684,7 @@ begin
   if not ClaimResponse then
     Exit;
   FKeep := False;
+  FStatus := AStatus;
   Emit(H1ErrorResponse(AStatus, FHead.Line.Minor, Extra));
   CompleteExchange(True);
 end;
@@ -840,6 +909,7 @@ begin
   for I := 0 to High(AHeaders) do
     S := S + AHeaders[I].Name + ': ' + AHeaders[I].Value + #13#10;
   S := S + #13#10;
+  FStatus := AStatus;
   FKeep := False;
   Emit(H1TextBytes(S));
   FLock.Acquire;

@@ -68,7 +68,9 @@ type
     /// a WebSocket callback raised an exception
     seWsFailed,
     /// a WebSocket token bucket tripped
-    seWsBucketTripped);
+    seWsBucketTripped,
+    /// a TLS handshake failed while client certificates were on
+    seTlsHandshakeFailed);
 
   /// one event of the server
   TServerEvent = record

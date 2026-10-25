@@ -70,6 +70,8 @@ uses
   Http2Server.Encoding.Test,
   Http2Server.Validation.Test,
   Http2Server.Admission.Test,
+  Http2Server.AccessLog.Test,
+  Http2Server.Mtls.Test,
   Http2Server.Server.Test;
 
 const

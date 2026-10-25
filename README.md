@@ -38,6 +38,7 @@ the copied protocol units.
 - `doc/design/sse.md` holds the server-sent event stream.
 - `doc/design/http1.md` holds the HTTP/1.1 fallback.
 - `doc/design/websocket.md` holds the WebSocket session, the handshakes and the limits.
+- `doc/design/mtls.md` holds mutual TLS: the client certificate modes, the trust and the identity.
 - `doc/verification/validation.md` holds the conformance record.
 - `doc/verification/toolchain.md` holds the compiler and the build.
 
@@ -49,6 +50,24 @@ task build        # build the library unit
 task test         # run the fpcunit suite
 task docs:check   # check the documentation tree
 task validate     # run the external conformance tools
+```
+
+## Mutual TLS
+
+The factory asks a TLS client for a certificate with `WithClientCertMode` on the
+TLS options. The mode `ccmOptional` serves a client without a certificate, and
+`ccmRequired` refuses it in the handshake. The trust anchors come from
+`WithClientCaFile`, and from the system store when `WithClientTrustSystemStore`
+is on. A self-signed client certificate is trusted when it is in the CA file. A
+handler reads the verified identity from `IServerRequest.ClientCertificate`. The
+example `examples/mtls_server.pas` shows a server, and `make mtls-live` runs the
+live validation against the sibling client at `../http2client`. A test PKI comes
+from `tools/certs/make_mtls_pki.sh`:
+
+```sh
+sh tools/certs/make_mtls_pki.sh /tmp/pki
+bin/mtls_server /tmp/pki/server.crt /tmp/pki/server.key /tmp/pki/ca.crt
+curl --cacert /tmp/pki/ca.crt --cert /tmp/pki/alice.crt --key /tmp/pki/alice.key https://localhost:8443/
 ```
 
 The pinned compiler is Free Pascal 3.2.4. OpenSSL 3 is needed at run time.

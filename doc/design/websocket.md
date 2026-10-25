@@ -315,6 +315,17 @@ connection. The session returns credit to the stream when the parser takes the o
 and it holds the credit back while its queue is full. An outbound message waits in the
 channel queue, and `Send` answers `srFull` when the queue is full.
 
+### The client certificate
+
+When the listener asks for client certificates ([mtls](mtls.md)), the identity of the
+TLS client belongs to the connection. The extended `CONNECT` request reads it through
+`IServerRequest.ClientCertificate`, as every other stream does. The session snapshot
+of the request holds the same reference, so `IWsSession.Request.ClientCertificate`
+answers the identity after the handler call of the handshake has returned. The same
+rule holds for the HTTP/1.1 upgrade. In the optional mode a client without a
+certificate still opens a session, the identity is nil, and `Init` can refuse with a
+status such as 401.
+
 ### The cost of a refusal
 
 A refused handshake is an ordinary response on a live stream. It is not a reset, and

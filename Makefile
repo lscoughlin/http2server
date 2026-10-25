@@ -37,7 +37,7 @@ SRC        = $(wildcard src/*.pas)
 EXAMPLESRC = $(wildcard examples/*.pas)
 BIN        = bin
 
-.PHONY: all test examples clean
+.PHONY: all test examples mtls-live clean
 
 all: $(BIN)/libhttp2server.a
 
@@ -58,6 +58,18 @@ examples: all | $(BIN)
 		[ -e "$$f" ] || continue; \
 		$(FPC) $(FPCFLAGS) -FE$(BIN) $$f || exit 1; \
 	done
+
+# Live validation of mutual TLS against the sibling client. The target needs the
+# sibling checkout at HTTP2CLIENT and the openssl command; it puts no load on the
+# server. The PKI is made in a fresh directory under bin/ on every run.
+HTTP2CLIENT ?= ../http2client/src
+MTLS_PKI    = $(BIN)/mtls-pki
+
+mtls-live: all | $(BIN)
+	rm -rf $(MTLS_PKI)
+	sh tools/certs/make_mtls_pki.sh $(MTLS_PKI)
+	$(FPC) $(FPCFLAGS) -Fu$(HTTP2CLIENT) -Fu./test/mtls -FE$(BIN) test/mtls/Http2Server.MtlsLive.pas
+	$(BIN)/Http2Server.MtlsLive $(MTLS_PKI)
 
 clean:
 	rm -rf $(BIN) src/*.o src/*.ppu test/*.o test/*.ppu examples/*.o examples/*.ppu

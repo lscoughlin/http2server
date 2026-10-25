@@ -31,7 +31,8 @@ unit Http2Server.Seam;
 interface
 
 uses
-  SysUtils, Http2Server.Errors, Http2Server.Hpack, Http2Server.Duplex;
+  SysUtils, Http2Server.Errors, Http2Server.Hpack, Http2Server.Duplex,
+  Http2Server.ClientCert;
 
 type
   /// the outcome of one IStreamWaiter.Wait call
@@ -83,7 +84,7 @@ type
   /// The request is byte-oriented.  No method converts a text encoding and no
   /// method takes a string as a byte container.
   IServerRequest = interface
-    ['{7E1F0C11-0003-4A11-9C72-000000000503}']
+    ['{7E1F0C11-0003-4A11-9C72-000000000513}']
     /// ':method'
     function Method: string;
     /// ':scheme'
@@ -109,6 +110,22 @@ type
     function IsCancelled: Boolean;
     /// the stream id of the request
     function StreamId: LongWord;
+    /// the authenticated principal of the request; an empty text when none
+    // - code that authenticates the request (a Basic check, an OAuth2 token
+    //   check) sets it; the access log writes it in the user field
+    // - when the principal is empty, the access log uses the user name of a
+    //   Basic `authorization` header; that name is not verified
+    // - the handler thread sets and reads it; it is not guarded by a lock
+    function GetPrincipal: string;
+    procedure SetPrincipal(const AValue: string);
+    property Principal: string read GetPrincipal write SetPrincipal;
+    /// the verified client certificate of the connection; nil when the
+    /// connection is cleartext, when no certificate was asked for, or when the
+    /// client sent none in the optional mode
+    // - the value belongs to the connection and never changes, so a handler
+    //   and a WebSocket session read it without a lock
+    function GetClientCertificate: IClientCertificate;
+    property ClientCertificate: IClientCertificate read GetClientCertificate;
   end;
 
   /// The response as one handler writes it.
