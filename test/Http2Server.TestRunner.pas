@@ -80,6 +80,8 @@ uses
   Http2Server.H2Locks.Test,
   Http2Server.WsHardening.Test,
   Http2Server.Lifecycle.Test,
+  Http2Server.ConfigRanges.Test,
+  Http2Server.Facade.Test,
   Http2Server.Server.Test;
 
 const

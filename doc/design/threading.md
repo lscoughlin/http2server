@@ -103,10 +103,10 @@ registered hook runs on to completion, and the server discards the response
 after it returns.
 
 **Known limit.** The running server does not create a `TCancelWorkerPool` and
-attaches none to the waiter of a stream, although the factory holds the setting
-`CancelWorkerThreads`. A hook that a handler registers through
-`RegisterCancelHook` therefore does not run in the server today. A test attaches
-a pool to a waiter by hand and shows the hook behaviour of the unit.
+attaches none to the waiter of a stream, so the factory has no setting for it. A
+hook that a handler registers through `RegisterCancelHook` therefore does not run
+in the server today. A test attaches a pool to a waiter by hand and shows the
+hook behaviour of the unit.
 
 ## The streaming pool
 

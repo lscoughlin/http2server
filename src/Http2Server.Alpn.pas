@@ -5,7 +5,10 @@ copyright: Copyright 2026 Liam Seamus Coughlin
 keywords: alpn, tls, openssl
 notes:
   - binds the OpenSSL SSL_CTX_set_alpn_select_cb entry point of libssl
-  - the callback selects h2 and refuses a client that does not offer it
+  - the callback selects h2 wherever the client lists it, falls back to
+    http/1.1 only when the policy allows it, and refuses any other list
+  - each fallback value has its own static policy record, so two servers in one
+    process with different settings keep their own ALPN policy
   - the mORMot2 libssl handle is private, so libssl is loaded a second time
   - the protocol decision is a separate pure function, so a test reaches
     every branch without a TLS handshake
@@ -41,6 +44,11 @@ type
 // - arg points at a TAlpnServerPolicy, or is nil for the h2-only policy
 function Http2AlpnSelectCallback(ssl: PSSL; out_: PPByte; outlen: PByte;
   in_: PByte; inlen: cardinal; arg: pointer): integer; cdecl;
+
+/// the callback argument for a fallback setting
+// - the record has a process lifetime and never changes, so it needs no free
+//   and two contexts with different settings never share a value
+function Http2AlpnPolicyArg(AAllowHttp11: boolean): pointer;
 
 /// the ALPN protocol name that the last handshake selected on this SSL
 // - returns '' when no protocol was selected
@@ -91,7 +99,10 @@ type
   end;
 
 var
-  fPolicy: TAlpnServerPolicy;
+  /// one policy record per fallback value: a context points at the record of
+  /// its own setting, so two servers in one process keep their own policy
+  fPolicyH2Only: TAlpnServerPolicy = (AllowHttp11: false);
+  fPolicyWithHttp11: TAlpnServerPolicy = (AllowHttp11: true);
   fLibSsl: TSynLibrary;
   fSetAlpnSelectCb: TSslCtxSetAlpnSelectCb;
 
@@ -115,8 +126,11 @@ var
       end;
   end;
 
+var
+  fallback: Integer;
 begin
   result := -1;
+  fallback := -1;
   p := 0;
   while p < length(AClientList) do
   begin
@@ -129,17 +143,17 @@ begin
       exit; // a truncated entry is malformed
     if EntryIs('h2') then
     begin
+      // the server chooses (RFC 7301 section 3.2), and it prefers h2 wherever
+      // the client lists it
       result := p;
       exit;
     end;
-    if AAllowHttp11 and
+    if AAllowHttp11 and (fallback < 0) and
        EntryIs('http/1.1') then
-    begin
-      result := p;
-      exit;
-    end;
+      fallback := p;
     inc(p, n);
   end;
+  result := fallback;
 end;
 
 function Http2AlpnSelectProtocol(const AClientList: TBytes;
@@ -258,9 +272,16 @@ begin
     exit;
   if not Http2AlpnBindingAvailable then
     exit;
-  fPolicy.AllowHttp11 := allowHttp11;
-  fSetAlpnSelectCb(ctx, Http2AlpnSelectCallback, @fPolicy);
+  fSetAlpnSelectCb(ctx, Http2AlpnSelectCallback, Http2AlpnPolicyArg(allowHttp11));
   result := true;
+end;
+
+function Http2AlpnPolicyArg(AAllowHttp11: boolean): pointer;
+begin
+  if AAllowHttp11 then
+    result := @fPolicyWithHttp11
+  else
+    result := @fPolicyH2Only;
 end;
 
 function Http2AlpnAttach(const bound: TCrtSocket; allowHttp11: boolean): boolean;

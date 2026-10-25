@@ -25,6 +25,10 @@ uses
   Http2Server.Config, Http2Server.Connection, Http2Server.Tls,
   Http2Server.Limits;
 
+/// the address text that mORMot2 binds: the host, a colon and the port
+// - an empty host binds every IPv4 address
+function BindAddressText(const AHost: string; const APort: Integer): RawUtf8;
+
 /// the TLS policy of the listener, with the client certificate settings
 function BuildTlsPolicy(const AFactory: THttp2ServerFactory): TTlsPolicy;
 
@@ -46,6 +50,17 @@ procedure SetHandshakeDeadline(const ASocket: TNetSocket;
   const ARequestedMs: LongWord);
 
 implementation
+
+function BindAddressText(const AHost: string; const APort: Integer): RawUtf8;
+var
+  Host: string;
+begin
+  Host := AHost;
+  if Host = '' then
+    Host := '0.0.0.0';
+  // mORMot2 splits the text at the last colon, so an IPv6 host needs no bracket
+  result := RawUtf8(Host + ':' + IntToStr(APort));
+end;
 
 function BuildTlsPolicy(const AFactory: THttp2ServerFactory): TTlsPolicy;
 begin

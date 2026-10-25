@@ -42,6 +42,7 @@ uses
   mormot.core.threads,
   mormot.net.sock,
   mormot.net.async,
+  mormot.net.server,
   Http2Server.Errors,
   Http2Server.Config,
   Http2Server.Connection,
@@ -224,6 +225,8 @@ type
     /// queue a GOAWAY frame on every open connection, then wake its output
     // - the last stream identifier that the core processed goes into the
     //   frame, so a peer keeps the streams below it
+    procedure WaitBindDone;
+    procedure AfterConstruction; override;
     procedure BroadcastGoAway(const AErrorCode: THttp2ErrorCode);
     /// refuse new connections and tell every HTTP/1.1 connection to close after
     /// the request it serves
@@ -245,6 +248,10 @@ const
   cBindWaitSeconds = 5;
   /// the write timeout a handler-thread wake-up tolerates, in milliseconds
   cWriteTimeoutMs = 1000;
+
+var
+  /// serializes the set of DefaultListenBacklog with the bind that reads it
+  GBindLock: TCriticalSection;
 
 { THttp2AsyncConnection }
 
@@ -756,12 +763,26 @@ begin
   Options := ASYNC_OPTION_PROD;
   if AFactory.Tls.CertificateFile <> '' then
     include(Options, acoEnableTls);
-  inherited Create(IntToStr(AFactory.Port), nil, nil, THttp2AsyncConnection,
-    'http2', nil, Options, AFactory.IOThreads);
-  // the backlog of the factory reaches bind() through this mORMot2 global
-  // (mormot.net.sock.pas:3495, 8715, read 2026-10-07)
-  DefaultListenBacklog := AFactory.Backlog;
+  inherited Create(BindAddressText(AFactory.Host, AFactory.Port), nil, nil,
+    THttp2AsyncConnection, 'http2', nil, Options, AFactory.IOThreads);
   MaxConnections := MaxInt;
+end;
+
+procedure THttp2AsyncServer.AfterConstruction;
+begin
+  // the thread that binds starts here, at the end of the construction. The
+  // backlog of the factory reaches listen() through a mORMot2 global
+  // (mormot.net.sock.pas, DefaultListenBacklog), so the global is set before
+  // the thread starts and kept under a lock until that thread has left the
+  // binding state. Two servers that are built at once keep their own backlog
+  GBindLock.Enter;
+  try
+    DefaultListenBacklog := FFactory.Backlog;
+    inherited AfterConstruction;
+    WaitBindDone;
+  finally
+    GBindLock.Leave;
+  end;
 end;
 
 destructor THttp2AsyncServer.Destroy;
@@ -832,6 +853,18 @@ procedure THttp2AsyncServer.TlsHandshakeFailed(const ADetail: string);
 begin
   FCounters.TlsFailed;
   Notify(seTlsHandshakeFailed, 0, lkReset, ADetail);
+end;
+
+procedure THttp2AsyncServer.WaitBindDone;
+var
+  Deadline: QWord;
+begin
+  // the thread that binds leaves the not-started and binding states once
+  // listen() ran or the bind failed. A failure is raised later by WaitStarted
+  Deadline := GetTickCount64 + QWord(cBindWaitSeconds) * 1000;
+  while (fExecuteState in [esNotStarted, esBinding]) and
+        (GetTickCount64 < Deadline) do
+    Sleep(1);
 end;
 
 procedure THttp2AsyncServer.BeginDrain;
@@ -959,5 +992,11 @@ begin
     if Server.Sock.GetName(Addr) = nrOk then
       result := Addr.Port;
 end;
+
+initialization
+  GBindLock := TCriticalSection.Create;
+
+finalization
+  GBindLock.Free;
 
 end.

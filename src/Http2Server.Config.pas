@@ -46,6 +46,11 @@ uses
   Http2Server.Mtls.Types,
   Http2Server.Seam;
 
+const
+  /// the greatest header table size: 2^31 - 1, so the value fits a signed
+  /// 32-bit number in the HPACK encoder and decoder
+  cMaxHeaderTableSize = High(LongInt);
+
 type
   /// the action of the server when the request queue is full
   TQueueRefusalMode = (
@@ -64,7 +69,6 @@ type
     FCertificateFile: string;
     FKeyFile: string;
     FKeyPassword: string;
-    FAlpnProtocols: TArray<string>;
     FHandshakeTimeoutMs: Integer;
     FClientCertMode: TClientCertMode;
     FClientCaFile: string;
@@ -81,9 +85,6 @@ type
     function WithKeyFile(const AValue: string): TTlsServerOptions;
     /// the password of an encrypted key, or an empty string
     function WithKeyPassword(const AValue: string): TTlsServerOptions;
-    /// the ALPN protocol names the server offers, in preference order
-    function WithAlpnProtocols(
-      const AValue: TArray<string>): TTlsServerOptions;
     /// the time a TLS handshake may take, in milliseconds
     function WithHandshakeTimeoutMs(
       const AValue: Integer): TTlsServerOptions;
@@ -106,7 +107,6 @@ type
     property CertificateFile: string read FCertificateFile;
     property KeyFile: string read FKeyFile;
     property KeyPassword: string read FKeyPassword;
-    property AlpnProtocols: TArray<string> read FAlpnProtocols;
     property HandshakeTimeoutMs: Integer read FHandshakeTimeoutMs;
     property ClientCertMode: TClientCertMode read FClientCertMode;
     property ClientCaFile: string read FClientCaFile;
@@ -158,7 +158,6 @@ type
     FTls: TTlsServerOptions;
     FIOThreads: Integer;
     FHandlerThreads: Integer;
-    FCancelWorkerThreads: Integer;
     FStreamPoolSize: Integer;
     FMaxDetachedStreams: Integer;
     FChannelQueueLimit: Integer;
@@ -221,9 +220,6 @@ type
 
     /// the number of handler pool threads
     function WithHandlerThreads(const AValue: Integer): THttp2ServerFactory;
-    /// the number of cancel-worker threads that run the cancel hooks
-    function WithCancelWorkerThreads(
-      const AValue: Integer): THttp2ServerFactory;
 
     // ---- detached streams ----
 
@@ -351,7 +347,6 @@ type
     // ---- handler pool ----
 
     property HandlerThreads: Integer read FHandlerThreads;
-    property CancelWorkerThreads: Integer read FCancelWorkerThreads;
 
     // ---- detached streams ----
 
@@ -413,10 +408,6 @@ begin
   Result.FCertificateFile := '';
   Result.FKeyFile := '';
   Result.FKeyPassword := '';
-  // a dynamic-array field needs an explicit empty value before SetLength
-  Result.FAlpnProtocols := nil;
-  SetLength(Result.FAlpnProtocols, 1);
-  Result.FAlpnProtocols[0] := 'h2';
   Result.FHandshakeTimeoutMs := 10000;
   Result.FClientCertMode := ccmNone;
   Result.FClientCaFile := '';
@@ -445,13 +436,6 @@ function TTlsServerOptions.WithKeyPassword(
 begin
   Result := Self;
   Result.FKeyPassword := AValue;
-end;
-
-function TTlsServerOptions.WithAlpnProtocols(
-  const AValue: TArray<string>): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FAlpnProtocols := AValue;
 end;
 
 function TTlsServerOptions.WithHandshakeTimeoutMs(
@@ -563,7 +547,6 @@ begin
   Result.FTls := TTlsServerOptions.Create;
   Result.FIOThreads := 4;
   Result.FHandlerThreads := 8;
-  Result.FCancelWorkerThreads := 2;
   Result.FStreamPoolSize := 1;
   Result.FMaxDetachedStreams := 10000;
   Result.FChannelQueueLimit := 262144;
@@ -664,13 +647,6 @@ function THttp2ServerFactory.WithHandlerThreads(
 begin
   Result := Self;
   Result.FHandlerThreads := AValue;
-end;
-
-function THttp2ServerFactory.WithCancelWorkerThreads(
-  const AValue: Integer): THttp2ServerFactory;
-begin
-  Result := Self;
-  Result.FCancelWorkerThreads := AValue;
 end;
 
 function THttp2ServerFactory.WithStreamPoolSize(
@@ -897,6 +873,14 @@ var
     Problems[Count - 1] := AProblem;
   end;
 
+  procedure CheckBucket(const AName: string; const ABucket: TTokenBucketOptions);
+  begin
+    if ABucket.Capacity < 1 then
+      Add('the ' + AName + ' bucket capacity is below 1');
+    if ABucket.RefillPerSecond < 0 then
+      Add('the ' + AName + ' bucket refill rate is below 0');
+  end;
+
 begin
   Problems := nil;
 
@@ -909,8 +893,6 @@ begin
     Add('the IO thread count is below 1');
   if FHandlerThreads < 1 then
     Add('the handler thread count is below 1');
-  if FCancelWorkerThreads < 1 then
-    Add('the cancel worker thread count is below 1');
   if FStreamPoolSize < 1 then
     Add('the streaming pool size is below 1');
   if FMaxDetachedStreams < 0 then
@@ -933,10 +915,10 @@ begin
     Add('the maximum queue wait is below 0');
   if not FClearTextAllowed then
   begin
+    // the key file is optional: ApplyTls accepts a certificate file that
+    // holds the key too
     if FTls.CertificateFile = '' then
       Add('the TLS certificate file is empty while cleartext is off');
-    if FTls.KeyFile = '' then
-      Add('the TLS key file is empty while cleartext is off');
   end;
   if FTls.ClientCertMode <> ccmNone then
   begin
@@ -961,6 +943,26 @@ begin
     Add('the initial stream window is above ' + IntToStr(MaxWindowSize));
   if FInitialConnectionWindow > LongWord(MaxWindowSize) then
     Add('the initial connection window is above ' + IntToStr(MaxWindowSize));
+  if FInitialStreamWindow < 1 then
+    Add('the initial stream window is below 1');
+  if FInitialConnectionWindow < 1 then
+    Add('the initial connection window is below 1');
+  if FMaxConcurrentStreams < 1 then
+    Add('the concurrent stream limit is below 1');
+  if FHeaderTableSize > cMaxHeaderTableSize then
+    Add('the header table size is above ' + IntToStr(cMaxHeaderTableSize));
+  CheckBucket('reset', FResetBucket);
+  CheckBucket('ping', FPingBucket);
+  CheckBucket('settings', FSettingsBucket);
+  CheckBucket('empty-data', FEmptyDataBucket);
+  CheckBucket('window-update', FWindowUpdateBucket);
+  CheckBucket('continuation', FContinuationBucket);
+  if FIdleTimeoutMs < 0 then
+    Add('the idle timeout is below 0');
+  if FHeaderTimeoutMs < 0 then
+    Add('the header timeout is below 0');
+  if FGracefulStopTimeoutMs < 0 then
+    Add('the graceful stop timeout is below 0');
   if FHandler = nil then
     Add('the handler is not assigned');
 

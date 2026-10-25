@@ -23,7 +23,8 @@ invariants:
     fatal alert, so no HTTP/1.1 request ever reaches an HTTP/2 code path.
     With the HTTP/1.1 fallback on, a client that offers http/1.1 or no ALPN
     extension is served by the HTTP/1.1 core and never by the HTTP/2 core.
-  - The ALPN callback argument outlives every handshake.
+  - The ALPN callback argument outlives every handshake. It is one of two static records, one for each value of the HTTP/1.1 fallback, so two servers in one process keep their own policy.
+  - The server chooses the protocol (RFC 7301 section 3.2). It picks h2 wherever the client lists it, and http/1.1 only when the fallback is on and h2 is absent.
   - A TLS connection that did not negotiate h2 is refused after the handshake when the fallback is off, and is served as HTTP/1.1 when the fallback is on.
   - The handshake deadline of the factory never exceeds the mORMot2 bound.
 ---

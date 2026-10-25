@@ -30,7 +30,7 @@ interface
 
 uses
   SysUtils, Classes,
-  Http2Server.Hpack, Http2Server.Seam, zstream;
+  Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, zstream;
 
 type
   /// the content codings this server can produce
@@ -70,12 +70,22 @@ function DeflateCompress(const AData: TBytes): TBytes;
 /// compress AData into a bare deflate stream (no zlib header)
 function RawDeflateCompress(const AData: TBytes): TBytes;
 
+const
+  /// the default bound of the output of a decompression, in octets
+  // - a small compressed body can inflate to a very large one, so the output
+  //   has a bound; a larger body raises EHttpError
+  DefaultMaxInflatedBytes = 64 * 1024 * 1024;
+
 /// decompress a gzip container
-function GzipDecompress(const AData: TBytes): TBytes;
+// - the output is at most AMaxBytes octets; a longer output raises EHttpError
+function GzipDecompress(const AData: TBytes;
+  const AMaxBytes: Int64 = DefaultMaxInflatedBytes): TBytes;
 /// decompress a deflate body, zlib-wrapped or bare
 // - many clients send a bare deflate stream under the name `deflate`, so the
 //   container is detected from the first two bytes rather than assumed
-function DeflateDecompress(const AData: TBytes): TBytes;
+// - the output is at most AMaxBytes octets; a longer output raises EHttpError
+function DeflateDecompress(const AData: TBytes;
+  const AMaxBytes: Int64 = DefaultMaxInflatedBytes): TBytes;
 
 /// compact AData for ACoding, or return AData when the coding is identity
 function CompressFor(const ACoding: TContentEncoding;
@@ -345,8 +355,8 @@ begin
   Result := CompressInto(AData, clDefault, False, True);
 end;
 
-function InflateAll(const AData: TBytes; const AGzip, ASkipHeader: Boolean)
-  : TBytes;
+function InflateAll(const AData: TBytes; const AGzip, ASkipHeader: Boolean;
+  const AMaxBytes: Int64): TBytes;
 var
   Src, Dst: TMemoryStream;
   D: TStream;
@@ -368,7 +378,12 @@ begin
       repeat
         N := D.Read(Buf[0], SizeOf(Buf));
         if N > 0 then
+        begin
+          if Dst.Size + N > AMaxBytes then
+            raise EHttpError.Create('the decompressed body is larger than ' +
+              IntToStr(AMaxBytes) + ' octets');
           Dst.Write(Buf[0], N);
+        end;
       until N <= 0;
     finally
       D.Free;
@@ -385,9 +400,9 @@ begin
   end;
 end;
 
-function GzipDecompress(const AData: TBytes): TBytes;
+function GzipDecompress(const AData: TBytes; const AMaxBytes: Int64): TBytes;
 begin
-  Result := InflateAll(AData, True, False);
+  Result := InflateAll(AData, True, False, AMaxBytes);
 end;
 
 function LooksZlib(const AData: TBytes): Boolean;
@@ -404,12 +419,12 @@ begin
   Result := ((CMF and $0F) = 8) and (((CMF shl 8) + FLG) mod 31 = 0);
 end;
 
-function DeflateDecompress(const AData: TBytes): TBytes;
+function DeflateDecompress(const AData: TBytes; const AMaxBytes: Int64): TBytes;
 begin
   if LooksZlib(AData) then
-    Result := InflateAll(AData, False, False)
+    Result := InflateAll(AData, False, False, AMaxBytes)
   else
-    Result := InflateAll(AData, False, True);
+    Result := InflateAll(AData, False, True, AMaxBytes);
 end;
 
 function CompressFor(const ACoding: TContentEncoding;

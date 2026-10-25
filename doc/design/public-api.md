@@ -135,6 +135,20 @@ off, and `WithHttp11Limits` sets the limits of the parser. `IServerRequest` and
 `IServerResponse` have the same meaning on both protocols, and `Detach` works on
 both. The document [http1](http1.md) lists what a handler can see.
 
+## The facade
+
+The unit `Http2Server` exports every type and constant that a method of the
+factory or a field of an event needs, so a caller names no other server unit. This
+holds for `THttp11Limits`, `IMonotonicClock`, `TLimitKind` and its values `lk*`, the
+error codes `ec*`, and the exception classes `EHttpTimeout`, `EHttpConnectionError`,
+`EStreamCancelled` and `EStreamReset`. A test unit that uses `Http2Server` alone
+calls `WithHttp11Limits` and `WithClock`.
+
+The factory has no `WithCancelWorkerThreads` and no `WithAlpnProtocols`: the server
+runs no cancel worker pool, and it offers `h2` and, with the fallback on,
+`http/1.1`. `Validate` rejects a value that is out of range, and `Build` raises
+`EServerConfigError` with every problem in one message.
+
 ## Server-sent events
 
 `StartSse` answers a request with an event stream and detaches it. It returns an

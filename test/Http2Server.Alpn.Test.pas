@@ -60,6 +60,10 @@ type
     procedure TestCallbackRefusesAnUnacceptableList;
     /// the callback survives a nil protocol list
     procedure TestCallbackRefusesANilList;
+    /// the server chooses h2 even when the client lists http/1.1 first (RFC 7301 section 3.2)
+    procedure TestPrefersH2WhenHttp11IsListedFirst;
+    /// each fallback value has its own policy argument, so two contexts differ
+    procedure TestPolicyArgumentsAreSeparate;
   end;
 
 implementation
@@ -258,6 +262,34 @@ begin
   AssertEquals('a nil list is refused with a fatal alert',
     SSL_TLSEXT_ERR_ALERT_FATAL,
     Http2AlpnSelectCallback(nil, @Out_, @OutLen, nil, 0, nil));
+end;
+
+procedure TAlpnSelectTest.TestPrefersH2WhenHttp11IsListedFirst;
+begin
+  AssertEquals('SRV-11: h2 wins over an earlier http/1.1', 'h2',
+    Http2AlpnSelectProtocol(ProtoList(['http/1.1', 'h2']), True));
+  AssertEquals('the offset points at the h2 entry', 10,
+    Http2AlpnSelectOffset(ProtoList(['http/1.1', 'h2']), True));
+end;
+
+procedure TAlpnSelectTest.TestPolicyArgumentsAreSeparate;
+var
+  List: TBytes;
+  Out_: PByte;
+  OutLen: Byte;
+begin
+  AssertTrue('SRV-10: the two policies are two objects',
+    Http2AlpnPolicyArg(True) <> Http2AlpnPolicyArg(False));
+  List := ProtoList(['http/1.1']);
+  AssertEquals('the fallback policy accepts http/1.1', SSL_TLSEXT_ERR_OK,
+    Http2AlpnSelectCallback(nil, @Out_, @OutLen, @List[0], Length(List),
+      Http2AlpnPolicyArg(True)));
+  AssertEquals('the strict policy refuses http/1.1 after it', SSL_TLSEXT_ERR_ALERT_FATAL,
+    Http2AlpnSelectCallback(nil, @Out_, @OutLen, @List[0], Length(List),
+      Http2AlpnPolicyArg(False)));
+  AssertEquals('the fallback policy still accepts', SSL_TLSEXT_ERR_OK,
+    Http2AlpnSelectCallback(nil, @Out_, @OutLen, @List[0], Length(List),
+      Http2AlpnPolicyArg(True)));
 end;
 
 initialization

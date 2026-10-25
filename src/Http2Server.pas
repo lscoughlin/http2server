@@ -32,6 +32,7 @@ uses
   Http2Server.Hpack,
   Http2Server.Duplex,
   Http2Server.Limits,
+  Http2Server.Http1.Limits,
   Http2Server.Observer,
   Http2Server.Seam,
   Http2Server.Mtls.Types,
@@ -52,9 +53,6 @@ type
   IHttp2Server = Http2Server.Server.IHttp2Server;
   /// the server that runs on the async IO pool
   THttp2Server = Http2Server.Server.THttp2Server;
-  /// the entry point helper that turns a factory into a server
-  // - a type helper is not a type itself; a caller reaches Build through a
-  //   THttp2ServerFactory value
 
   /// the server factory and its option records
   THttp2ServerFactory = Http2Server.Config.THttp2ServerFactory;
@@ -109,8 +107,17 @@ type
   TServerEventKind = Http2Server.Observer.TServerEventKind;
   TServerStats = Http2Server.Observer.TServerStats;
 
+  /// the settings of the HTTP/1.1 parser, the clock and the limit kinds
+  THttp11Limits = Http2Server.Http1.Limits.THttp11Limits;
+  IMonotonicClock = Http2Server.Limits.IMonotonicClock;
+  TLimitKind = Http2Server.Limits.TLimitKind;
+
   /// the error classes and the error codes
   EHttpError = Http2Server.Errors.EHttpError;
+  EHttpTimeout = Http2Server.Errors.EHttpTimeout;
+  EHttpConnectionError = Http2Server.Errors.EHttpConnectionError;
+  EStreamCancelled = Http2Server.Errors.EStreamCancelled;
+  EStreamReset = Http2Server.Errors.EStreamReset;
   EServerConfigError = Http2Server.Errors.EServerConfigError;
   EServerStopped = Http2Server.Errors.EServerStopped;
   THttp2ErrorCode = Http2Server.Errors.THttp2ErrorCode;
@@ -144,6 +151,30 @@ const
   // the values of TQueueRefusalMode, for the same reason as the event kinds below
   rmRefuseStream = Http2Server.Config.rmRefuseStream;
   rmHttp503 = Http2Server.Config.rmHttp503;
+
+  // the values of TLimitKind
+  lkReset = Http2Server.Limits.lkReset;
+  lkPing = Http2Server.Limits.lkPing;
+  lkSettings = Http2Server.Limits.lkSettings;
+  lkEmptyData = Http2Server.Limits.lkEmptyData;
+  lkWindowUpdate = Http2Server.Limits.lkWindowUpdate;
+  lkContinuation = Http2Server.Limits.lkContinuation;
+
+  // the values of THttp2ErrorCode (RFC 9113 section 7)
+  ecNoError = Http2Server.Errors.ecNoError;
+  ecProtocolError = Http2Server.Errors.ecProtocolError;
+  ecInternalError = Http2Server.Errors.ecInternalError;
+  ecFlowControlError = Http2Server.Errors.ecFlowControlError;
+  ecSettingsTimeout = Http2Server.Errors.ecSettingsTimeout;
+  ecStreamClosed = Http2Server.Errors.ecStreamClosed;
+  ecFrameSizeError = Http2Server.Errors.ecFrameSizeError;
+  ecRefusedStream = Http2Server.Errors.ecRefusedStream;
+  ecCancel = Http2Server.Errors.ecCancel;
+  ecCompressionError = Http2Server.Errors.ecCompressionError;
+  ecConnectError = Http2Server.Errors.ecConnectError;
+  ecEnhanceYourCalm = Http2Server.Errors.ecEnhanceYourCalm;
+  ecInadequateSecurity = Http2Server.Errors.ecInadequateSecurity;
+  ecHttp11Required = Http2Server.Errors.ecHttp11Required;
 
   // the values of TClientCertMode and TClientCertPrincipal
   ccmNone = Http2Server.Mtls.Types.ccmNone;

@@ -76,9 +76,9 @@ sets a value.
 
 | Setting | `WithX` | Meaning |
 |---|---|---|
-| `Host` | `WithHost` | the address of the listener, such as `0.0.0.0` or `::1` |
+| `Host` | `WithHost` | the address of the listener, such as `0.0.0.0` or `::1`; the listener binds this address only (`BindAddressText`) |
 | `Port` | `WithPort` | the TCP port; 0 asks the operating system for a free port |
-| `Backlog` | `WithBacklog` | the length of the listen backlog |
+| `Backlog` | `WithBacklog` | the length of the listen backlog; the value is set before the bind and held under a lock until the bind has run, so two servers keep their own value |
 | `Http11Fallback` | `WithHttp11Fallback` | serves HTTP/1.1 on the same listener when the peer does not speak HTTP/2; on by default |
 | `WebSockets` | `WithWebSockets` | the record `TWsOptions`: the limits, the timers, the buckets, the origin policy and the subprotocols of the WebSocket part (see [websocket](websocket.md)) |
 | `Http11` | `WithHttp11Limits` | the record `THttp11Limits`: the limits of the HTTP/1.1 parser (see [http1](http1.md)) |
@@ -97,7 +97,6 @@ accepts the record whole.
 | `CertificateFile` | `WithCertificateFile` | the path of the PEM certificate file |
 | `KeyFile` | `WithKeyFile` | the path of the PEM private key file |
 | `KeyPassword` | `WithKeyPassword` | the password of an encrypted key, or an empty string |
-| `AlpnProtocols` | `WithAlpnProtocols` | the ALPN protocol names, in preference order |
 | `HandshakeTimeoutMs` | `WithHandshakeTimeoutMs` | the time a handshake may take |
 
 The client certificate settings follow in the same record. They default to no
@@ -112,9 +111,9 @@ client certificate. [mtls](mtls.md) describes them.
 | `ClientVerifyDepth` | `WithClientVerifyDepth` | 4 | the longest accepted chain, 1 to 16 |
 | `ClientCertPrincipal` | `WithClientCertPrincipal` | `ccpNone` | what the server writes to `Principal` for a verified client |
 
-The default ALPN list holds the single name `h2`
-(`TTlsServerOptions.Create`). [tls](tls.md) describes how the
-ALPN name reaches OpenSSL.
+The ALPN protocols are not a setting. The server offers `h2`, and it adds
+`http/1.1` when `Http11Fallback` is on. [tls](tls.md) describes how the ALPN name
+reaches OpenSSL.
 
 ### The pool settings
 
@@ -122,7 +121,6 @@ ALPN name reaches OpenSSL.
 |---|---|---|
 | `IOThreads` | `WithIOThreads` | the number of IO pool threads |
 | `HandlerThreads` | `WithHandlerThreads` | the number of handler pool threads |
-| `CancelWorkerThreads` | `WithCancelWorkerThreads` | the number of threads that run the cancel hooks |
 | `StreamPoolSize` | `WithStreamPoolSize` | the number of threads of the streaming pool, which runs the application work for detached streams; the default is 1 |
 | `MaxDetachedStreams` | `WithMaxDetachedStreams` | the greatest number of detached streams of the whole server; 0 refuses every detach; the default is 10000 |
 | `ChannelQueueLimit` | `WithChannelQueueLimit` | the outbound queue limit of a detached stream, in bytes; the default is 262144 |
@@ -238,11 +236,9 @@ The rules are:
 | the backlog is at least 1 | the listen backlog is below 1 |
 | the IO thread count is at least 1 | the IO thread count is below 1 |
 | the handler thread count is at least 1 | the handler thread count is below 1 |
-| the cancel worker count is at least 1 | the cancel worker count is below 1 |
 | the queue depth is at least 0 | the queue depth is below 0 |
 | the maximum queue wait is at least 0 | the maximum queue wait is below 0 |
 | the certificate file is present when cleartext is off | the certificate file is empty |
-| the key file is present when cleartext is off | the key file is empty |
 | a client certificate mode has a trust anchor | the mode is not `ccmNone`, the CA file is empty and the system store is off |
 | the client CA file exists | the CA file is named and absent |
 | the client verify depth is 1 to 16 | the depth is outside the range |
@@ -251,10 +247,17 @@ The rules are:
 | the frame size is 16384 to 16777215 | the frame size is outside the range |
 | the initial stream window is at most 2^31-1 | the stream window is above the limit |
 | the initial connection window is at most 2^31-1 | the connection window is above the limit |
+| the initial stream window and the initial connection window are at least 1 | the window is below 1 |
+| the concurrent stream limit is at least 1 | the concurrent stream limit is below 1 |
+| the header table size is at most 2^31-1 | the header table size is above the limit |
+| each of the six control buckets has a capacity of at least 1 and a refill rate of at least 0 | the bucket capacity is below 1, or the refill rate is below 0 |
+| the idle, header and graceful stop timeouts are at least 0 | the timeout is below 0 |
 | the handler is assigned | the handler is not assigned |
 
-Port 0 is legal, and it asks the operating system for a free port. The
-certificate and the key are not required when `ClearTextAllowed` is set, as
+Port 0 is legal, and it asks the operating system for a free port. A queue depth
+of 0 is legal too: it refuses every request that finds no free handler. The key
+file is optional, because a PEM certificate file can hold the key (the TLS layer
+accepts an empty key file). The certificate and the key are not required when `ClearTextAllowed` is set, as
 `TestValidateCleartextNeedsNoCertificate` shows
 (`test/Http2Server.Config.Test.pas:423`).
 

@@ -88,6 +88,7 @@ All three copies are the plain-text files of `https://www.rfc-editor.org/rfc/`, 
 | `rfc8446.txt` | 8446 | The Transport Layer Security (TLS) Protocol Version 1.3 | Section 4.3.2 (CertificateRequest), 4.4.2 (Certificate), 4.4.3 (CertificateVerify) and 4.6.2 (post-handshake authentication). The mutual TLS design reads them. |
 | `rfc5280.txt` | 5280 | Internet X.509 Public Key Infrastructure Certificate and CRL Profile | Section 4.1.2 (certificate fields), 4.2.1.6 (subject alternative name) and 6 (path validation). |
 | `rfc4514.txt` | 4514 | Lightweight Directory Access Protocol (LDAP): String Representation of Distinguished Names | The text form of a distinguished name, which the client certificate record uses. |
+| `rfc7301.txt` | 7301 | Transport Layer Security (TLS) Application-Layer Protocol Negotiation Extension | Section 3.2 (the server chooses the protocol from the client list), which the ALPN callback follows. Retrieved 2026-10-25 from https://www.rfc-editor.org/rfc/rfc7301.txt. |
 
 ## Other sources
 

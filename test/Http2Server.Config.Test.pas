@@ -145,7 +145,6 @@ begin
   F := THttp2ServerFactory.Create;
   AssertEquals('the default IO thread count', 4, F.IOThreads);
   AssertEquals('the default handler thread count', 8, F.HandlerThreads);
-  AssertEquals('the default cancel worker count', 2, F.CancelWorkerThreads);
 end;
 
 procedure TFactoryTest.TestDefaultQueue;
@@ -277,8 +276,6 @@ begin
     F.Tls.CertificateFile);
   AssertEquals('the default key file is empty', '', F.Tls.KeyFile);
   AssertEquals('the default key password is empty', '', F.Tls.KeyPassword);
-  AssertEquals('one default ALPN protocol', 1, Length(F.Tls.AlpnProtocols));
-  AssertEquals('the default ALPN protocol', 'h2', F.Tls.AlpnProtocols[0]);
   AssertEquals('the default handshake timeout', 10000,
     F.Tls.HandshakeTimeoutMs);
 end;
@@ -298,7 +295,6 @@ begin
     .WithClearTextAllowed(True)
     .WithIOThreads(1)
     .WithHandlerThreads(2)
-    .WithCancelWorkerThreads(3)
     .WithMaxConcurrentStreams(200)
     .WithInitialStreamWindow(1000)
     .WithInitialConnectionWindow(2000)
@@ -318,8 +314,6 @@ begin
   AssertEquals('the original IO thread count is unchanged', 4, Base.IOThreads);
   AssertEquals('the original handler thread count is unchanged', 8,
     Base.HandlerThreads);
-  AssertEquals('the original cancel worker count is unchanged', 2,
-    Base.CancelWorkerThreads);
   AssertEquals('the original stream cap is unchanged', 100,
     Integer(Base.MaxConcurrentStreams));
   AssertEquals('the original frame size is unchanged', DefaultMaxFrameSize,
@@ -334,8 +328,6 @@ begin
   AssertTrue('the forked cleartext setting', Forked.ClearTextAllowed);
   AssertEquals('the forked IO thread count', 1, Forked.IOThreads);
   AssertEquals('the forked handler thread count', 2, Forked.HandlerThreads);
-  AssertEquals('the forked cancel worker count', 3,
-    Forked.CancelWorkerThreads);
   AssertEquals('the forked stream cap', 200,
     Integer(Forked.MaxConcurrentStreams));
   AssertEquals('the forked frame size', 32768, Integer(Forked.MaxFrameSize));
@@ -379,7 +371,6 @@ begin
     .WithCertificateFile('cert.pem')
     .WithKeyFile('key.pem')
     .WithKeyPassword('pw')
-    .WithAlpnProtocols(nil)
     .WithHandshakeTimeoutMs(2000);
   Edited := Original.WithCertificateFile('other.pem');
   AssertEquals('the original certificate is unchanged', 'cert.pem',
@@ -387,7 +378,6 @@ begin
   AssertEquals('the edited certificate', 'other.pem', Edited.CertificateFile);
   AssertEquals('the original key file survives the fork', 'key.pem',
     Edited.KeyFile);
-  AssertEquals('the empty ALPN list is kept', 0, Length(Edited.AlpnProtocols));
   AssertEquals('the handshake timeout survives the fork', 2000,
     Edited.HandshakeTimeoutMs);
 
@@ -496,14 +486,6 @@ begin
   THttp2ServerFactory.Create
     .WithHandler(FHandler)
     .WithClearTextAllowed(True)
-    .WithCancelWorkerThreads(0)
-    .Validate(Problems);
-  AssertTrue('a cancel worker count below one is reported: ' +
-    ProblemText(Problems), HasProblem(Problems, 'cancel worker'));
-
-  THttp2ServerFactory.Create
-    .WithHandler(FHandler)
-    .WithClearTextAllowed(True)
     .WithBacklog(0)
     .Validate(Problems);
   AssertTrue('a backlog below one is reported: ' + ProblemText(Problems),
@@ -551,17 +533,16 @@ begin
     F.Validate(Problems));
   AssertTrue('the certificate problem is named: ' + ProblemText(Problems),
     HasProblem(Problems, 'certificate file is empty'));
-  AssertTrue('the key problem is named: ' + ProblemText(Problems),
+  AssertFalse('an empty key file is no problem: ' + ProblemText(Problems),
     HasProblem(Problems, 'key file is empty'));
 
-  // a certificate alone still leaves the key problem
+  // a certificate alone is enough: the file can hold the key too
   F := THttp2ServerFactory.Create
     .WithHandler(FHandler)
     .WithTls(TTlsServerOptions.Create.WithCertificateFile('cert.pem'));
   Problems := nil;
-  AssertFalse('a missing key fails validation', F.Validate(Problems));
-  AssertTrue('only the key problem remains: ' + ProblemText(Problems),
-    HasProblem(Problems, 'key file is empty'));
+  AssertTrue('a certificate without a key file validates: ' +
+    ProblemText(Problems), F.Validate(Problems));
 end;
 
 procedure TFactoryTest.TestValidateFrameSize;

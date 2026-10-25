@@ -18,7 +18,7 @@ interface
 
 uses
   SysUtils, Classes, fpcunit, testregistry,
-  Http2Server.Hpack, Http2Server.Seam, Http2Server.Encoding;
+  Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Encoding;
 
 type
   TEncodingTest = class(TTestCase)
@@ -36,6 +36,7 @@ type
     procedure TestRawDeflateRoundTrip;
     procedure TestDeflateDecompressAcceptsRawDeflate;
     procedure TestGzipCompressesRepetitiveInput;
+    procedure TestInflateStopsAtTheOutputBound;
     // CompressFor
     procedure TestCompressForIdentityReturnsTheInput;
     procedure TestCompressForGzipProducesAGzipContainer;
@@ -194,6 +195,36 @@ begin
   Blob := GzipCompress(Data);
   AssertTrue('repetitive input compresses',
     Length(Blob) < Length(Data) div 2);
+end;
+
+procedure TEncodingTest.TestInflateStopsAtTheOutputBound;
+var
+  Data, Blob: TBytes;
+  Raised: Boolean;
+begin
+  // 8 MiB of zero octets compress to a few kilobytes: a bomb
+  SetLength(Data, 8 * 1024 * 1024);
+  FillChar(Data[0], Length(Data), 0);
+  Blob := GzipCompress(Data);
+  AssertTrue('the bomb is small', Length(Blob) < 64 * 1024);
+  Raised := False;
+  try
+    GzipDecompress(Blob, 1024 * 1024);
+  except
+    on EHttpError do
+      Raised := True;
+  end;
+  AssertTrue('SRV: the output bound stops the inflate', Raised);
+  AssertEquals('a bound above the size passes', Length(Data),
+    Length(GzipDecompress(Blob, 16 * 1024 * 1024)));
+  Raised := False;
+  try
+    DeflateDecompress(DeflateCompress(Data), 1024 * 1024);
+  except
+    on EHttpError do
+      Raised := True;
+  end;
+  AssertTrue('the deflate path has the bound too', Raised);
 end;
 
 procedure TEncodingTest.TestCompressForIdentityReturnsTheInput;
