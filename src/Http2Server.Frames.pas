@@ -104,8 +104,12 @@ type
     class function Defaults: TConnectionSettings; static;
     /// serialize the settings as SETTINGS payload entries
     function Encode: TBytes;
-    /// parse SETTINGS payload entries (unknown ids are ignored)
-    class function Decode(const APayload: TBytes): TConnectionSettings; static;
+    /// parse SETTINGS payload entries onto the defaults (unknown ids are ignored)
+    class function Decode(const APayload: TBytes): TConnectionSettings; overload; static;
+    /// parse SETTINGS payload entries as a delta onto ABase
+    // - an entry that the frame does not name keeps the value of ABase
+    class function Decode(const APayload: TBytes;
+      const ABase: TConnectionSettings): TConnectionSettings; overload; static;
   end;
 
 const
@@ -378,11 +382,19 @@ begin
 end;
 
 class function TConnectionSettings.Decode(const APayload: TBytes): TConnectionSettings;
+begin
+  Result := Decode(APayload, TConnectionSettings.Defaults);
+end;
+
+class function TConnectionSettings.Decode(const APayload: TBytes;
+  const ABase: TConnectionSettings): TConnectionSettings;
 var
   Ofs, Id: Integer;
   Value: LongWord;
 begin
-  Result := TConnectionSettings.Defaults;
+  // RFC 9113 section 6.5.3: a SETTINGS frame changes the entries it names and
+  // leaves every other entry as it was
+  Result := ABase;
   if Length(APayload) mod SettingsEntrySize <> 0 then
     raise EHttpProtocolError.Create(
       'SETTINGS payload length is not a multiple of 6', ecFrameSizeError);
@@ -672,16 +684,21 @@ end;
 function HeaderPriorityDependsOn(const AFrame: TFrame): LongWord;
 var
   Raw: LongWord;
+  Skip: Integer;
 begin
   Result := 0;
   if not AFrame.IsPriority then
     Exit;
   // the priority field is the first five octets, surrounded by the header
   // block and any padding, so the payload is longer than five octets
-  if Length(AFrame.Payload) < 5 then
+  // a PADDED frame puts the pad length octet before the priority field
+  Skip := 0;
+  if AFrame.IsPadded then
+    Skip := 1;
+  if Length(AFrame.Payload) < Skip + 5 then
     raise EHttpProtocolError.Create(
       'the priority field needs five octets', ecFrameSizeError);
-  Raw := ReadUInt32BE(AFrame.Payload, 0);
+  Raw := ReadUInt32BE(AFrame.Payload, Skip);
   Result := Raw and MaxStreamId;
 end;
 

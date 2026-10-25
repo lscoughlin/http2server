@@ -544,8 +544,10 @@ begin
   Peer := TFrame.Create(ftSettings, [], 0, S.Encode);
   FCore.Feed(Pack(False, [Peer]));
   OutputFrames;
+  // the peer SETTINGS sets the windows that the peer grants, which are the
+  // send windows of the server
   AssertEquals('the open stream window follows the delta',
-    Int64(TestStreamWindow + 1000), FCore.StreamWindowSize(1));
+    Int64(TestStreamWindow + 1000), FCore.SendStreamWindowSize(1));
 end;
 
 procedure TConnectionCoreTest.TestHeadersSplitAtEveryByteStillArrives;

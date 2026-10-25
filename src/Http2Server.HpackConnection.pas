@@ -36,6 +36,8 @@ type
     FEncoder: THpackCodec;
     FDecoder: THpackCodec;
     FMaxFrameSize: LongWord;
+    /// the largest frame the peer accepts; a header run never passes it
+    FPeerFrameSize: LongWord;
     /// the request header block under assembly
     // - a HEADERS frame starts a block and CONTINUATION frames extend it, so
     //   the bytes arrive in pieces and wait here until the block ends
@@ -54,6 +56,10 @@ type
     /// apply the header table size the peer sent
     // - RFC 9113 section 6.5.2: the new size changes both directions
     procedure ApplyPeerTableSize(const ATableSize: LongWord);
+    /// apply the SETTINGS_MAX_FRAME_SIZE that the peer sent
+    // - the HEADERS and CONTINUATION frames of a response follow the smaller of
+    //   this value and the local maximum (RFC 9113 section 4.2)
+    procedure ApplyPeerFrameSize(const AValue: LongWord);
 
     /// TRUE while a header block waits for its CONTINUATION frames
     function InBlock: Boolean;
@@ -99,6 +105,7 @@ constructor THpackConnection.Create(const AMaxHeaderListSize,
 begin
   inherited Create;
   FMaxFrameSize := AMaxFrameSize;
+  FPeerFrameSize := DefaultMaxFrameSize;
   FDecoder := THpackCodec.Create;
   FEncoder := THpackCodec.Create;
   FDecoder.MaxHeaderListSize := AMaxHeaderListSize;
@@ -117,6 +124,11 @@ procedure THpackConnection.ApplyPeerTableSize(const ATableSize: LongWord);
 begin
   FDecoder.ApplySettings(ATableSize);
   FEncoder.ApplySettings(ATableSize);
+end;
+
+procedure THpackConnection.ApplyPeerFrameSize(const AValue: LongWord);
+begin
+  FPeerFrameSize := AValue;
 end;
 
 function THpackConnection.InBlock: Boolean;
@@ -199,7 +211,7 @@ end;
 function THpackConnection.BuildHeaderRun(const AStreamId: LongWord;
   const AHeaderBlock: TBytes): TArray<TFrame>;
 var
-  Offset, Chunk, Count: Integer;
+  Offset, Chunk, Count, Limit: Integer;
   Slice: TBytes;
   First, Last: Boolean;
 begin
@@ -207,10 +219,13 @@ begin
   Offset := 0;
   First := True;
   Count := 0;
+  Limit := Integer(FMaxFrameSize);
+  if Integer(FPeerFrameSize) < Limit then
+    Limit := Integer(FPeerFrameSize);
   repeat
     Chunk := Length(AHeaderBlock) - Offset;
-    if Chunk > Integer(FMaxFrameSize) then
-      Chunk := Integer(FMaxFrameSize);
+    if Chunk > Limit then
+      Chunk := Limit;
     SetLength(Slice, Chunk);
     if Chunk > 0 then
       Move(AHeaderBlock[Offset], Slice[0], Chunk);

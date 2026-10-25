@@ -118,6 +118,15 @@ begin
     end;
     // the server SETTINGS frame is the first frame of the connection
     QueueFrame(BuildServerSettings(FSettings));
+    // RFC 9113 section 6.9.2: SETTINGS never changes the connection window, so
+    // a window above the default of 65535 is announced with a WINDOW_UPDATE
+    if FOptions.ConnectionWindow > DefaultWindowSize then
+    begin
+      QueueFrame(BuildWindowUpdateFrame(0,
+        LongWord(FOptions.ConnectionWindow - DefaultWindowSize)));
+      FRecv.ApplyConnectionUpdate(
+        LongWord(FOptions.ConnectionWindow - DefaultWindowSize));
+    end;
   end;
 
   Offset := 0;
@@ -398,10 +407,13 @@ procedure TServerConnectionCore.ProcessData(const AFrame: TFrame);
 var
   Stream: TServerStream;
   Payload: TBytes;
-  N: LongWord;
+  N, Total: LongWord;
 begin
   Payload := ExtractDataPayload(AFrame);
   N := LongWord(Length(Payload));
+  // flow control counts the whole payload: the pad length octet and the padding
+  // belong to it (RFC 9113 section 6.9.1)
+  Total := LongWord(Length(AFrame.Payload));
   if N = 0 then
   begin
     if FLimits <> nil then
@@ -412,6 +424,18 @@ begin
     if N > 0 then
       FailConnection('a DATA frame needs a stream id', ecProtocolError);
     Exit;
+  end;
+  // the connection window is spent and refilled for every DATA frame, whatever
+  // becomes of the frame, so a frame that the server drops never shrinks it
+  if Total > 0 then
+  begin
+    if not FRecv.TryConsumeConnection(Total) then
+    begin
+      FailConnection('a DATA frame overran the connection window',
+        ecFlowControlError);
+      Exit;
+    end;
+    Inc(FConnUpdatePending, Total);
   end;
   Stream := FindStream(AFrame.Header.StreamId);
   if Stream = nil then
@@ -452,20 +476,37 @@ begin
       CloseStream(Stream);
       Exit;
     end;
-    if not FFlow.TryConsume(AFrame.Header.StreamId, N) then
+    if not FRecv.TryConsumeStream(AFrame.Header.StreamId, Total) then
     begin
       FailConnection('a DATA frame overran a flow-control window',
         ecFlowControlError);
       Exit;
     end;
-    // the connection credit returns as soon as the bytes are buffered, so a
+    // the connection credit returned above as soon as the frame arrived, so a
     // handler that is slow on one stream stalls only that stream
-    Inc(FConnUpdatePending, N);
     Stream.DeliverData(Payload, AFrame.IsEndStream);
+    // the pad length octet and the padding reach no reader, so they return to
+    // the stream window now. The handler credits the data octets as it reads
+    if Total > N then
+      Stream.AddCredit(Total - N);
   end
-  else if AFrame.IsEndStream then
-    // an empty DATA frame that ends the stream: a detached sink hears PeerClosed too
-    Stream.DeliverData(nil, True);
+  else
+  begin
+    if Total > 0 then
+    begin
+      // a frame of padding only
+      if not FRecv.TryConsumeStream(AFrame.Header.StreamId, Total) then
+      begin
+        FailConnection('a DATA frame overran a flow-control window',
+          ecFlowControlError);
+        Exit;
+      end;
+      Stream.AddCredit(Total);
+    end;
+    if AFrame.IsEndStream then
+      // an empty DATA frame that ends the stream: a detached sink hears PeerClosed too
+      Stream.DeliverData(nil, True);
+  end;
   if AFrame.IsEndStream and (not Stream.DeclaredLengthMatches) then
   begin
     // the body length differs from the declared content-length
@@ -496,7 +537,8 @@ begin
   end;
   if FLimits <> nil then
     FLimits.Charge(lkSettings, 1);
-  NewSettings := TConnectionSettings.Decode(AFrame.Payload);
+  // RFC 9113 section 6.5.3: the frame is a delta onto the settings of the peer
+  NewSettings := TConnectionSettings.Decode(AFrame.Payload, FPeerSettings);
   if (NewSettings.MaxFrameSize < MinAllowedFrameSize) or
      (NewSettings.MaxFrameSize > MaxAllowedFrameSize) then
   begin
@@ -508,11 +550,13 @@ begin
     Int64(FPeerSettings.InitialWindowSize);
   FPeerSettings := NewSettings;
   FHpack.ApplyPeerTableSize(FPeerSettings.HeaderTableSize);
-  // the drain obeys the smaller of the two frame sizes
+  // the drain and the header runs obey the smaller of the two frame sizes
   FOut.ApplyPeerFrameSize(FPeerSettings.MaxFrameSize);
-  // RFC 9113 section 6.9.2: a change reaches every stream that is open
+  FHpack.ApplyPeerFrameSize(FPeerSettings.MaxFrameSize);
+  // RFC 9113 section 6.9.2: a change reaches every stream that is open. The
+  // windows that the peer grants are the send windows
   if Delta <> 0 then
-    FFlow.ApplyInitialWindowDelta(Delta);
+    FSend.ApplyInitialWindowDelta(Delta);
   QueueFrame(BuildSettingsAck);
 end;
 
@@ -610,7 +654,7 @@ begin
     FLimits.Charge(lkWindowUpdate, 1);
   Increment := ParseWindowUpdate(AFrame);
   if AFrame.Header.StreamId = 0 then
-    FFlow.ApplyConnectionUpdate(Increment)
+    FSend.ApplyConnectionUpdate(Increment)
   else
   begin
     if FindStream(AFrame.Header.StreamId) = nil then
@@ -623,7 +667,7 @@ begin
       Exit;
     end;
     try
-      FFlow.ApplyStreamUpdate(AFrame.Header.StreamId, Increment);
+      FSend.ApplyStreamUpdate(AFrame.Header.StreamId, Increment);
     except
       // RFC 9113 section 6.9.1: a stream window above the maximum ends the
       // stream, and the connection stays open

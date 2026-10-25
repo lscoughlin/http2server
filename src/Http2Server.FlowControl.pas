@@ -7,10 +7,15 @@ notes:
   - Copied from the sibling HTTP/2 client project, source file
     Http2.FlowControl.pas, source revision 2b63ac290c86c61339e97226784bc61d3b354f06.
   - The unit name and every uses reference are renamed into the
-    Http2Server namespace. No other change is present.
+    Http2Server namespace. The server later added TryConsumeConnection and
+    TryConsumeStream, because the server keeps two TFlowControl objects, one
+    for each direction.
 ---
 }
 /// Connection and stream flow-control accounting
+// - one TFlowControl holds the windows of ONE direction. The server keeps a
+//   send object (the windows that the peer grants) and a receive object (the
+//   windows that the server grants), and never mixes them.
 unit Http2Server.FlowControl;
 
 {$mode delphi}{$H+}
@@ -26,6 +31,8 @@ uses
 const
   /// largest legal flow-control window (RFC 7540: 2^31-1)
   MaxWindowSize = $7FFFFFFF;
+  /// the window of a new connection and of a new stream (RFC 9113 section 6.9.2)
+  DefaultWindowSize = 65535;
 
 type
   /// A single flow-control window counter.
@@ -104,6 +111,11 @@ public
   /// Returns False (leaving both untouched) when either lacks credit, so a
   /// blocked stream does not consume the shared connection window.
   function TryConsume(const AStreamId: LongWord; const AN: LongWord): Boolean;
+  /// decrement the connection window alone; False and untouched when it lacks credit
+  function TryConsumeConnection(const AN: LongWord): Boolean;
+  /// decrement one stream window alone; False and untouched when the stream is
+  /// unknown or lacks credit
+  function TryConsumeStream(const AStreamId: LongWord; const AN: LongWord): Boolean;
 
   /// apply a connection-level WINDOW_UPDATE
   procedure ApplyConnectionUpdate(const AIncrement: LongWord);
@@ -254,6 +266,24 @@ begin
   W.TryConsume(AN);
   FStreams[AStreamId] := W;
   Result := True;
+end;
+
+function TFlowControl.TryConsumeConnection(const AN: LongWord): Boolean;
+begin
+  Result := FConnection.TryConsume(AN);
+end;
+
+function TFlowControl.TryConsumeStream(const AStreamId: LongWord;
+  const AN: LongWord): Boolean;
+var
+  W: TWindow;
+begin
+  Result := False;
+  if not FStreams.TryGetValue(AStreamId, W) then
+    Exit;
+  Result := W.TryConsume(AN);
+  if Result then
+    FStreams[AStreamId] := W;
 end;
 
 procedure TFlowControl.ApplyStreamDataSent(const AStreamId: LongWord;

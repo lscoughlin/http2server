@@ -73,6 +73,8 @@ uses
   Http2Server.AccessLog.Test,
   Http2Server.Mtls.Test,
   Http2Server.H2Peer.Test,
+  Http2Server.H2Credit.Test,
+  Http2Server.H2Flow.Test,
   Http2Server.Server.Test;
 
 const

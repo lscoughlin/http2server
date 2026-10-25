@@ -221,10 +221,18 @@ begin
     Take := Integer(PeerFrameSize);
     if Int64(Take) > Budget then
       Take := Integer(Budget);
+    // the connection window can hold less than the share of this stream. A take
+    // that passes it would lose octets, because TakeOutbound removes them first
+    if FFlow.Connection.Size <= 0 then
+      Break;
+    if Int64(Take) > FFlow.Connection.Size then
+      Take := Integer(FFlow.Connection.Size);
     if not AStream.TakeOutbound(Chunk, Take) then
       Break;
+    // the take stays inside both windows, so the consume cannot fail
     if not FFlow.TryConsume(AStream.StreamId, LongWord(Length(Chunk))) then
-      Break;
+      raise EHttpProtocolError.Create(
+        'the drain took more than a window holds', ecInternalError);
     CanEnd := AStream.WantsFinish and (AStream.OutboundCount = 0);
     QueueFrame(BuildDataFrame(AStream.StreamId, Chunk, CanEnd));
     if CanEnd then

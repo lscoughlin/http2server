@@ -83,7 +83,7 @@ The core holds each rule in one place.
 | `HEADERS` | A frame on a half-closed or closed stream is `STREAM_CLOSED`. A second `HEADERS` frame without `END_STREAM` is `PROTOCOL_ERROR`. A new stream id below `FLastStreamId` is a closed stream. | `ProcessHeaders` |
 | `PRIORITY` | The payload is five bytes or the frame is `FRAME_SIZE_ERROR`. Stream zero is `PROTOCOL_ERROR`. A stream that depends on itself is a stream error. | `ProcessPriority` (`:205`) |
 | `RST_STREAM` | The payload is four bytes or the frame is `FRAME_SIZE_ERROR`. A frame on an idle stream is `PROTOCOL_ERROR`. | `ProcessRstStream` (`:519`) |
-| `SETTINGS` | An acknowledged frame with a payload is `FRAME_SIZE_ERROR`. | `ProcessSettings` (`:478`) |
+| `SETTINGS` | An acknowledged frame with a payload is `FRAME_SIZE_ERROR`. A frame is a delta onto the settings of the peer. | `ProcessSettings` |
 | `PING` | Stream zero is required. The payload is eight bytes. An acknowledged frame adds no frame. | `ProcessPing` (`:551`) |
 | `GOAWAY` | Stream zero is required. Every open stream is cancelled, and the core stops. | `ProcessGoAway` (`:568`) |
 | `WINDOW_UPDATE` | A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream carries no action. A stream window above the maximum is a stream error of type `FLOW_CONTROL_ERROR`. | `ProcessWindowUpdate` (`:605`) |
@@ -163,11 +163,45 @@ document [seam](seam.md) states that rule.
 
 ## Flow control and output
 
-`TServerConnectionCore` owns one `TFlowControl`
+`TServerConnectionCore` owns two `TFlowControl` objects
 (`src/Http2Server.FlowControl.pas`) and one `TOutputDrain`
-(`src/Http2Server.Output.pas`). The drain takes one turn per call and gives
-each stream a share of the connection window. The core queues the resulting
-frames in `FOutput`, and `TakeOutput` (`:572`) answers them to the IO side.
+(`src/Http2Server.Output.pas`). The two objects hold the two directions apart:
+
+| Object | Windows | Spent by | Refilled by |
+| --- | --- | --- | --- |
+| `FSend` | the windows that the peer grants to the server | the output drain, when it sends `DATA` | a peer `WINDOW_UPDATE`; a peer `SETTINGS_INITIAL_WINDOW_SIZE` changes every stream window by the difference |
+| `FRecv` | the windows that the server grants to the peer | inbound `DATA` | the `WINDOW_UPDATE` frames that the server sends |
+
+Both objects open at 65535 (RFC 9113 section 6.9.2). A `SETTINGS` frame never
+changes the connection window, so the server announces a connection window above
+65535 with a `WINDOW_UPDATE` on stream 0 right after its own `SETTINGS` frame.
+A new stream receive window opens at the value that the server announced in its
+`SETTINGS`, and a new stream send window opens at the value that the peer
+announced.
+
+**The credit rule.** Flow control counts the whole payload of a `DATA` frame,
+the pad length octet and the padding included (RFC 9113 section 6.9.1). The
+connection window is spent and refilled for every frame at its arrival, whatever
+becomes of the frame, so a frame that the server drops (a body over its
+declared length, or over the inbound limit) never shrinks the window for good.
+The stream window is spent for a frame that reaches the stream. The handler
+credits the data octets as it reads them, and the pad length octet and the
+padding return to the stream window at once, because no reader sees them.
+
+**The drain rule.** A take from a stream buffer never passes the connection
+window that is left at that moment, because `TakeOutbound` removes the octets
+before the window is spent, and an octet that does not fit would be lost.
+
+**The SETTINGS rule.** A `SETTINGS` frame is a delta onto the settings of the
+peer (RFC 9113 section 6.5.3). `TConnectionSettings.Decode` takes the current
+settings as its base. The header runs of a response (`HEADERS` and
+`CONTINUATION` frames) follow the smaller of the local maximum frame size and
+the maximum that the peer announced. An exception in the output path ends the
+connection with its code and never leaves `Feed`.
+
+The drain takes one turn per call and gives each stream a share of the
+connection window. The core queues the resulting
+frames in `FOutput`, and `TakeOutput` answers them to the IO side.
 
 The wake-up is edge-triggered. The flag `FWakePending` guards one signal per
 transition from "no output" to "output" (`:563`). The document

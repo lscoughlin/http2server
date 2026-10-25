@@ -90,6 +90,13 @@ RFC 9113: `EnableConnectProtocol`, which stands for `SETTINGS_ENABLE_CONNECT_PRO
 because the value 0 is the default. `Decode` reads the entry and stores the value. The
 server reads the entry of a client and does not use it (RFC 8441 section 3).
 
+`Decode` has two forms. `Decode(Payload)` reads the entries onto the protocol
+defaults. `Decode(Payload, Base)` reads them as a delta onto `Base`, so an entry
+that the frame does not name keeps its value (RFC 9113 section 6.5.3). The
+connection uses the second form for every `SETTINGS` frame of the peer.
+`HeaderPriorityDependsOn` skips the pad length octet of a PADDED `HEADERS`
+frame before it reads the priority field.
+
 ## HPACK
 
 `Http2Server.Hpack` holds the HPACK codec of RFC 7541: the static table, the

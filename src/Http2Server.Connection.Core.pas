@@ -107,7 +107,13 @@ type
     FOptions: TConnectionCoreOptions;
     FEvents: IConnectionEvents;
     FLimits: TConnectionLimits;
-    FFlow: TFlowControl;
+    /// the windows that the peer grants to the server: the server spends them
+    // when it sends DATA, the peer WINDOW_UPDATE frames refill them, and the
+    // peer SETTINGS_INITIAL_WINDOW_SIZE sets the size of a new stream window
+    FSend: TFlowControl;
+    /// the windows that the server grants to the peer: inbound DATA spends them,
+    // and the WINDOW_UPDATE frames that the server sends refill them
+    FRecv: TFlowControl;
     FOut: TOutputDrain;
     /// the IStreamHost adapter the core hands to every stream
     // - the core cannot be its own host interface: an interface reference to
@@ -228,6 +234,10 @@ type
     function ConnectionWindowSize: Int64;
     /// the octets the peer may still send on one stream window
     function StreamWindowSize(const AStreamId: LongWord): Int64;
+    /// the octets the server may still send on the connection window
+    function SendConnectionWindowSize: Int64;
+    /// the octets the server may still send on one stream window
+    function SendStreamWindowSize(const AStreamId: LongWord): Int64;
     /// the settings the server sent to the peer
     property Settings: TConnectionSettings read FSettings;
     /// the settings the peer sent to the server
@@ -357,13 +367,16 @@ begin
   Holder := TConnectionLock.Create;
   FLockOwner := Holder;
   FConnLock := Holder.Lock;
-  FFlow := TFlowControl.Create(FOptions.ConnectionWindow,
-    FOptions.InitialStreamWindow);
+  // RFC 9113 section 6.9.2: both directions open at 65535 until a SETTINGS
+  // frame changes the stream size. The connection window never changes by
+  // SETTINGS, so the server raises its receive window with a WINDOW_UPDATE
+  FSend := TFlowControl.Create(DefaultWindowSize, DefaultWindowSize);
+  FRecv := TFlowControl.Create(DefaultWindowSize, FOptions.InitialStreamWindow);
   // the drain turns the handler buffers into DATA frames; the core carries a
   // nil waker because its own edge-triggered flag drives the IO wake-up
   OutOptions.MaxFrameSize := FOptions.MaxFrameSize;
   OutOptions.BytesPerTurn := 0;
-  FOut := TOutputDrain.Create(OutOptions, FFlow, nil);
+  FOut := TOutputDrain.Create(OutOptions, FSend, nil);
   FWakeLock := TCriticalSection.Create;
   // the host adapter is a borrowed reference to this core, so it forms no
   // reference cycle and its lifetime is the core lifetime
@@ -456,7 +469,8 @@ begin
   for I := 0 to FStreams.Count - 1 do
     FStreams[I].ReleaseRef;
   FStreams.Free;
-  FFlow.Free;
+  FSend.Free;
+  FRecv.Free;
   FHpack.Free;
   // the lock lives on while a stream holds the owner
   FConnLock := nil;
@@ -486,12 +500,19 @@ end;
 
 procedure TConnectionCoreBase.FlushLocked;
 begin
-  FlushPendingHeaders;
-  // the handler buffers turn into DATA frames only here, under the lock
-  FOut.Drain(FStreams);
-  FlushDrainedOutput;
-  FlushStreamCredits;
-  FlushConnectionCredit;
+  try
+    FlushPendingHeaders;
+    // the handler buffers turn into DATA frames only here, under the lock
+    FOut.Drain(FStreams);
+    FlushDrainedOutput;
+    FlushStreamCredits;
+    FlushConnectionCredit;
+  except
+    // a fault while the output is built ends the connection with a code. No
+    // exception may leave: the IO thread and the handler threads both call here
+    on E: EHttpError do
+      FailConnection(E.Message, E.ErrorCode);
+  end;
   // A stream whose two halves have ended is closed.  FById.Count feeds both
   // the concurrent-stream limit and the GOAWAY drain, so a stream that ended
   // must leave the map, or the count stays high for ever.
@@ -684,7 +705,7 @@ function TConnectionCoreBase.ConnectionWindowSize: Int64;
 begin
   LockConn;
   try
-    Result := FFlow.Connection.Size;
+    Result := FRecv.Connection.Size;
   finally
     UnlockConn;
   end;
@@ -697,7 +718,33 @@ var
 begin
   LockConn;
   try
-    if FFlow.TryGetStream(AStreamId, W) then
+    if FRecv.TryGetStream(AStreamId, W) then
+      Result := W.Size
+    else
+      Result := 0;
+  finally
+    UnlockConn;
+  end;
+end;
+
+function TConnectionCoreBase.SendConnectionWindowSize: Int64;
+begin
+  LockConn;
+  try
+    Result := FSend.Connection.Size;
+  finally
+    UnlockConn;
+  end;
+end;
+
+function TConnectionCoreBase.SendStreamWindowSize(
+  const AStreamId: LongWord): Int64;
+var
+  W: TWindow;
+begin
+  LockConn;
+  try
+    if FSend.TryGetStream(AStreamId, W) then
       Result := W.Size
     else
       Result := 0;
@@ -711,7 +758,8 @@ begin
   if AStream = nil then
     Exit;
   AStream.MarkLocalEnded;
-  FFlow.CloseStream(AStream.StreamId);
+  FSend.CloseStream(AStream.StreamId);
+  FRecv.CloseStream(AStream.StreamId);
   FById.Remove(AStream.StreamId);
   FStreams.Extract(AStream);
   // the core drops its reference; a queue entry or a running handler may
@@ -746,7 +794,8 @@ begin
   Result.UpdateThreshold := FOptions.StreamUpdateThreshold;
   FStreams.Add(Result);
   FById.Add(AStreamId, Result);
-  FFlow.OpenStream(AStreamId);
+  FSend.OpenStream(AStreamId);
+  FRecv.OpenStream(AStreamId);
   FLastStreamId := AStreamId;
 end;
 
@@ -810,7 +859,7 @@ begin
       Continue;
     Stream.ClearConsumed;
     QueueFrame(BuildWindowUpdateFrame(Stream.StreamId, Credit));
-    FFlow.ApplyStreamUpdate(Stream.StreamId, Credit);
+    FRecv.ApplyStreamUpdate(Stream.StreamId, Credit);
   end;
 end;
 
@@ -819,16 +868,16 @@ begin
   if FConnUpdatePending < FOptions.ConnectionUpdateThreshold then
   begin
     // an empty window stalls every stream, so it is refilled at once
-    if (FConnUpdatePending > 0) and (FFlow.Connection.Size <= 0) then
+    if (FConnUpdatePending > 0) and (FRecv.Connection.Size <= 0) then
     begin
       QueueFrame(BuildWindowUpdateFrame(0, FConnUpdatePending));
-      FFlow.ApplyConnectionUpdate(FConnUpdatePending);
+      FRecv.ApplyConnectionUpdate(FConnUpdatePending);
       FConnUpdatePending := 0;
     end;
     Exit;
   end;
   QueueFrame(BuildWindowUpdateFrame(0, FConnUpdatePending));
-  FFlow.ApplyConnectionUpdate(FConnUpdatePending);
+  FRecv.ApplyConnectionUpdate(FConnUpdatePending);
   FConnUpdatePending := 0;
 end;
 

@@ -89,6 +89,7 @@ type
     FInitialWindow: Int64;
     FAutoCredit: Boolean;
     FDecoderCap: LongWord;
+    FBlockBuf: TBytes;
     procedure Absorb(const AFrame: TFrame);
     procedure NoteData(const AFrame: TFrame);
     function WindowOf(const AStreamId: LongWord): Int64;
@@ -171,6 +172,11 @@ type
     /// the response of a handler: headers, ACount body octets, then the end
     procedure Respond(const AStreamId: LongWord; const AStatus: Integer;
       const ACount: Integer);
+    /// the same without the flush, so several streams can wait for one drain
+    procedure QueueResponse(const AStreamId: LongWord; const AStatus: Integer;
+      const ACount: Integer; const AHeaders: THeaderBlock);
+    /// the sum of the WINDOW_UPDATE increments received on a stream
+    function WindowUpdateSum(const AStreamId: LongWord): Int64;
 
     property Core: TServerConnectionCore read FCore;
     property Events: TPeerEvents read FEvents;
@@ -487,19 +493,32 @@ end;
 procedure TH2Peer.Absorb(const AFrame: TFrame);
 var
   Entry: TPeerFrame;
+  Part: TBytes;
 begin
   Entry.Frame := AFrame;
   Entry.Fields := nil;
   case AFrame.Header.FrameType of
     ftHeaders, ftContinuation:
-      try
-        // a header block spans HEADERS and CONTINUATION; the tests that need
-        // that send blocks that fit one frame
-        Entry.Fields := FDec.Decode(ExtractHeaderBlock(AFrame));
-      except
-        on E: Exception do
-          FViolations.Add('undecodable header block on stream ' +
-            IntToStr(AFrame.Header.StreamId) + ': ' + E.Message);
+      begin
+        // a header block spans HEADERS and the CONTINUATION frames after it; the
+        // fields attach to the frame that carries END_HEADERS
+        Part := ExtractHeaderBlock(AFrame);
+        if AFrame.Header.FrameType = ftHeaders then
+          FBlockBuf := nil;
+        if Length(Part) > 0 then
+        begin
+          SetLength(FBlockBuf, Length(FBlockBuf) + Length(Part));
+          Move(Part[0], FBlockBuf[Length(FBlockBuf) - Length(Part)], Length(Part));
+        end;
+        if AFrame.IsEndHeaders then
+          try
+            Entry.Fields := FDec.Decode(FBlockBuf);
+            FBlockBuf := nil;
+          except
+            on E: Exception do
+              FViolations.Add('undecodable header block on stream ' +
+                IntToStr(AFrame.Header.StreamId) + ': ' + E.Message);
+          end;
       end;
     ftData:
       NoteData(AFrame);
@@ -600,8 +619,9 @@ var
 begin
   Result := '';
   for I := 0 to FReceived.Count - 1 do
-    if (FReceived[I].Frame.Header.FrameType = ftHeaders) and
-       (FReceived[I].Frame.Header.StreamId = AStreamId) then
+    if (FReceived[I].Frame.Header.FrameType in [ftHeaders, ftContinuation]) and
+       (FReceived[I].Frame.Header.StreamId = AStreamId) and
+       (FReceived[I].Fields <> nil) then
     begin
       for J := 0 to High(FReceived[I].Fields) do
         if FReceived[I].Fields[J].Name = ':status' then
@@ -636,8 +656,8 @@ begin
   Result := False;
 end;
 
-procedure TH2Peer.Respond(const AStreamId: LongWord; const AStatus: Integer;
-  const ACount: Integer);
+procedure TH2Peer.QueueResponse(const AStreamId: LongWord; const AStatus: Integer;
+  const ACount: Integer; const AHeaders: THeaderBlock);
 var
   Stream: TServerStream;
   Body: TBytes;
@@ -645,16 +665,35 @@ begin
   Stream := FCore.StreamById(AStreamId);
   if Stream = nil then
     raise Exception.CreateFmt('the core holds no stream %d', [AStreamId]);
-  Stream.QueueResponseHeaders(AStatus, nil, ACount = 0);
+  Stream.QueueResponseHeaders(AStatus, AHeaders, ACount = 0);
   if ACount > 0 then
   begin
     SetLength(Body, ACount);
     FillChar(Body[0], ACount, Ord('r'));
-    Stream.TryWrite(Body);
+    if not Stream.TryWrite(Body) then
+      raise Exception.CreateFmt('the outbound buffer of stream %d is full',
+        [AStreamId]);
     Stream.RequestFinish;
   end;
+end;
+
+procedure TH2Peer.Respond(const AStreamId: LongWord; const AStatus: Integer;
+  const ACount: Integer);
+begin
+  QueueResponse(AStreamId, AStatus, ACount, nil);
   FCore.Flush;
   FCore.DrainPending;
+end;
+
+function TH2Peer.WindowUpdateSum(const AStreamId: LongWord): Int64;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to FReceived.Count - 1 do
+    if (FReceived[I].Frame.Header.FrameType = ftWindowUpdate) and
+       (FReceived[I].Frame.Header.StreamId = AStreamId) then
+      Inc(Result, ParseWindowUpdate(FReceived[I].Frame));
 end;
 
 end.
