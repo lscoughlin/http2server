@@ -337,7 +337,7 @@ The live validation (`make mtls-live`) starts the server on loopback with a PKI
 that `tools/certs/make_mtls_pki.sh` makes, and drives it with the sibling
 client at `../http2client`. A raw TLS client built on the TLS socket of that
 client covers the cases that the client library lacks: an expired certificate,
-HTTP/1.1 over TLS and WebSocket over HTTP/2. The run holds 38 checks:
+HTTP/1.1 over TLS and WebSocket over HTTP/2. The run holds 40 checks:
 
 | Group | Checks |
 | --- | --- |
@@ -345,6 +345,7 @@ HTTP/1.1 over TLS and WebSocket over HTTP/2. The run holds 38 checks:
 | `ccmOptional` | no certificate gives a nil identity; a valid certificate gives the subject, the issuer, the SAN names and the principal; a certificate of an unknown CA is refused with no handler call; WebSocket over HTTP/2 without a certificate opens and the handler sees nil |
 | `ccmRequired` | no certificate, an unknown CA, a self-signed certificate outside the trust and an expired certificate are refused with no handler call, and the observer counts the failed handshakes; a valid certificate is served; two requests on one connection show one identity; HTTP/1.1 over TLS shows the identity; WebSocket over HTTP/2 shows the identity at `Init` and at the first message; WebSocket over HTTP/2 without a certificate is refused; WebSocket over HTTP/1.1 shows the identity |
 | Wire details | a comma in a DN value is escaped; a saved TLS 1.2 session and a saved TLS 1.3 session resume with the certificate; the stats count the failed handshakes |
+| Leak | OpenSSL calls a callback for each `X509` object that it creates and frees (`test/mtls/Http2Server.Mtls.Live.Leak.pas`). Over five handshakes the count of live objects grows by the same amount with the identity reader and without it, so the reader releases its reference. A client without a certificate adds none |
 | Trust | a self-signed client in the CA file is served; the root and the self-signed client are served together; an unknown CA stays refused; with the system store only, a client of a private root is refused |
 
 Open gaps:
@@ -352,9 +353,8 @@ Open gaps:
 - A client of a public CA that the system store trusts is not tested, because
   mORMot2 gives no way to redirect the system store and the run never changes
   the store of the host.
-- A native leak of the `X509` reference of the reader is not measured. The heap
-  trace run shows no block from the identity code, and the reader frees the
-  reference in a `finally` block.
+- The sibling client keeps one `X509` object alive for each client that it
+  builds with an identity. This is outside the server; see the leak check above.
 - The run is on macOS aarch64 only. The Linux amd64 run is open, as for the rest
   of the library.
 - No load or stress run is part of this feature.

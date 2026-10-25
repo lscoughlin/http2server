@@ -28,7 +28,8 @@ uses
   Http2Server,
   Http2.Errors, Http2.ClientCert, Http2.Stream, Http2.Messages, Http2.Client,
   Http2.WebSocket,
-  Http2Server.Mtls.Live.Server, Http2Server.Mtls.Live.Raw;
+  Http2Server.Mtls.Live.Server, Http2Server.Mtls.Live.Raw,
+  Http2Server.Mtls.Live.Leak;
 
 type
   /// the listener of the sibling client: it sends one text message when open
@@ -404,6 +405,63 @@ begin
   end;
 end;
 
+procedure RunLeakCheck;
+var
+  Obs: TMtlsObserver;
+  ObsRef: IHttp2ServerObserver;
+  Server: IHttp2Server;
+  NoneGrowth, RequiredGrowth: Integer;
+
+  /// the growth of the live X509 count over five handshakes of the client library
+  // - five handshakes only: the check needs a repeat, not a load
+  function Growth(const APort: Integer; const AName: string = 'alice'): Integer;
+  var
+    Baseline, i: Integer;
+  begin
+    // warm-up: the first handshake loads lazy state of OpenSSL
+    ClientGet(APort, AName);
+    Sleep(500);
+    Baseline := LiveX509;
+    for i := 1 to 5 do
+      ClientGet(APort, AName);
+    Sleep(800);
+    Result := LiveX509 - Baseline;
+  end;
+
+begin
+  WriteLn('-- the identity reader releases its X509 reference');
+  if not InstallX509Counter then
+  begin
+    WriteLn('skip the X509 counter is not available');
+    Exit;
+  end;
+  Obs := TMtlsObserver.Create;
+  ObsRef := Obs;
+  // the first server never asks for a certificate, so the reader does not run.
+  // Its growth is what the client library and the rest of the process keep
+  Server := BuildMtlsServer(Pki, HandlerRef, ObsRef, ccmNone, '', False, ccpNone);
+  try
+    NoneGrowth := Growth(Server.Port);
+    WriteLn('  growth over 5 handshakes of a client without a certificate: ',
+      Growth(Server.Port, ''));
+  finally
+    Server.Stop;
+  end;
+  Server := BuildMtlsServer(Pki, HandlerRef, ObsRef, ccmRequired, 'ca.crt', False,
+    ccpSubjectDn);
+  try
+    RequiredGrowth := Growth(Server.Port);
+  finally
+    Server.Stop;
+  end;
+  WriteLn('  growth over 5 handshakes: no reader ', NoneGrowth, ', with reader ',
+    RequiredGrowth);
+  Check('the counter saw X509 objects', CreatedX509 > 0, IntToStr(CreatedX509));
+  Check('leak: the reader keeps no X509 beyond what a server without it keeps',
+    RequiredGrowth <= NoneGrowth,
+    'no reader ' + IntToStr(NoneGrowth) + ', reader ' + IntToStr(RequiredGrowth));
+end;
+
 procedure RunSelfSignedTrust;
 var
   Obs: TMtlsObserver;
@@ -469,6 +527,7 @@ begin
   RunRequiredMode;
   RunSelfSignedTrust;
   RunSystemStore;
+  RunLeakCheck;
   WriteLn;
   WriteLn('passed ', Passed, ', failed ', Failed);
   if Failed > 0 then

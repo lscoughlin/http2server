@@ -67,17 +67,22 @@ The run of 2026-10-25 on macOS aarch64 validates the client certificate feature
 | Check | Command | Result |
 |---|---|---|
 | Unit suite | `make test` | 678 tests, 0 errors, 0 failures; the 21 tests of `test/Http2Server.Mtls.Test.pas` are part of it |
-| Live validation against the sibling client | `make mtls-live` | 38 checks passed, 0 failed |
+| Live validation against the sibling client | `make mtls-live` | 40 checks passed, 0 failed |
 | Conformance after the change | `sh tools/validate/run.sh http2` | the `h2spec` package `http2` passes |
 | Heap trace of the live run | the live program built with `-gh -gl` | no unfreed block names the identity code |
+| Native `X509` leak | the leak check of the live run, five handshakes | the live `X509` count grows by 5 with the identity reader and by 5 without it |
 
 The live validation uses the client at `../http2client` for HTTP/2 requests and
 for WebSocket over HTTP/1.1, and a raw client on its TLS socket for the expired
 certificate, HTTP/1.1 over TLS and WebSocket over HTTP/2. The sibling client
 speaks WebSocket over HTTP/1.1 only.
 
-Gaps: a client of a public CA that the system store trusts is untested, the
-native `X509` reference count is not measured, and the Linux amd64 run is open.
+The growth of 5 comes from the sibling client, which keeps one `X509` object
+alive for each client built with an identity. A client without a certificate adds
+none, so the server reader keeps no object.
+
+Gaps: a client of a public CA that the system store trusts is untested, and the
+Linux amd64 run is open.
 
 ### The stability of the IO pool under abusive load
 
