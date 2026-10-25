@@ -27,7 +27,7 @@ unit Http2Server.H2Peer;
 interface
 
 uses
-  SysUtils, Classes, Generics.Collections,
+  SysUtils, Classes, SyncObjs, Generics.Collections,
   Http2Server.Errors, Http2Server.Frames, Http2Server.Hpack,
   Http2Server.Limits, Http2Server.Connection, Http2Server.Seam,
   Http2Server.Stream;
@@ -40,9 +40,14 @@ type
     FReadyIds: TList<LongWord>;
     FTripped: Boolean;
     FTripKind: TLimitKind;
+    FEntered, FHold: TEvent;
   public
     constructor Create;
     destructor Destroy; override;
+    /// when set, RequestReady signals Entered and then waits for Hold
+    // - RequestReady runs under the connection lock, so the feeding thread
+    //   holds that lock until the test sets Hold
+    procedure ParkRequestReady(const AEntered, AHold: TEvent);
     procedure RequestReady(const AStream: TServerStream);
     procedure StreamReset(const AStream: TServerStream);
     procedure ConnectionClosing;
@@ -67,8 +72,10 @@ type
   /// the default core options of a peer test
   TPeerOptions = record
     Core: TConnectionCoreOptions;
-    /// the control-frame bucket capacity
+    /// the reset bucket capacity
     BucketCapacity: Integer;
+    /// the control-frame bucket capacity
+    ControlCapacity: Integer;
     class function Default: TPeerOptions; static;
   end;
 
@@ -206,10 +213,21 @@ begin
   inherited Destroy;
 end;
 
+procedure TPeerEvents.ParkRequestReady(const AEntered, AHold: TEvent);
+begin
+  FEntered := AEntered;
+  FHold := AHold;
+end;
+
 procedure TPeerEvents.RequestReady(const AStream: TServerStream);
 begin
   Inc(FRequests);
   FReadyIds.Add(AStream.StreamId);
+  // a test that needs the connection lock held parks the feeding thread here
+  if FEntered <> nil then
+    FEntered.SetEvent;
+  if FHold <> nil then
+    FHold.WaitFor(5000);
 end;
 
 procedure TPeerEvents.StreamReset(const AStream: TServerStream);
@@ -245,7 +263,9 @@ begin
   Result.Core.ConnectionUpdateThreshold := cDefaultWindow div 2;
   Result.Core.StreamUpdateThreshold := cDefaultWindow div 2;
   Result.Core.ConnectProtocol := False;
+  Result.Core.MaxOutputBytes := 0;
   Result.BucketCapacity := 100000;
+  Result.ControlCapacity := 100000;
 end;
 
 { helpers }
@@ -289,7 +309,7 @@ begin
   FEventsRef := FEvents;
   R := TTokenBucketOptions.Create.WithCapacity(AOptions.BucketCapacity).
     WithRefillPerSecond(0).WithCostBeforeDispatch(1).WithCostAfterDispatch(2);
-  C := TTokenBucketOptions.Create.WithCapacity(AOptions.BucketCapacity).
+  C := TTokenBucketOptions.Create.WithCapacity(AOptions.ControlCapacity).
     WithRefillPerSecond(0).WithCostBeforeDispatch(1).WithCostAfterDispatch(1);
   FLimits := TConnectionLimits.Create(FClockRef, R, C);
   FCore := TServerConnectionCore.Create(AOptions.Core, FEventsRef, FLimits,

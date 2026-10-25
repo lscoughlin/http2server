@@ -162,6 +162,7 @@ type
     FStreamPoolSize: Integer;
     FMaxDetachedStreams: Integer;
     FChannelQueueLimit: Integer;
+    FMaxOutputQueueBytes: Integer;
     FChannelLowWater: Integer;
     FSseKeepAliveMs: Integer;
     FSseStallTimeoutMs: Integer;
@@ -236,6 +237,9 @@ type
     function WithChannelQueueLimit(const AValue: Integer): THttp2ServerFactory;
     /// the queued byte count at or below which a refused writer is told
     function WithChannelLowWater(const AValue: Integer): THttp2ServerFactory;
+    /// the most octets that the output queue of one connection may hold; a peer
+    /// that does not read ends the connection above it; 0 sets no cap
+    function WithMaxOutputQueueBytes(const AValue: Integer): THttp2ServerFactory;
     /// the period of the keep-alive comment of an event stream, in milliseconds; 0 turns it off
     function WithSseKeepAlive(const AValue: Integer): THttp2ServerFactory;
     /// how long a full event stream may stay full before the server closes it; 0 turns it off
@@ -355,6 +359,7 @@ type
     property MaxDetachedStreams: Integer read FMaxDetachedStreams;
     property ChannelQueueLimit: Integer read FChannelQueueLimit;
     property ChannelLowWater: Integer read FChannelLowWater;
+    property MaxOutputQueueBytes: Integer read FMaxOutputQueueBytes;
     property SseKeepAliveMs: Integer read FSseKeepAliveMs;
     property SseStallTimeoutMs: Integer read FSseStallTimeoutMs;
 
@@ -563,6 +568,7 @@ begin
   Result.FMaxDetachedStreams := 10000;
   Result.FChannelQueueLimit := 262144;
   Result.FChannelLowWater := 65536;
+  Result.FMaxOutputQueueBytes := 16777216;
   Result.FSseKeepAliveMs := 15000;
   Result.FSseStallTimeoutMs := 30000;
   Result.FQueue := TQueueOptions.Create;
@@ -686,6 +692,13 @@ function THttp2ServerFactory.WithChannelQueueLimit(
 begin
   Result := Self;
   Result.FChannelQueueLimit := AValue;
+end;
+
+function THttp2ServerFactory.WithMaxOutputQueueBytes(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FMaxOutputQueueBytes := AValue;
 end;
 
 function THttp2ServerFactory.WithChannelLowWater(
@@ -904,6 +917,8 @@ begin
     Add('the detached stream limit is below 0');
   if FChannelQueueLimit < 1 then
     Add('the channel queue limit is below 1');
+  if FMaxOutputQueueBytes < 0 then
+    Add('the output queue cap is below 0');
   if (FChannelLowWater < 0) or (FChannelLowWater >= FChannelQueueLimit) then
     Add('the channel low-water mark is outside 0 to the queue limit minus 1');
   if (FSseKeepAliveMs < 0) or (FSseKeepAliveMs > cSseMaxMs) then

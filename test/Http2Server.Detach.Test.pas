@@ -180,6 +180,8 @@ begin
   Result.OutboundBufferLimit := AOutboundLimit;
   Result.ConnectionUpdateThreshold := 32768;
   Result.StreamUpdateThreshold := 1000;
+  Result.ConnectProtocol := False;
+  Result.MaxOutputBytes := 0;
 end;
 
 procedure TDetachTest.MakeCore(const AOutboundLimit, ARegistryLimit: Integer);

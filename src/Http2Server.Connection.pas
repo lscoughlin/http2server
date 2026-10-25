@@ -234,6 +234,7 @@ begin
   // is a stream error
   if DependsOn = AFrame.Header.StreamId then
   begin
+    ChargePeerReset;
     SendRstStream(AFrame.Header.StreamId, ecProtocolError);
     Exit;
   end;
@@ -298,6 +299,7 @@ begin
   if AFrame.IsPriority and
      (HeaderPriorityDependsOn(AFrame) = AFrame.Header.StreamId) then
   begin
+    ChargePeerReset;
     SendRstStream(AFrame.Header.StreamId, ecProtocolError);
     if Stream <> nil then
     begin
@@ -695,6 +697,7 @@ end;
 procedure TServerConnectionCore.ProcessWindowUpdate(const AFrame: TFrame);
 var
   Increment: LongWord;
+  Stream: TServerStream;
 begin
   if FLimits <> nil then
     FLimits.Charge(lkWindowUpdate, 1);
@@ -716,10 +719,18 @@ begin
       FSend.ApplyStreamUpdate(AFrame.Header.StreamId, Increment);
     except
       // RFC 9113 section 6.9.1: a stream window above the maximum ends the
-      // stream, and the connection stays open
+      // stream, and the connection stays open. The stream closes, so a repeat
+      // of the frame meets a closed stream and costs the server nothing more
       on E: EHttpProtocolError do
       begin
+        ChargePeerReset;
+        Stream := FindStream(AFrame.Header.StreamId);
         SendRstStream(AFrame.Header.StreamId, ecFlowControlError);
+        if Stream <> nil then
+        begin
+          Stream.Cancel(ecFlowControlError);
+          CloseStream(Stream);
+        end;
         Exit;
       end;
     end;

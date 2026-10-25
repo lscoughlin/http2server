@@ -179,6 +179,8 @@ begin
   Result.OutboundBufferLimit := TestOutboundLimit;
   Result.ConnectionUpdateThreshold := TestConnThreshold;
   Result.StreamUpdateThreshold := TestStreamThreshold;
+  Result.ConnectProtocol := False;
+  Result.MaxOutputBytes := 0;
 end;
 
 function TConnectionCoreTest.BuildLimits(

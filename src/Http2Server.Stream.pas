@@ -664,15 +664,24 @@ begin
 end;
 
 procedure TServerStream.Write(const ABuffer; const ACount: Integer);
+var
+  Deadline: QWord;
+  Remaining: Integer;
 begin
   if ACount <= 0 then
     Exit;
+  // the same rule as Read: one blocked call waits at most the write timeout, so
+  // a peer that stops reading cannot hold a handler thread for ever
+  Deadline := GetTickCount64 + QWord(FWriteTimeoutMs);
   while True do
   begin
     RaiseIfCancelled;
     if DoWrite(ABuffer, ACount) then
       Exit;
-    if FWaiter.Wait(FWriteTimeoutMs) = wrCancelled then
+    Remaining := Integer(Deadline - GetTickCount64);
+    if Remaining <= 0 then
+      raise EHttpTimeout.Create('the response body write timed out');
+    if FWaiter.Wait(Remaining) = wrCancelled then
       raise EStreamCancelled.Create('the stream was cancelled',
         FStreamId, FResetCode);
   end;

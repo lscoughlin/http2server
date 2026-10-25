@@ -77,6 +77,7 @@ uses
   Http2Server.H2Flow.Test,
   Http2Server.H2Hpack.Test,
   Http2Server.H2Lifecycle.Test,
+  Http2Server.H2Locks.Test,
   Http2Server.Server.Test;
 
 const

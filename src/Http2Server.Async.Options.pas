@@ -79,6 +79,7 @@ begin
   result.ConnectionUpdateThreshold := AFactory.InitialConnectionWindow div 2;
   result.StreamUpdateThreshold := AFactory.InitialStreamWindow div 2;
   result.ConnectProtocol := AFactory.WebSocketsEnabled;
+  result.MaxOutputBytes := LongWord(AFactory.MaxOutputQueueBytes);
 end;
 
 function LeastControlBucket(

@@ -22,7 +22,7 @@
         </SyntaxOptions>
       </Parsing>
     </CompilerOptions>
-    <Files Count="69">
+    <Files Count="70">
       <Item1>
         <Filename Value="src/Http2Server.pas"/>
         <UnitName Value="Http2Server"/>
@@ -299,6 +299,10 @@
         <Filename Value="src/Http2Server.Stream.Meta.pas"/>
         <UnitName Value="Http2Server.Stream.Meta"/>
       </Item69>
+      <Item70>
+        <Filename Value="src/Http2Server.StreamIdSet.pas"/>
+        <UnitName Value="Http2Server.StreamIdSet"/>
+      </Item70>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>

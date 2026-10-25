@@ -120,6 +120,38 @@ core, the admission queue and the running handler. The reference count keeps
 a reset that arrives during a handler run from freeing the stream under the
 handler.
 
+## The connection lock
+
+One connection lock guards the core: the stream table, the HPACK codecs, the two
+flow-control objects and the output queue. A stream takes the connection lock
+first and its own stream lock second, and a thread never takes them in the other
+order. Every entry of the core that is not called from `Feed` takes the lock by
+itself: `Flush`, `DrainPending`, `TakeOutput`, `HasOutput`, `GracefulGoAway`
+(called by the server stop, from a thread that is not an IO thread) and
+`QueueRefusalFrame` (called by a handler thread).
+
+**The waker.** The write waker writes to the socket, and that write can block. The
+waker therefore never runs with the connection lock held. `NotifyWantsWrite` runs
+after the lock is released: a handler write reaches it from the stream host
+without the lock, and `QueueRefusalFrame` calls it after `UnlockConn`.
+
+**The output cap.** The option `MaxOutputQueueBytes` bounds the output of one
+connection. The core checks its queue at the end of each flush, and the IO side
+adds the octets that wait in the socket write buffer. A connection above the cap
+ends with a GOAWAY of `ENHANCE_YOUR_CALM` (RFC 9113 section 10.5), the IO side
+closes the socket at once, and the queued octets are dropped (`Aborted`).
+
+**The reset charge.** An `RST_STREAM` that a frame of the peer makes the server
+send is charged to the reset bucket: a PRIORITY or HEADERS frame that names its
+own stream, and a WINDOW_UPDATE that passes 2^31-1 on a stream. The stream closes
+after the reset, so a repeat of the frame meets a closed stream.
+
+**The write timeout.** A handler write that waits for room in the stream buffer
+ends with `EHttpTimeout` after `WriteTimeoutMs`, as a read ends after
+`ReadTimeoutMs`. A peer that stops reading cannot hold a handler thread. A write
+that does not reach the mORMot2 write path, after the one retry, ends the
+connection, because a frame with a hole cannot continue.
+
 ## The refusal and reset rules
 
 **The block of a refused stream.** A header block always runs through the HPACK

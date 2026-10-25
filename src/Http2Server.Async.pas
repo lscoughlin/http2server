@@ -448,6 +448,8 @@ begin
         exit(soClose);
     end;
     SendPendingOutput;
+    if FCore.Aborted then
+      exit(soClose);
     // The GOAWAY frame of a trip or a graceful stop must reach the peer, so
     // the close waits for the whole output drain.  A close before the drain
     // drops the queued GOAWAY and the peer never learns why the socket ended.
@@ -522,7 +524,16 @@ begin
       // the core lock, which every stream also takes, so the HPACK encoder
       // keeps one owner per connection
       if FCore <> nil then
+      begin
         FCore.DrainPending;
+        // the output queue passed its cap: the peer does not read, so the
+        // connection ends at once and the queued bytes are dropped
+        if FCore.Aborted then
+        begin
+          fOwner.ConnectionRemove(Handle);
+          exit;
+        end;
+      end;
       while PullOutput(Data) do
       begin
         // the mORMot2 write path takes the connection write lock, sends at
@@ -531,8 +542,22 @@ begin
         // the second check of the mORMot2 wake-up pattern
         if not fOwner.Write(Self, pointer(Data), Length(Data),
              cWriteTimeoutMs) then
-          fOwner.Write(Self, pointer(Data), Length(Data), cWriteTimeoutMs);
+          if not fOwner.Write(Self, pointer(Data), Length(Data),
+               cWriteTimeoutMs) then
+          begin
+            // the bytes did not reach the write path. A stream with a hole in it
+            // cannot continue, so the connection ends
+            fOwner.ConnectionRemove(Handle);
+            exit;
+          end;
         result := True;
+        // the bytes that mORMot2 holds for the socket count against the cap too
+        if (FServer.CoreOptions.MaxOutputBytes > 0) and
+           (PendingWriteBytes > Int64(FServer.CoreOptions.MaxOutputBytes)) then
+        begin
+          fOwner.ConnectionRemove(Handle);
+          exit;
+        end;
       end;
       // The exit decision and the FInSend clear share one lock hold.  A
       // handler that writes during the drain finds FInSend true and only

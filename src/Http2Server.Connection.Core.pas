@@ -53,6 +53,9 @@ type
     StreamUpdateThreshold: LongWord;
     /// advertise SETTINGS_ENABLE_CONNECT_PROTOCOL and accept :protocol (RFC 8441)
     ConnectProtocol: Boolean;
+    /// the most octets that the output queue of one connection may hold; a
+    /// peer that does not read ends the connection above it. Zero sets no cap
+    MaxOutputBytes: LongWord;
   end;
 
   /// the core raises one of these events for every state change the server acts on
@@ -149,6 +152,8 @@ type
     /// a bucket tripped inside a frame handler, and the open streams must end
     // once the handler has returned
     FTripPending: Boolean;
+    /// the output queue passed MaxOutputBytes
+    FAborted: Boolean;
     FTripKind: TLimitKind;
     FConnUpdatePending: LongWord;
     /// the waker that the IO side installs; nil until the server registers one
@@ -185,6 +190,9 @@ type
       const AErrorCode: THttp2ErrorCode);
     /// cancel and close every open stream, with AErrorCode
     procedure EndAllStreams(const AErrorCode: THttp2ErrorCode);
+    /// charge the reset bucket for an RST_STREAM that a frame of the peer made
+    // the server send, so a peer cannot ask for resets without a bound
+    procedure ChargePeerReset;
     procedure CloseStream(const AStream: TServerStream);
     procedure ReapClosedStreams;
     /// queue an RST_STREAM for a stream that the local side refused
@@ -263,6 +271,11 @@ type
     property GoAwaySent: Boolean read FGoAwaySent;
     /// true while the connection winds down after a GOAWAY or a fault
     property IsClosing: Boolean read FClosing;
+    /// true once the output queue passed its cap: the IO side closes the
+    /// connection at once and drops the queued bytes
+    property Aborted: Boolean read FAborted;
+    /// the octets in the output queue now
+    function OutputBytes: Integer;
     /// the number of streams that count against SETTINGS_MAX_CONCURRENT_STREAMS
     property OpenStreams: Integer read OpenStreamCount;
     /// the highest client stream id the core accepted
@@ -512,6 +525,16 @@ begin
   end;
 end;
 
+function TConnectionCoreBase.OutputBytes: Integer;
+begin
+  LockConn;
+  try
+    Result := FOutputCount;
+  finally
+    UnlockConn;
+  end;
+end;
+
 function TConnectionCoreBase.HasOutput: Boolean;
 begin
   LockConn;
@@ -536,6 +559,15 @@ begin
     // exception may leave: the IO thread and the handler threads both call here
     on E: EHttpError do
       FailConnection(E.Message, E.ErrorCode);
+  end;
+  // RFC 9113 section 10.5: a peer that never reads must not make the queue
+  // grow without a bound. Above the cap the connection ends at once, and the
+  // IO side drops what is queued
+  if (FOptions.MaxOutputBytes > 0) and not FAborted and
+     (FOutputCount > Integer(FOptions.MaxOutputBytes)) then
+  begin
+    FAborted := True;
+    FailConnection('the output queue passed its cap', ecEnhanceYourCalm);
   end;
   // A stream whose two halves have ended is closed.  FById.Count feeds both
   // the concurrent-stream limit and the GOAWAY drain, so a stream that ended
@@ -564,10 +596,12 @@ begin
   LockConn;
   try
     SendRstStream(AStreamId, AErrorCode);
-    NotifyWantsWrite;
   finally
     UnlockConn;
   end;
+  // the waker writes to the socket, which can block, so it runs with the
+  // connection lock released (the rule of the lock order in doc/design/connection.md)
+  NotifyWantsWrite;
 end;
 
 procedure TConnectionCoreBase.FlushDrainedOutput;
@@ -591,7 +625,14 @@ end;
 procedure TConnectionCoreBase.GracefulGoAway(const ALastStreamId: LongWord;
   const AErrorCode: THttp2ErrorCode);
 begin
-  SendGoAway(ALastStreamId, AErrorCode);
+  // the server stop calls this from a thread that is not an IO thread. The
+  // output queue is shared with Feed and TakeOutput, so the call holds the lock
+  LockConn;
+  try
+    SendGoAway(ALastStreamId, AErrorCode);
+  finally
+    UnlockConn;
+  end;
 end;
 
 procedure TConnectionCoreBase.SetWriteWaker(const AWaker: IWriteWaker);
@@ -678,6 +719,12 @@ begin
   QueueFrame(BuildRstStreamFrame(AStreamId, AErrorCode));
   // frames of the peer that were in flight before it saw this reset are ignored
   FResetIds.Add(AStreamId);
+end;
+
+procedure TConnectionCoreBase.ChargePeerReset;
+begin
+  if FLimits <> nil then
+    FLimits.ChargeReset(False);
 end;
 
 procedure TConnectionCoreBase.EndAllStreams(const AErrorCode: THttp2ErrorCode);
