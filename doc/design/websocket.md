@@ -101,6 +101,25 @@ frame has gone out. The session does not drop a message by itself. The sender
 splits a message into frames of `FrameSize` octets. A Pong and a Close echo are
 separate writes, so they do not wait behind a message that is being built.
 
+**The send lock.** One send lock keeps the frames of two writers apart. A writer
+encodes its message before it takes the lock, then checks under the lock that the
+session is open, and then writes. A Close frame needs the same lock, so no data
+frame follows a Close frame (RFC 6455 section 5.5.1).
+
+**The IO thread never waits for the send lock.** A thread that holds the send lock
+waits for the connection lock when it writes into the stream, and the IO thread holds
+the connection lock while it parses frames. If the IO thread waited for the send
+lock, the two threads would wait for each other. The IO thread therefore tries the
+lock without waiting. When the lock is busy, or when an earlier reply still waits, the
+reply (a Pong, a Close echo or the Close frame of a protocol error) goes to the
+streaming pool as a task. The pool sends the replies in order, and a reply that must
+close the channel closes it after the frame.
+
+**The size of a sent message.** `SendStream` builds the message in memory, so the
+message is limited by `MaxMessageSize`. `MaxMessageSize` is at most 2147483647, and
+`MaxFrameSize` is at most `MaxMessageSize`. A close reason must be UTF-8, and the
+server cuts a reason that it builds itself on the boundary of a character.
+
 `Abort` closes the channel at once, with no Close frame and no later callback.
 `SetContext` and `Context` keep a value of the application for the life of the
 session; the session releases it at the end.
@@ -138,13 +157,18 @@ call a database.
 ## The receive path
 
 The IO thread that delivers octets parses the frames. It answers control frames at
-once: a Ping is answered with a Pong that has the same payload, and a Close frame is
-echoed with the same code. It puts each data message on the queue of its session.
+once, under the rule of the send lock above: a Ping is answered with a Pong that has
+the same payload, and a Close frame is echoed with the same code. It puts each data
+message on the queue of its session.
 
-- **Credit.** The octets of control frames are credited to the channel at once. The
-  octets of data frames are credited while the message is assembled, so a message
-  larger than the HTTP/2 window can arrive. When the queue of a session is half full,
-  the credit of data octets waits until the application has taken messages.
+- **Credit.** Every octet is credited to the channel once, when it is consumed, so a
+  message larger than the HTTP/2 window can arrive and a control frame in pieces cannot
+  raise the window above what the server consumed. When the queue of a session is half
+  full, the credit waits until the application has taken messages.
+- **Delivery at the end.** The messages that arrived before a Close frame are delivered
+  to `Message`, in order, and `Closed` follows the last of them. An abort, a failure of
+  a callback and a protocol error drop the messages that still wait. A lost connection
+  and a close timeout drop none.
 - **The queue cap.** A session holds at most `QueuedMessages` messages for the
   application. A peer that sends more, because it ignores the window or because the
   protocol has no window, is closed with 1008.

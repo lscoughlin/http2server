@@ -26,7 +26,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, SyncObjs,
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Duplex,
-  Http2Server.Sse.Encoder;
+  Http2Server.Sse.Encoder, Http2Server.ResponseWriter;
 
 type
   /// an open event stream
@@ -219,7 +219,11 @@ begin
     try
       case Result of
         srQueued:
-          FLastSendMs := NowMs;
+          begin
+            FLastSendMs := NowMs;
+            // the stream makes progress, so an earlier refusal is over
+            FFullSince := 0;
+          end;
         srFull:
           // a refusal that lasts is the stall; the drain callback ends it
           if FFullSince = 0 then
@@ -344,6 +348,9 @@ var
   Source: IStreamSource;
   KeepMs, StallMs, I: Integer;
 begin
+  // a bad header is refused before the response is detached, so no channel is
+  // left open and no detached-stream slot stays in use
+  CheckResponseHeaders(AExtraHeaders);
   Channel := AResponse.Detach;
   SetLength(Headers, 2 + Length(AExtraHeaders));
   Headers[0].Name := 'content-type';
@@ -352,7 +359,13 @@ begin
   Headers[1].Value := 'no-store';
   for I := 0 to High(AExtraHeaders) do
     Headers[2 + I] := AExtraHeaders[I];
-  Channel.Activate(200, Headers);
+  try
+    Channel.Activate(200, Headers);
+  except
+    // the channel is detached but not active: abort it, so it frees its slot
+    Channel.Close(ccAbort);
+    raise;
+  end;
   Registry := Channel.Registry;
   KeepMs := 0;
   StallMs := 0;

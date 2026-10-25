@@ -55,7 +55,16 @@ type
     FReleased: Boolean;
     /// the end of the inbound half reached the application sink
     FEndDelivered: Boolean;
+    /// Activate queued the headers and is moving the held bytes to the stream. The
+    // state stays pending until the hold is empty, so a Send from another thread
+    // joins the hold and no DATA can pass the HEADERS or the earlier bytes
+    FActivating: Boolean;
+    /// one thread moves the hold now
+    FFlushing: Boolean;
     procedure Release;
+    /// move the held bytes to the stream in order, and make the channel active
+    // when none is left; a refusal of the stream keeps the bytes for the drain
+    procedure FlushHold;
     function StreamOutboundLimit: Integer;
   public
     /// detach AStream and answer its channel
@@ -344,7 +353,7 @@ procedure THttp2StreamChannel.Complete(const AStatus: Integer;
 begin
   FLock.Acquire;
   try
-    if FState <> csPending then
+    if (FState <> csPending) or FActivating then
       raise EHttpError.Create('Complete needs a pending channel');
     FLocalClosed := True;
     FHold := nil;
@@ -367,24 +376,80 @@ end;
 
 procedure THttp2StreamChannel.Activate(const AStatus: Integer;
   const AHeaders: THeaderBlock);
-var
-  Hold: TBytes;
 begin
   FLock.Acquire;
   try
-    if FState <> csPending then
+    if (FState <> csPending) or FActivating then
       raise EHttpError.Create('Activate needs a pending channel');
-    FState := csActive;
-    Hold := FHold;
-    FHold := nil;
+    FActivating := True;
   finally
     FLock.Release;
   end;
-  CheckResponseHeaders(AHeaders);
-  FStream.QueueResponseHeaders(AStatus,
-    WithDate(PrepareH2ResponseHeaders(AHeaders), AStatus), False);
-  if Length(Hold) > 0 then
-    FStream.TryWrite(Hold);
+  try
+    CheckResponseHeaders(AHeaders);
+    // the state is still pending, so a Send from another thread joins the hold
+    // and no DATA reaches the stream before the HEADERS
+    FStream.QueueResponseHeaders(AStatus,
+      WithDate(PrepareH2ResponseHeaders(AHeaders), AStatus), False);
+  except
+    FLock.Acquire;
+    try
+      FActivating := False;
+    finally
+      FLock.Release;
+    end;
+    raise;
+  end;
+  FlushHold;
+end;
+
+procedure THttp2StreamChannel.FlushHold;
+var
+  Hold: TBytes;
+  Again: Boolean;
+begin
+  repeat
+    Again := False;
+    FLock.Acquire;
+    try
+      // a second caller leaves the work to the thread that moves the hold
+      if (not FActivating) or FFlushing then
+        Exit;
+      Hold := FHold;
+      FHold := nil;
+      if Length(Hold) = 0 then
+      begin
+        // nothing is held: later sends go straight to the stream, after all earlier bytes
+        FState := csActive;
+        FActivating := False;
+        Exit;
+      end;
+      FFlushing := True;
+    finally
+      FLock.Release;
+    end;
+    if FStream.TryWrite(Hold) then
+      Again := True
+    else
+    begin
+      // the stream buffer is over its limit. The bytes stay in order at the front
+      // of the hold, and the drain callback of the stream calls this method again
+      FLock.Acquire;
+      try
+        FHold := Concat(Hold, FHold);
+      finally
+        FLock.Release;
+      end;
+      // a drain that came before the bytes were back would be missed
+      Again := FStream.OutboundCount <= FStream.DrainLowWater;
+    end;
+    FLock.Acquire;
+    try
+      FFlushing := False;
+    finally
+      FLock.Release;
+    end;
+  until not Again;
 end;
 
 procedure THttp2StreamChannel.BytesReceived(const AData; const ACount: Integer);
@@ -435,14 +500,20 @@ begin
 end;
 
 procedure THttp2StreamChannel.WriteDrained;
+var
+  Moving: Boolean;
 begin
   FLock.Acquire;
   try
+    Moving := FActivating;
     if FAppSink <> nil then
       FAppSink.WriteDrained;
   finally
     FLock.Release;
   end;
+  // the stream drained: bytes that Activate had to keep can move on
+  if Moving then
+    FlushHold;
 end;
 
 end.

@@ -68,6 +68,8 @@ type
   TFakeResponse = class(TInterfacedObject, IServerResponse)
   public
     Channel: IDuplexChannel;
+    /// how often the response was detached
+    DetachCount: Integer;
     procedure SendHeaders(const AStatus: Integer; const AHeaders: THeaderBlock;
       const AEndStream: Boolean = False);
     procedure Write(const AData: TBytes); overload;
@@ -361,6 +363,7 @@ end;
 
 function TFakeResponse.Detach: IDuplexChannel;
 begin
+  Inc(DetachCount);
   Result := Channel;
 end;
 

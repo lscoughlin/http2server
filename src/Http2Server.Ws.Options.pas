@@ -217,6 +217,11 @@ begin
     Add('the WebSocket message size limit is below 1');
   if FMaxFrameSize < 1 then
     Add('the WebSocket frame size limit is below 1');
+  // the message is built in memory with a 32-bit length
+  if FMaxMessageSize > MaxInt then
+    Add('the WebSocket message size limit is above 2147483647');
+  if (FMaxMessageSize >= 1) and (FMaxFrameSize > FMaxMessageSize) then
+    Add('the WebSocket frame size limit is above the message size limit');
   if FMaxFragments < 1 then
     Add('the WebSocket fragment limit is below 1');
   if FQueuedMessages < 1 then

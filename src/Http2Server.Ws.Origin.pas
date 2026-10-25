@@ -164,7 +164,7 @@ begin
   end;
 end;
 
-function ParsePort(const APort: string; const AScheme: string; out AValue: Integer): Boolean;
+function ParsePort(const APort: string; out AValue: Integer): Boolean;
 begin
   Result := False;
   AValue := 0;
@@ -206,7 +206,7 @@ begin
     Exit;
   if HasPort then
   begin
-    if not ParsePort(PortText, Scheme, AOrigin.Port) then
+    if not ParsePort(PortText, AOrigin.Port) then
       Exit;
   end
   else
@@ -230,7 +230,7 @@ begin
     Exit;
   if HasPort then
   begin
-    if not ParsePort(PortText, AScheme, AOrigin.Port) then
+    if not ParsePort(PortText, AOrigin.Port) then
       Exit;
   end
   else

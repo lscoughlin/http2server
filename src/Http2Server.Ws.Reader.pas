@@ -153,8 +153,8 @@ begin
     Exit(False);
   FSink := ASink;
   try
-    // the parser stops at once if the assembly broke a rule: a failed reader
-    // makes the sink calls below return without work
+    // the parser reads to the end of the buffer. Once the assembly broke a
+    // rule the reader is failed, and every later sink call returns without work
     Result := FParser.Feed(AData, ACount, Self);
     if FFailed then
       Result := False;

@@ -56,10 +56,12 @@ type
     procedure UnwatchInit; override;
     procedure DropCloser; override;
     procedure RunTask;
+    function Dropping: Boolean;
     procedure DoInit;
     procedure DoMessage(const ATask: TWsTask);
     procedure DoPong(const ATask: TWsTask);
     procedure DoClosed(const ATask: TWsTask);
+    procedure DoReply(const ATask: TWsTask);
     procedure ProtocolFail(const ACode: Word; const AReason: string);
     procedure FinishReject(const AResult: TWsInitResult);
   public
@@ -146,6 +148,7 @@ begin
     wtMessage: DoMessage(T);
     wtPong: DoPong(T);
     wtClosed: DoClosed(T);
+    wtReply: DoReply(T);
   end;
 end;
 
@@ -269,11 +272,42 @@ begin
   Arm;
 end;
 
+function TWsSession.Dropping: Boolean;
+begin
+  FLock.Acquire;
+  try
+    Result := FDropMessages;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TWsSession.DoReply(const ATask: TWsTask);
+begin
+  // the IO thread could not take the send lock, so this thread sends the frame
+  try
+    SendControl(ATask.Opcode, ATask.Data);
+  except
+    ;   // the channel ended; the closing code below runs all the same
+  end;
+  FLock.Acquire;
+  try
+    if FDeferred > 0 then
+      Dec(FDeferred);
+  finally
+    FLock.Release;
+  end;
+  if ATask.CloseAfter then
+    FChannel.Close(ccGraceful);
+end;
+
 procedure TWsSession.DoMessage(const ATask: TWsTask);
 begin
-  if FState = wsEnded then
+  // a message that arrived before a Close frame is delivered, whatever the state
+  // of the session now. An abort, a failure of the session or a protocol error
+  // drops the messages that wait
+  if Dropping then
   begin
-    // the session ended; the message is dropped
     ReleaseCredit(True);
     Exit;
   end;
@@ -290,7 +324,7 @@ end;
 
 procedure TWsSession.DoPong(const ATask: TWsTask);
 begin
-  if FState = wsEnded then
+  if Dropping then
     Exit;
   try
     FHandler.Pong(Self, ATask.Data);
@@ -355,27 +389,23 @@ begin
       FChannel.Close(ccAbort);
       Exit;
     end;
-    FChunkControl := 0;
     Ok := FReader.Feed(AData, ACount, Self);
-    // the octets of control frames are credited at once. The octets of data
-    // frames are credited while the message is assembled, unless the queue of the
-    // session is half full: then they wait until the handler has taken messages
-    if FChunkControl > 0 then
-      FChannel.ReturnCredit(FChunkControl);
-    Data := ACount - FChunkControl;
-    if Data > 0 then
-    begin
-      FLock.Acquire;
-      try
-        Hold := FQueuedMsgs * 2 >= FOpts.QueuedMessages;
-        if Hold then
-          Inc(FHeldCredit, Data);
-      finally
-        FLock.Release;
-      end;
-      if not Hold then
-        FChannel.ReturnCredit(Data);
+    // every octet is credited once, when it is consumed: the octets of a frame
+    // that arrives in pieces are credited piece by piece, so a control frame in
+    // pieces cannot raise the window above what the server consumed. The credit
+    // waits when the queue of the session is half full, until the handler has
+    // taken messages
+    Data := ACount;
+    FLock.Acquire;
+    try
+      Hold := FQueuedMsgs * 2 >= FOpts.QueuedMessages;
+      if Hold then
+        Inc(FHeldCredit, Data);
+    finally
+      FLock.Release;
     end;
+    if not Hold then
+      FChannel.ReturnCredit(Data);
     if not Ok then
     begin
       Failure := FReader.Failure;
@@ -400,14 +430,24 @@ begin
     FLock.Release;
   end;
   FEnv.Count(wcProtocolErrors, 1);
+  // a protocol error drops the messages that wait
+  DropPending;
   if Send_ then
+  begin
+    // the IO thread runs here and never waits for the send lock. The Close frame
+    // goes out, and the channel closes after it
     try
-      SendCloseFrame(ACode, AReason);
+      IoSend(WsOpClose, ClosePayload(ACode, AReason), True);
     except
-      ;
+      FChannel.Close(ccGraceful);
     end;
-  EndWithClosed(ACode, AReason, False);
-  FChannel.Close(ccGraceful);
+    EndWithClosed(ACode, AReason, False);
+  end
+  else
+  begin
+    EndWithClosed(ACode, AReason, False);
+    FChannel.Close(ccGraceful);
+  end;
 end;
 
 procedure TWsSession.Message(const AText: Boolean; const AData: TBytes);
@@ -456,15 +496,13 @@ var
   T: TWsTask;
   Code: Integer;
   Reason: RawByteString;
-  Failure: TWsFailure;
   Already, Echo: Boolean;
   Echoed: Word;
 begin
-  // a control frame costs 6 octets of header and mask besides its payload
-  Inc(FChunkControl, 6 + Length(AData));
   if AOpcode = WsOpClose then
   begin
-    Failure := WsParseClosePayload(AData, Code, Reason);
+    // the reader checked the payload before this call, so only the values matter
+    WsParseClosePayload(AData, Code, Reason);
     FLock.Acquire;
     try
       if FState = wsEnded then
@@ -490,17 +528,23 @@ begin
         Echoed := Code
       else
         Echoed := WsCloseNormal;
+      // the IO thread runs here and never waits for the send lock. The echo
+      // goes out, and the channel closes after it
       try
         if Code = WsCloseNoStatus then
-          SendControl(WsOpClose, nil)
+          IoSend(WsOpClose, nil, True)
         else
-          SendCloseFrame(Echoed, '');
+          IoSend(WsOpClose, ClosePayload(Echoed, ''), True);
       except
-        ;
+        FChannel.Close(ccGraceful);
       end;
+      EndWithClosed(Word(Code), string(Reason), True);
+    end
+    else
+    begin
+      EndWithClosed(Word(Code), string(Reason), True);
+      FChannel.Close(ccGraceful);
     end;
-    EndWithClosed(Word(Code), string(Reason), True);
-    FChannel.Close(ccGraceful);
     Exit;
   end;
   if not FControl.TryTake(1) then
@@ -519,7 +563,7 @@ begin
       FLock.Release;
     end;
     if Echo then
-      SendControl(WsOpPong, AData);
+      IoSend(WsOpPong, AData, False);
     Exit;
   end;
   // a Pong

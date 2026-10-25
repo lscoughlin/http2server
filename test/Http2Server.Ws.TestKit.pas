@@ -39,6 +39,7 @@ type
     FRegistry: IChannelRegistry;
     FHold: TBytes;
     FState: TChannelState;
+    function SendLocked(const AData: TBytes): TSendResult;
   public
     Sent: TBytes;
     Sink: IChannelSink;
@@ -52,6 +53,10 @@ type
     ClosedCount: Integer;
     /// when True, Send refuses and queues nothing
     Full: Boolean;
+    /// a lock that stands for the connection lock of a real channel
+    // - Send takes it, and Deliver holds it while the sink runs, as the IO
+    //   thread does. A test sets it to show a lock-order inversion
+    ConnLock: TCriticalSection;
     constructor Create(const ARegistry: IChannelRegistry);
     destructor Destroy; override;
     function Send(const AData: TBytes): TSendResult;
@@ -184,6 +189,19 @@ begin
 end;
 
 function TFakeWsChannel.Send(const AData: TBytes): TSendResult;
+begin
+  // a real channel takes the connection lock to write the bytes into the stream
+  if ConnLock <> nil then
+    ConnLock.Acquire;
+  try
+    Result := SendLocked(AData);
+  finally
+    if ConnLock <> nil then
+      ConnLock.Release;
+  end;
+end;
+
+function TFakeWsChannel.SendLocked(const AData: TBytes): TSendResult;
 begin
   FLock.Acquire;
   try
@@ -345,8 +363,17 @@ end;
 
 procedure TFakeWsChannel.Deliver(const AData: TBytes);
 begin
-  if Length(AData) > 0 then
+  if Length(AData) = 0 then
+    Exit;
+  // the IO thread of a real channel holds the connection lock while the sink runs
+  if ConnLock <> nil then
+    ConnLock.Acquire;
+  try
     Sink.BytesReceived(AData[0], Length(AData));
+  finally
+    if ConnLock <> nil then
+      ConnLock.Release;
+  end;
 end;
 
 procedure TFakeWsChannel.DeliverPeerClosed(const AClean: Boolean);

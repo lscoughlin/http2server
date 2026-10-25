@@ -29,12 +29,13 @@ uses
   Http2Server.Errors, Http2Server.Hpack, Http2Server.Seam, Http2Server.Duplex,
   Http2Server.Limits, Http2Server.Observer, Http2Server.Ws.Options,
   Http2Server.Ws.Types, Http2Server.Ws.Frames, Http2Server.Ws.Parser,
-  Http2Server.Ws.Reader, Http2Server.Ws.Close, Http2Server.ClientCert;
+  Http2Server.Ws.Reader, Http2Server.Ws.Close, Http2Server.Ws.Utf8,
+  Http2Server.ClientCert;
 
 type
   TWsState = (wsInit, wsOpen, wsClosing, wsEnded);
 
-  TWsTaskKind = (wtInit, wtMessage, wtPong, wtClosed);
+  TWsTaskKind = (wtInit, wtMessage, wtPong, wtClosed, wtReply);
 
   TWsTask = record
     Kind: TWsTaskKind;
@@ -43,6 +44,10 @@ type
     Code: Word;
     Reason: string;
     Clean: Boolean;
+    /// wtReply: the opcode of the control frame to send
+    Opcode: Byte;
+    /// wtReply: close the channel gracefully after the frame
+    CloseAfter: Boolean;
   end;
 
   /// a read-only copy of the handshake request
@@ -99,8 +104,14 @@ type
     FTasks: TList<TWsTask>;
     FQueuedMsgs: Integer;
     FHeldCredit: Int64;
-    FChunkControl: Int64;
     FReader: TWsReader;
+    /// the due time of the armed timer, in the tick count of GetTickCount64
+    FArmedDue: QWord;
+    /// replies to the peer that wait on the streaming pool, because the send
+    /// lock was busy when the IO thread had to answer
+    FDeferred: Integer;
+    /// the messages that wait are dropped: the session was aborted or failed
+    FDropMessages: Boolean;
     FControl, FMessages: TTokenBucket;
     FLastInboundMs, FPingSentMs, FCloseSentMs: QWord;
     FSelf: IInterface;
@@ -119,6 +130,16 @@ type
     procedure EndQuietly;
     function SendControl(const AOpcode: Byte; const APayload: TBytes): TSendResult;
     procedure SendCloseFrame(const ACode: Word; const AReason: string);
+    /// the payload of a Close frame, with the reason cut on a character boundary
+    function ClosePayload(const ACode: Word; const AReason: string): TBytes;
+    /// answer the peer from the IO thread without ever waiting for the send lock
+    // - the IO thread holds the connection lock, and a thread that holds the send
+    //   lock waits for the connection lock, so waiting here would deadlock. When
+    //   the lock is busy, or an earlier reply waits, the reply goes to the pool
+    procedure IoSend(const AOpcode: Byte; const APayload: TBytes;
+      const ACloseAfter: Boolean);
+    /// the messages that wait are dropped from now on
+    procedure DropPending;
     procedure ReleaseCredit(const AMessageDone: Boolean);
   public
     constructor Create(const AEnv: IWsEnvironment; const AChannel: IDuplexChannel;
@@ -314,6 +335,7 @@ end;
 /// the session ends and no callback follows
 procedure TWsSessionCore.EndQuietly;
 begin
+  DropPending;
   TryEnd;
   if FRegistry <> nil then
     DropCloser;
@@ -324,6 +346,7 @@ end;
 procedure TWsSessionCore.Fail(const E: Exception);
 begin
   // a callback raised: Failed is the one ending call, then a Close frame 1011
+  DropPending;
   if not TryEnd then
     Exit;
   FEnv.Report(seWsFailed, 0, E.ClassName + ': ' + E.Message);
@@ -346,6 +369,16 @@ begin
     DropCloser;
   FSource.Close;
   FSelf := nil;
+end;
+
+procedure TWsSessionCore.DropPending;
+begin
+  FLock.Acquire;
+  try
+    FDropMessages := True;
+  finally
+    FLock.Release;
+  end;
 end;
 
 procedure TWsSessionCore.ReleaseCredit(const AMessageDone: Boolean);
@@ -378,7 +411,7 @@ var
 begin
   FLock.Acquire;
   try
-    if (FState = wsEnded) or FTimerArmed then
+    if FState = wsEnded then
       Exit;
     In_.NowMs := GetTickCount64;
     In_.LastInboundMs := FLastInboundMs;
@@ -392,7 +425,13 @@ begin
     WsTimerStep(In_, Delay);
     if Delay = 0 then
       Exit;
+    // a timer is armed already. A new deadline that is earlier, a close timeout
+    // against a ping timer, needs its own timer. The armed timer stays: when it
+    // fires it finds nothing due and arms again
+    if FTimerArmed and (In_.NowMs + QWord(Delay) >= FArmedDue) then
+      Exit;
     FTimerArmed := True;
+    FArmedDue := In_.NowMs + QWord(Delay);
   finally
     FLock.Release;
   end;
@@ -474,20 +513,69 @@ begin
   end;
 end;
 
-procedure TWsSessionCore.SendCloseFrame(const ACode: Word; const AReason: string);
-var
-  Reason: RawByteString;
+function TWsSessionCore.ClosePayload(const ACode: Word; const AReason: string): TBytes;
 begin
-  Reason := RawByteString(AReason);
-  if Length(Reason) > WsMaxCloseReason then
-    SetLength(Reason, WsMaxCloseReason);
-  SendControl(WsOpClose, WsBuildClosePayload(ACode, Reason));
+  // a reason is cut on the boundary of a character, so it stays valid UTF-8
+  Result := WsBuildClosePayload(ACode,
+    WsTruncateUtf8(RawByteString(AReason), WsMaxCloseReason));
+end;
+
+procedure TWsSessionCore.SendCloseFrame(const ACode: Word; const AReason: string);
+begin
+  SendControl(WsOpClose, ClosePayload(ACode, AReason));
+end;
+
+procedure TWsSessionCore.IoSend(const AOpcode: Byte; const APayload: TBytes;
+  const ACloseAfter: Boolean);
+var
+  Direct: Boolean;
+  Key: TWsMaskKey;
+  T: TWsTask;
+begin
+  Key := WsMaskKeyFromLongWord(0);
+  FLock.Acquire;
+  try
+    Direct := FDeferred = 0;
+    if not Direct then
+      Inc(FDeferred);
+  finally
+    FLock.Release;
+  end;
+  if Direct and FSendLock.TryEnter then
+  begin
+    try
+      FChannel.Send(WsEncodeFrame(AOpcode, True, APayload, False, Key));
+    finally
+      FSendLock.Release;
+    end;
+    if ACloseAfter then
+      FChannel.Close(ccGraceful);
+    Exit;
+  end;
+  if Direct then
+  begin
+    FLock.Acquire;
+    try
+      Inc(FDeferred);
+    finally
+      FLock.Release;
+    end;
+  end;
+  // the send lock is busy, or an earlier reply waits: the pool sends this one,
+  // in order, and closes the channel afterwards when the caller asked for it
+  T := Default(TWsTask);
+  T.Kind := wtReply;
+  T.Opcode := AOpcode;
+  T.Data := APayload;
+  T.CloseAfter := ACloseAfter;
+  Post(T);
 end;
 
 function TWsSessionCore.Send(const AData: TBytes; const AText: Boolean): TSendResult;
 var
   Op: Byte;
   Wire: TBytes;
+  Closed: Boolean;
 begin
   FLock.Acquire;
   try
@@ -500,9 +588,21 @@ begin
     Op := WsOpText
   else
     Op := WsOpBinary;
+  // the encoding is slow for a large message and needs no lock
   Wire := WsEncodeMessage(Op, AData, FOpts.FrameSize);
   FSendLock.Acquire;
   try
+    // RFC 6455 section 5.5.1: no data frame follows a Close frame. A Close
+    // that came while the message was encoded is seen here, and the Close
+    // frame itself needs the send lock, so it cannot slip in after this check
+    FLock.Acquire;
+    try
+      Closed := (FState = wsEnded) or FOutputClosed;
+    finally
+      FLock.Release;
+    end;
+    if Closed then
+      Exit(srClosed);
     Result := FChannel.Send(Wire);
   finally
     FSendLock.Release;
@@ -525,6 +625,9 @@ begin
   while AReader.NextChunk(Chunk) do
   begin
     At := Length(All);
+    // the whole message is built in memory, so its size has a cap
+    if Int64(At) + Length(Chunk) > FOpts.MaxMessageSize then
+      raise EHttpError.Create('a message to send is over the size limit');
     SetLength(All, At + Length(Chunk));
     if Length(Chunk) > 0 then
       Move(Chunk[0], All[At], Length(Chunk));
@@ -556,6 +659,9 @@ begin
     raise EHttpError.CreateFmt('the close code %d cannot be sent', [ACode]);
   if Length(AReason) > WsMaxCloseReason then
     raise EHttpError.Create('a close reason is over 123 octets');
+  // RFC 6455 section 5.5.1: the reason is UTF-8 text
+  if (Length(AReason) > 0) and not WsUtf8IsValid(AReason[1], Length(AReason)) then
+    raise EHttpError.Create('a close reason is not valid UTF-8');
   FLock.Acquire;
   try
     if (FState = wsEnded) or FOutputClosed then
@@ -579,6 +685,7 @@ end;
 
 procedure TWsSessionCore.Abort;
 begin
+  DropPending;
   if TryEnd then
   begin
     FChannel.Close(ccAbort);

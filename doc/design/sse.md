@@ -101,7 +101,13 @@ clears the stall mark.
 
 A stream that stays full for `SseStallTimeoutMs` is closed with an abort. The
 check runs on the timer, so the close happens within one timer period after the
-limit. The value 0 turns the check off. The default is 30000.
+limit. The value 0 turns the check off. The default is 30000. A send that the
+channel queues also clears the stall mark, so a stream that makes progress is not
+closed for an old refusal.
+
+`StartSse` checks the extra header fields before it detaches the response. A header
+that is not legal raises an error and leaves no detached stream. If the activation
+of the channel fails after the detach, the channel is aborted and frees its slot.
 
 ## The close rules
 
