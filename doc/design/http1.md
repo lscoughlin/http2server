@@ -137,7 +137,22 @@ rule applies to HTTP/2.
 
 When a request carries `Expect: 100-continue`, the server sends `100 Continue` when
 the handler first reads the body. A handler that answers without a read sends no
-interim response.
+interim response. A final response that goes out before the server asked for the
+body carries `Connection: close` and ends the connection, because the client may
+send the body late or not at all (RFC 9110 section 10.1.1).
+
+A defect in the octets behind the request in progress, such as a pipeline over its
+limit or a malformed next request, does not cancel the request in progress. That
+request finishes, the connection closes after its response, and the octets behind it
+are dropped. A malformed chunk that follows an early response gets no second
+response; the connection closes.
+
+While the server stops, an idle connection closes and a request in progress ends
+with `Connection: close`.
+
+The parser answers 400 to `Transfer-Encoding:chunked` and `Content-Length:5` written
+with no space after the colon. The fields are valid, but the cross-check of the
+framing refuses them. The refusal is safe, since no request is smuggled.
 
 ## The staged close
 
@@ -169,8 +184,13 @@ and `Stop`.
 | `MaxChunkExtension` | 1024 | 400 |
 | `MaxTrailerOctets` | 4096 | 431 |
 | `MaxBodySize` | 16777216 | 413 |
-| `MaxPipelinedOctets` | 65536 | 400 and close |
+| `MaxPipelinedOctets` | 65536 | the request in progress finishes, then the connection closes |
 | `BodyDeadlineMs` | 30000 | 408 and close |
+| `BodyTotalMs` | 300000 | 408 and close; 0 turns the limit off |
+
+`BodyDeadlineMs` counts the time between two arrivals of body octets. A peer that
+sends one octet before each deadline passes that limit, so `BodyTotalMs` bounds the
+time from the request head to the end of the body (RFC 9112 section 6.3).
 
 A request that stays half read past the header timeout of the factory gets 408 and
 a close. A connection that has sent no octet closes silently at the idle timeout.

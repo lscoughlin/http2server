@@ -44,6 +44,8 @@ type
     OutboundLimit: Int64;
     /// the greatest wait between two arrivals of body octets, in milliseconds
     BodyDeadlineMs: Integer;
+    /// the greatest time from the head to the end of the body; 0 is no limit
+    BodyTotalMs: Integer;
     /// a write that sees no progress for this time aborts the connection
     WriteStallMs: Integer;
   end;
@@ -71,6 +73,8 @@ type
     FCancelled: Boolean;
     FExpectAsked: Boolean;
     FLastProgressMs: QWord;
+    /// when the head arrived; the total body limit counts from here
+    FStartMs: QWord;
     // the response
     FHeadersSent: Boolean;
     FFinished: Boolean;
@@ -127,6 +131,8 @@ type
     function ResponseStarted: Boolean;
     /// milliseconds since body octets last arrived; 0 once the body has ended
     function BodyIdleMs(const ANowMs: QWord): QWord;
+    /// milliseconds since the head arrived; 0 once the body has ended
+    function BodyAgeMs(const ANowMs: QWord): QWord;
     /// the request has ended and the body was read or dropped
     function BodyEnded: Boolean;
     function ResponseFinished: Boolean;
@@ -199,6 +205,7 @@ begin
   FBodyEv := RTLEventCreate;
   FRoomEv := RTLEventCreate;
   FLastProgressMs := GetTickCount64;
+  FStartMs := FLastProgressMs;
   FKeep := AHead.KeepAlive;
 end;
 
@@ -267,6 +274,19 @@ begin
       Result := 0
     else
       Result := ANowMs - FLastProgressMs;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TH1Exchange.BodyAgeMs(const ANowMs: QWord): QWord;
+begin
+  FLock.Acquire;
+  try
+    if FBodyEnded or (ANowMs < FStartMs) then
+      Result := 0
+    else
+      Result := ANowMs - FStartMs;
   finally
     FLock.Release;
   end;
@@ -403,6 +423,9 @@ begin
       end;
       if (FOptions.BodyDeadlineMs > 0) and
          (GetTickCount64 - FLastProgressMs > QWord(FOptions.BodyDeadlineMs)) then
+        Late := True;
+      if (FOptions.BodyTotalMs > 0) and
+         (GetTickCount64 - FStartMs > QWord(FOptions.BodyTotalMs)) then
         Late := True;
     finally
       FLock.Release;
@@ -567,6 +590,17 @@ begin
     if FHead.Line.Minor = 1 then
       Emit(H1TextBytes(Http1StatusLine(AStatus, 1) + #13#10));
     Exit;
+  end;
+  // a final response before the server asked for the body (RFC 9110 section
+  // 10.1.1): the client waits for the 100 and may send the body late or not
+  // at all, so the next octets are not a safe start of the next request. The
+  // connection closes after this response
+  FLock.Acquire;
+  try
+    if FHead.Expect100 and not FExpectAsked and not FBodyEnded then
+      FKeep := False;
+  finally
+    FLock.Release;
   end;
   Bytes := H1BuildResponseHead(FHead.Line.Method, FHead.Line.Minor, FKeep,
     AStatus, AHeaders, Framing);
@@ -767,8 +801,17 @@ var
   Extra: THeaderBlock;
 begin
   Extra := nil;
-  FKeep := False;
-  FHeadersSent := True;
+  // a refusal that comes late (the exchange ended, or a response is under way)
+  // changes nothing
+  FLock.Acquire;
+  try
+    if FFinished or FHeadersSent then
+      Exit;
+    FKeep := False;
+    FHeadersSent := True;
+  finally
+    FLock.Release;
+  end;
   if AReason <> jrStopped then
   begin
     SetLength(Extra, 1);

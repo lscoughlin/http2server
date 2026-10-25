@@ -188,20 +188,37 @@ var
   Early: TBytes;
   Ended: Boolean;
 begin
-  FLock.Acquire;
-  try
-    FSink := ASink;
-    if ASink = nil then
-      Exit;
-    Early := FEarly;
-    FEarly := nil;
-    Ended := FEarlyEnded;
-    FEarlyEnded := False;
-  finally
-    FLock.Release;
+  if ASink = nil then
+  begin
+    FLock.Acquire;
+    try
+      FSink := nil;
+    finally
+      FLock.Release;
+    end;
+    Exit;
   end;
-  if Length(Early) > 0 then
-    ASink.BytesReceived(Early[0], Length(Early));
+  // the sink becomes visible to Inbound only when no early octet waits, so the
+  // octets that arrive during the delivery queue behind the early ones and the
+  // session sees them in the order of arrival
+  repeat
+    FLock.Acquire;
+    try
+      Early := FEarly;
+      FEarly := nil;
+      Ended := False;
+      if Length(Early) = 0 then
+      begin
+        FSink := ASink;
+        Ended := FEarlyEnded;
+        FEarlyEnded := False;
+      end;
+    finally
+      FLock.Release;
+    end;
+    if Length(Early) > 0 then
+      ASink.BytesReceived(Early[0], Length(Early));
+  until Length(Early) = 0;
   if Ended then
     ASink.PeerClosed(False);
 end;

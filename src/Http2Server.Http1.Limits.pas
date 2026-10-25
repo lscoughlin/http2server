@@ -34,6 +34,7 @@ type
     FMaxBodySize: Int64;
     FMaxPipelinedOctets: Integer;
     FBodyDeadlineMs: Integer;
+    FBodyTotalMs: Integer;
   public
     /// the defaults of the limits
     class function Create: THttp11Limits; static;
@@ -57,6 +58,11 @@ type
     function WithMaxPipelinedOctets(const AValue: Integer): THttp11Limits;
     /// the greatest wait between two reads of a request body, in milliseconds
     function WithBodyDeadlineMs(const AValue: Integer): THttp11Limits;
+    /// the greatest time from the request head to the end of its body, in
+    /// milliseconds; 0 turns the limit off
+    // - a peer that sends one octet before each idle deadline passes the idle
+    //   limit, so this limit bounds the time a handler waits for a body
+    function WithBodyTotalMs(const AValue: Integer): THttp11Limits;
 
     /// add one text to AProblems for each limit that is not usable
     procedure Problems(var AProblems: TArray<string>);
@@ -71,6 +77,7 @@ type
     property MaxBodySize: Int64 read FMaxBodySize;
     property MaxPipelinedOctets: Integer read FMaxPipelinedOctets;
     property BodyDeadlineMs: Integer read FBodyDeadlineMs;
+    property BodyTotalMs: Integer read FBodyTotalMs;
   end;
 
 implementation
@@ -94,6 +101,7 @@ begin
   Result.FMaxBodySize := 16777216;
   Result.FMaxPipelinedOctets := 65536;
   Result.FBodyDeadlineMs := 30000;
+  Result.FBodyTotalMs := 300000;
 end;
 
 function THttp11Limits.WithMaxRequestLine(const AValue: Integer): THttp11Limits;
@@ -156,6 +164,12 @@ begin
   Result.FBodyDeadlineMs := AValue;
 end;
 
+function THttp11Limits.WithBodyTotalMs(const AValue: Integer): THttp11Limits;
+begin
+  Result := Self;
+  Result.FBodyTotalMs := AValue;
+end;
+
 procedure THttp11Limits.Problems(var AProblems: TArray<string>);
 
   procedure Add(const AText: string);
@@ -185,6 +199,8 @@ begin
     Add('the HTTP/1.1 pipelined octet limit is below 0');
   if FBodyDeadlineMs < 0 then
     Add('the HTTP/1.1 body deadline is below 0');
+  if FBodyTotalMs < 0 then
+    Add('the HTTP/1.1 total body time is below 0');
   // the parser of mORMot2 enforces its own ceilings; a higher limit here
   // could never take effect
   if FMaxRequestLine > MaxHttpHeaderLineSize then

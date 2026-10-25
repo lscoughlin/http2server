@@ -87,6 +87,9 @@ type
     FHeadStartMs: QWord;
     /// the server stops: no request of this connection keeps it alive
     FDraining: Boolean;
+    /// a defect came behind the request in progress: it finishes, then the
+    /// connection closes
+    FStopAfter: Boolean;
     procedure Enqueue(const AData: TBytes);
     procedure Advance;
     procedure RefuseDirect(const AStatus: Integer);
@@ -458,7 +461,7 @@ begin
   try
     // after an error answer or a close request, later octets are dropped: the
     // request behind a framing defect is never served
-    if FLost or FCloseAfter then
+    if FLost or FCloseAfter or FStopAfter then
       Exit;
     // an upgrade is decided or done: the octets belong to its channel
     Target := FInbound;
@@ -488,6 +491,7 @@ begin
   Options.Scheme := FOptions.Scheme;
   Options.OutboundLimit := FOptions.OutboundLimit;
   Options.BodyDeadlineMs := FOptions.Limits.BodyDeadlineMs;
+  Options.BodyTotalMs := FOptions.Limits.BodyTotalMs;
   Options.WriteStallMs := FOptions.WriteStallMs;
   Exchange := TH1Exchange.Create(FLink, AHead, Options, FOrdinal - 1);
   Ref := Exchange;
@@ -520,11 +524,27 @@ end;
 procedure TH1Core.Rejected(const AVerdict: TH1Verdict);
 begin
   FHeadStartMs := 0;
+  if (FCurrent <> nil) and FRequestDone and not FExchangeDone then
+  begin
+    // the defect is in the octets behind the request that is served now (a
+    // pipeline over its limit, or a malformed next request). The request in
+    // progress is valid, so it finishes. The connection closes after it, and
+    // the octets behind it are dropped
+    FStopAfter := True;
+    Exit;
+  end;
   if (FCurrent <> nil) and not FExchangeDone then
   begin
     // the request broke after its head: the exchange answers if it has not, and
     // wakes the handler
     FCurrent.Fail(AVerdict.Status);
+    FCloseAfter := True;
+    Exit;
+  end;
+  if (FCurrent <> nil) and FExchangeDone then
+  begin
+    // the exchange ended already (an early response): the defect belongs to no
+    // request, so no second response goes out. The connection closes
     FCloseAfter := True;
     Exit;
   end;
@@ -537,7 +557,7 @@ begin
   FLock.Acquire;
   try
     FExchangeDone := True;
-    FKeepAfter := AKeepAlive and not AFailed and not FDraining;
+    FKeepAfter := AKeepAlive and not AFailed and not FDraining and not FStopAfter;
     if not FKeepAfter then
       FCloseAfter := True;
     Advance;
@@ -607,8 +627,10 @@ begin
       Result := True;
     end
     else if (FCurrent <> nil) and not FRequestDone and
-            (FOptions.Limits.BodyDeadlineMs > 0) and
-            (FCurrent.BodyIdleMs(ANowMs) > QWord(FOptions.Limits.BodyDeadlineMs)) then
+            (((FOptions.Limits.BodyDeadlineMs > 0) and
+              (FCurrent.BodyIdleMs(ANowMs) > QWord(FOptions.Limits.BodyDeadlineMs))) or
+             ((FOptions.Limits.BodyTotalMs > 0) and
+              (FCurrent.BodyAgeMs(ANowMs) > QWord(FOptions.Limits.BodyTotalMs)))) then
     begin
       // the client stopped sending the body
       FCurrent.Fail(408);

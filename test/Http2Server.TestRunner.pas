@@ -82,6 +82,7 @@ uses
   Http2Server.Lifecycle.Test,
   Http2Server.ConfigRanges.Test,
   Http2Server.Facade.Test,
+  Http2Server.Http1.Hardening.Test,
   Http2Server.Server.Test;
 
 const
