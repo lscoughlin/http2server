@@ -115,10 +115,23 @@ zero value removes it. The check runs inside the append step
 `EHttpProtocolError` with `ecEnhanceYourCalm` part way through a hostile
 block instead of building the full list first.
 
-The decoder also obeys the table size that the server advertised through
-`SETTINGS_HEADER_TABLE_SIZE`: a dynamic table size update above that value is
-a compression error. The encoder obeys the table size of the peer, which the
-connection applies through `ApplySettings`.
+### The two table directions
+
+The `SETTINGS_HEADER_TABLE_SIZE` of a peer describes the decoder of that peer
+(RFC 9113 section 6.5.2), so it sizes the response encoder and never the request
+decoder:
+
+- The request decoder obeys the value that the server advertised. A dynamic
+  table size update above that value is a compression error. A SETTINGS frame of
+  the peer does not change the decoder (`THpackCodec.SetDecoderLimit`).
+- The response encoder uses the smaller of the value of the peer and a local cap,
+  which is the server's own setting (`SetEncoderCap`, `SetPeerTableSize`). The
+  peer value starts at the default of 4096 until a SETTINGS frame names another.
+- A change of the encoder size is signalled at the start of the next response
+  block with a dynamic table size update (RFC 7541 section 4.2). When the size
+  changed twice between two blocks, the block starts with the smallest size of
+  the interval and then the final size. The encoder sends no update when the size
+  did not change.
 
 ## Flow control
 

@@ -234,6 +234,10 @@ type
     function ConnectionWindowSize: Int64;
     /// the octets the peer may still send on one stream window
     function StreamWindowSize(const AStreamId: LongWord): Int64;
+    /// the HPACK table size that the request decoder accepts now (test seam)
+    function HpackDecoderMaxSize: LongWord;
+    /// the HPACK table size that the response encoder uses now (test seam)
+    function HpackEncoderMaxSize: LongWord;
     /// the octets the server may still send on the connection window
     function SendConnectionWindowSize: Int64;
     /// the octets the server may still send on one stream window
@@ -722,6 +726,26 @@ begin
       Result := W.Size
     else
       Result := 0;
+  finally
+    UnlockConn;
+  end;
+end;
+
+function TConnectionCoreBase.HpackDecoderMaxSize: LongWord;
+begin
+  LockConn;
+  try
+    Result := FHpack.DecoderMaxSize;
+  finally
+    UnlockConn;
+  end;
+end;
+
+function TConnectionCoreBase.HpackEncoderMaxSize: LongWord;
+begin
+  LockConn;
+  try
+    Result := FHpack.EncoderMaxSize;
   finally
     UnlockConn;
   end;

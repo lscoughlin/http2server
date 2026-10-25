@@ -56,6 +56,15 @@ type
     //   field list as the sum over the field of 32 plus the name octets
     //   plus the value octets
     FMaxHeaderListSize: LongWord;
+    /// the local bound of the encoder table, whatever the peer announces
+    FEncoderCap: LongWord;
+    /// the SETTINGS_HEADER_TABLE_SIZE that the peer announced for its decoder
+    FPeerTableSize: LongWord;
+    /// true while a change of the encoder table size waits to be signalled
+    FUpdatePending: Boolean;
+    /// the smallest encoder table size since the last block (RFC 7541 4.2)
+    FUpdateMin: LongWord;
+    procedure RecomputeEncoderSize;
     function GetEncoderTableSize: LongWord;
     function GetDecoderTableSize: LongWord;
     function GetEncoderMaxSize: LongWord;
@@ -70,6 +79,17 @@ type
     /// apply SETTINGS_HEADER_TABLE_SIZE: caps the encoder table and bounds
     /// the size updates a decoder will accept from the peer
     procedure ApplySettings(aMaxTableSize: LongWord);
+    /// bound the decoder: the largest table size that a size update may name,
+    /// and the size that the decoder table has now
+    // - a server passes the value that it advertised in SETTINGS_HEADER_TABLE_SIZE
+    //   and never changes it for a peer SETTINGS frame (RFC 9113 section 6.5.2)
+    procedure SetDecoderLimit(const AValue: LongWord);
+    /// bound the encoder table by a local cap
+    // - the encoder table size is the smaller of this cap and the size that the
+    //   peer announced; a change is signalled at the start of the next block
+    procedure SetEncoderCap(const AValue: LongWord);
+    /// the SETTINGS_HEADER_TABLE_SIZE that the peer announced for its decoder
+    procedure SetPeerTableSize(const AValue: LongWord);
     /// current bytes used by the encoder's dynamic table
     property EncoderTableSize: LongWord read GetEncoderTableSize;
     /// current bytes used by the decoder's dynamic table
@@ -659,6 +679,8 @@ begin
   inherited Create;
   FHuffman := True;
   FMaxTableSize := HpackDefaultTableSize;
+  FEncoderCap := HpackMaxInteger;
+  FPeerTableSize := HpackDefaultTableSize;
   FEncoder.MaxSize := HpackDefaultTableSize;
   FEncoder.Size := 0;
   SetLength(FEncoder.Entries, 0);
@@ -694,6 +716,48 @@ begin
   TableSetMaxSize(FDecoder, aMaxTableSize);
 end;
 
+procedure THpackCodec.SetDecoderLimit(const AValue: LongWord);
+begin
+  FMaxTableSize := AValue;
+  TableSetMaxSize(FDecoder, AValue);
+end;
+
+procedure THpackCodec.RecomputeEncoderSize;
+var
+  Target: LongWord;
+begin
+  Target := FPeerTableSize;
+  if FEncoderCap < Target then
+    Target := FEncoderCap;
+  if Target = FEncoder.MaxSize then
+    Exit;
+  TableSetMaxSize(FEncoder, Target);
+  // RFC 7541 section 4.2: the change is signalled at the start of the next
+  // block, and the smallest size of the interval is signalled as well
+  if FUpdatePending then
+  begin
+    if Target < FUpdateMin then
+      FUpdateMin := Target;
+  end
+  else
+  begin
+    FUpdatePending := True;
+    FUpdateMin := Target;
+  end;
+end;
+
+procedure THpackCodec.SetEncoderCap(const AValue: LongWord);
+begin
+  FEncoderCap := AValue;
+  RecomputeEncoderSize;
+end;
+
+procedure THpackCodec.SetPeerTableSize(const AValue: LongWord);
+begin
+  FPeerTableSize := AValue;
+  RecomputeEncoderSize;
+end;
+
 function THpackCodec.Encode(const AHeaders: THeaderBlock): TBytes;
 var
   i, N: Integer;
@@ -701,6 +765,14 @@ begin
   Result := nil;
   SetLength(Result, 0);
   N := 0;
+  if FUpdatePending then
+  begin
+    // the smallest size first, then the final size (at most two updates)
+    if FUpdateMin < FEncoder.MaxSize then
+      EncodeInt(Result, N, 5, $20, FUpdateMin);
+    EncodeInt(Result, N, 5, $20, FEncoder.MaxSize);
+    FUpdatePending := False;
+  end;
   for i := 0 to High(AHeaders) do
     EncodeField(FEncoder, Result, N, AHeaders[i], FHuffman);
   SetLength(Result, N);

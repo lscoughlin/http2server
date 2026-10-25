@@ -54,12 +54,19 @@ type
     destructor Destroy; override;
 
     /// apply the header table size the peer sent
-    // - RFC 9113 section 6.5.2: the new size changes both directions
+    // - RFC 9113 section 6.5.2: the value is the table of the decoder of the
+    //   peer, so it sizes the response encoder and never the request decoder.
+    //   The next response block starts with a dynamic table size update
     procedure ApplyPeerTableSize(const ATableSize: LongWord);
     /// apply the SETTINGS_MAX_FRAME_SIZE that the peer sent
     // - the HEADERS and CONTINUATION frames of a response follow the smaller of
     //   this value and the local maximum (RFC 9113 section 4.2)
     procedure ApplyPeerFrameSize(const AValue: LongWord);
+
+    /// the table size that the request decoder accepts now, in octets
+    function DecoderMaxSize: LongWord;
+    /// the table size that the response encoder uses now, in octets
+    function EncoderMaxSize: LongWord;
 
     /// TRUE while a header block waits for its CONTINUATION frames
     function InBlock: Boolean;
@@ -109,8 +116,11 @@ begin
   FDecoder := THpackCodec.Create;
   FEncoder := THpackCodec.Create;
   FDecoder.MaxHeaderListSize := AMaxHeaderListSize;
-  FDecoder.ApplySettings(AMaxHeaderTableSize);
-  FEncoder.ApplySettings(AMaxHeaderTableSize);
+  // RFC 9113 section 6.5.2: the decoder obeys the size that the server
+  // advertised, whatever the peer announces for its own decoder. The encoder
+  // obeys the size that the peer announced, inside a local cap
+  FDecoder.SetDecoderLimit(AMaxHeaderTableSize);
+  FEncoder.SetEncoderCap(AMaxHeaderTableSize);
 end;
 
 destructor THpackConnection.Destroy;
@@ -122,8 +132,18 @@ end;
 
 procedure THpackConnection.ApplyPeerTableSize(const ATableSize: LongWord);
 begin
-  FDecoder.ApplySettings(ATableSize);
-  FEncoder.ApplySettings(ATableSize);
+  // the peer value sizes the response encoder only
+  FEncoder.SetPeerTableSize(ATableSize);
+end;
+
+function THpackConnection.DecoderMaxSize: LongWord;
+begin
+  Result := FDecoder.DecoderMaxSize;
+end;
+
+function THpackConnection.EncoderMaxSize: LongWord;
+begin
+  Result := FEncoder.EncoderMaxSize;
 end;
 
 procedure THpackConnection.ApplyPeerFrameSize(const AValue: LongWord);
