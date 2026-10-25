@@ -168,6 +168,8 @@ type
     FTimedOut: Integer;
     FDropped: Integer;
     FPoolStopped: Boolean;
+    /// workers that ignored the cancellation and were left to end alone
+    FStuckThreads: Integer;
     FGracefulTimeoutMs: Integer;
     FOnHandlerError: THandlerErrorEvent;
     /// the registry of detached streams; nil detaches without a limit
@@ -206,7 +208,11 @@ type
     /// remove the queued entry of AStreamId, as a reset does
     function RemoveStream(const AStreamId: LongWord): Boolean;
     /// stop acceptance, refuse the waiting entries and end the workers
-    procedure Stop;
+    // - AWaitMs bounds each wait for the workers; -1 uses the graceful timeout
+    procedure Stop(const AWaitMs: Integer = -1);
+    /// the workers that did not end within the bound; they end alone, and the
+    /// pool leaks its state instead of freeing what they may still read
+    property StuckThreads: Integer read FStuckThreads;
     /// the worker threads that have not finished
     function AliveThreadCount: Integer;
 
@@ -492,6 +498,12 @@ destructor THandlerPool.Destroy;
 begin
   Stop;
   FThreads.Free;
+  // a stuck worker may still read the state below, so the state stays
+  if FStuckThreads > 0 then
+  begin
+    inherited Destroy;
+    Exit;
+  end;
   FActive.Free;
   FActiveJobs.Free;
   FQueue.Free;
@@ -662,7 +674,11 @@ begin
   Event.LimitKind := lkReset;
   Event.ErrorCode := ecNoError;
   Event.Detail := ADetail;
-  FObserver.OnEvent(Event);
+  try
+    FObserver.OnEvent(Event);
+  except
+    // an observer must not end a handler thread; its exception is dropped
+  end;
 end;
 
 procedure THandlerPool.DetachNotify(const AStream: TServerStream;
@@ -873,9 +889,10 @@ begin
   end;
 end;
 
-procedure THandlerPool.Stop;
+procedure THandlerPool.Stop(const AWaitMs: Integer);
 var
   Deadline: QWord;
+  Wait: Integer;
   I: Integer;
   Streams: TArray<TServerStream>;
   Entries: TArray<TQueueEntry>;
@@ -909,9 +926,16 @@ begin
 
   // wait for the workers up to the graceful timeout.  A worker that runs a
   // handler is not finished until that handler returns.
-  Deadline := GetTickCount64 + QWord(FGracefulTimeoutMs);
-  while (AliveThreadCount > 0) and (GetTickCount64 < Deadline) do
-    Sleep(1);
+  // a caller that gave AWaitMs drained the work already, so the first wait is
+  // skipped and the whole stop keeps one deadline
+  Wait := AWaitMs;
+  if Wait < 0 then
+  begin
+    Wait := FGracefulTimeoutMs;
+    Deadline := GetTickCount64 + QWord(Wait);
+    while (AliveThreadCount > 0) and (GetTickCount64 < Deadline) do
+      Sleep(1);
+  end;
 
   // then cancel whatever still runs, so a handler that waits on its stream
   // sees the cancellation
@@ -928,13 +952,21 @@ begin
     end;
     for I := 0 to High(Jobs) do
       Jobs[I].Cancel;
-    Deadline := GetTickCount64 + QWord(FGracefulTimeoutMs);
+    Deadline := GetTickCount64 + QWord(Wait);
     while (AliveThreadCount > 0) and (GetTickCount64 < Deadline) do
       Sleep(1);
   end;
 
-  for I := 0 to FThreads.Count - 1 do
-    FThreads[I].WaitFor;
+  // a worker that still runs ignores the cancellation. It ends alone when its
+  // handler returns; the stop does not wait for it any longer
+  for I := FThreads.Count - 1 downto 0 do
+    if FThreads[I].Finished then
+      FThreads[I].WaitFor
+    else
+    begin
+      FThreads.Extract(FThreads[I]).FreeOnTerminate := True;
+      Inc(FStuckThreads);
+    end;
 end;
 
 end.

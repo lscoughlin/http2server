@@ -74,33 +74,55 @@ applies both rules and asks the IO side to remove the connection.
 
 ## Stop
 
-`THttp2Server.Stop` (`src/Http2Server.Server.pas:144`) runs five steps in
-order.
+`THttp2Server.Stop` runs six steps in order.
 
-1. The stop flag is set, so a second call returns at once.
-2. `THttp2AsyncServer.BroadcastGoAway` reads the live
+1. An atomic flag takes the stop, so a second call, also one from another
+   thread, returns at once.
+2. `THttp2AsyncServer.BeginDrain` makes the server refuse new connections: the
+   first read of a connection that arrives after this point closes it. Each
+   HTTP/1.1 connection closes after the request that it serves. An idle one
+   closes once its output has left. A request in progress finishes, and its
+   response carries `Connection: close` when the head is not built yet (RFC 9112
+   section 9.6).
+3. `THttp2AsyncServer.BroadcastGoAway` reads the live
    connections and queues a GOAWAY frame on each one. The last stream
    identifier in the frame is the highest identifier that the core accepted, so
    a peer keeps the streams below it and expects no new stream. The waker then
    pushes the frame to the socket.
-3. `CloseChannels` (`src/Http2Server.Async.pas`) closes every detached stream
+4. `CloseChannels` (`src/Http2Server.Async.pas`) closes every detached stream
    gracefully. The queued bytes and END_STREAM leave, so a detached stream does
    not hold the wait of the next step until the timeout. A WebSocket session
    sends Close 1001 instead and waits for the reply; at the final stop the
    application hears `Closed(1001)`.
-4. `WaitForStreams` (`src/Http2Server.Server.pas:128`) polls the open stream
-   total and the count of detached channels every twenty milliseconds until both
-   reach zero or the graceful stop timeout passes. A quiet server stops at once, and a busy server gets the
-   full period.
-5. `THttp2AsyncServer.Stop` (`src/Http2Server.Async.pas`) aborts the channels that
+5. `WaitForStreams` polls the open stream total and the count of detached
+   channels every twenty milliseconds until both reach zero or the graceful stop
+   timeout passes. A request that runs on an HTTP/1.1 connection counts as one
+   open stream. A quiet server stops at once, and a busy server gets the full
+   period.
+6. `THttp2AsyncServer.Stop` (`src/Http2Server.Async.pas`) aborts the channels that
    are still open, stops the handler pool, shuts the IO pools down, and stops
    the streaming pool.
 
 The order matters. The handler pool stops first, so a handler never writes to a
 connection that the IO side already released. `THandlerPool.Stop`
 (`src/Http2Server.Admission.pas`) ends acceptance, refuses the waiting entries
-per the refusal mode, waits for the active handlers up to the graceful timeout,
-cancels the rest, and joins the worker threads.
+per the refusal mode, cancels the work that still runs, and waits up to one
+second for the worker threads. The drain wait of step 5 already used the
+graceful time, so the whole stop keeps one deadline: the graceful timeout plus
+this wait. A worker that ignores the cancellation is not joined. It ends alone
+when its handler returns, and the pool keeps the state that the worker may still
+read (`THandlerPool.StuckThreads` counts these workers).
+
+When `Start` fails, the server runs the stop path, so no port stays bound and no
+thread stays alive. `IsRunning` is false and a second `Start` raises
+`EServerStopped`. The destructor stops the WebSocket environment before it frees
+the async server, so the watchdog never calls a freed server.
+
+A handler thread reaches a connection through its waker. Before the connection
+state is freed, `TMethodWaker.Detach` waits for a call in flight and blocks
+later calls, and the HTTP/1.1 core cuts its exchanges from the host
+(`TH1Core.ReleaseHost`). A late write of a handler therefore finds a dead
+link and not a freed object.
 
 The stop is idempotent at both levels. The caller flag covers `THttp2Server`,
 and the queue and pool flags cover the two pools.

@@ -167,6 +167,9 @@ type
     procedure Run(const AHandler: IHttp2Handler; const ARegistry: IChannelRegistry);
     procedure Refuse(const AReason: THandlerJobRefusal);
     procedure Cancel;
+    /// the connection closes after this exchange: the response says
+    // `connection: close` when its head has not been built yet
+    procedure RequestClose;
 
     property Head: TH1Head read FHead;
     // IAccessLogRemoteSink
@@ -436,6 +439,16 @@ begin
   FLock.Acquire;
   try
     Result := (FBodyEnded and (FBodyTail = FBodyHead)) or FCancelled;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TH1Exchange.RequestClose;
+begin
+  FLock.Acquire;
+  try
+    FKeep := False;
   finally
     FLock.Release;
   end;

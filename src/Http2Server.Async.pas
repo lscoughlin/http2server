@@ -90,6 +90,7 @@ type
     FCore: TServerConnectionCore;
     FEvents: IConnectionEvents;
     FWaker: IWriteWaker;
+    FMethodWaker: TMethodWaker;
     /// the protocol of the connection; undecided until the first octets
     FMode: TConnectionMode;
     /// the verified client certificate of this connection; nil when none
@@ -145,6 +146,7 @@ type
     property Core: TServerConnectionCore read FCore;
     /// the write waker of this connection
     property Waker: IWriteWaker read FWaker;
+    property H1: TH1Driver read FH1;
   end;
 
   /// the HTTP/2 async server
@@ -166,6 +168,8 @@ type
     FCoreOptions: TConnectionCoreOptions;
     FControlBucket: TTokenBucketOptions;
     FStarted: Boolean;
+    /// Stop began: new connections close at once
+    FDraining: Boolean;
     /// the observer of the server; nil when the caller set none
     FObserver: IHttp2ServerObserver;
     /// the connection, reset, trip and handshake counters
@@ -184,7 +188,8 @@ type
     /// bind, then install the server TLS context and the ALPN callback
     procedure Start;
     /// stop the handler pool and shut the IO pools down
-    procedure Stop;
+    // - AWaitMs bounds each wait of the handler pool; -1 uses the graceful timeout
+    procedure Stop(const AWaitMs: Integer = -1);
 
     /// the handler pool that serves every connection
     property Handlers: THandlerPool read FHandlers;
@@ -220,6 +225,10 @@ type
     // - the last stream identifier that the core processed goes into the
     //   frame, so a peer keeps the streams below it
     procedure BroadcastGoAway(const AErrorCode: THttp2ErrorCode);
+    /// refuse new connections and tell every HTTP/1.1 connection to close after
+    /// the request it serves
+    procedure BeginDrain;
+    property Draining: Boolean read FDraining;
     /// close every detached stream: the graceful form sends the queued bytes
     /// and END_STREAM, the abort form resets the stream
     procedure CloseChannels(const AMode: TChannelClose);
@@ -283,7 +292,8 @@ begin
     PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
   FCore := TServerConnectionCore.Create(Options, FEvents, Limits,
     FServer.Factory.Clock);
-  FWaker := TMethodWaker.Create(WakeOutput);
+  FMethodWaker := TMethodWaker.Create(WakeOutput);
+  FWaker := FMethodWaker;
   FCore.SetWriteWaker(FWaker);
   FMode := cmHttp2;
 end;
@@ -303,7 +313,8 @@ begin
   FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers,
     PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
   Core := TH1Core.Create(Options, FH1Events);
-  FWaker := TMethodWaker.Create(WakeOutput);
+  FMethodWaker := TMethodWaker.Create(WakeOutput);
+  FWaker := FMethodWaker;
   Core.SetWriteWaker(FWaker);
   Core.SetPendingProbe(PendingWriteBytes);
   // a TLS connection cannot close its write side alone, so it closes at once
@@ -314,8 +325,12 @@ end;
 procedure THttp2AsyncConnection.ReleaseState;
 begin
   // a handler thread must not call into this connection while it is freed
+  if FMethodWaker <> nil then
+    FMethodWaker.Detach;
   if FCore <> nil then
     FCore.ReleaseHost;
+  if FH1 <> nil then
+    FH1.Core.ReleaseHost;
   if FServer <> nil then
     FServer.ConnectionClosed;
   FreeAndNil(FSendLock);
@@ -323,6 +338,7 @@ begin
   FreeAndNil(FH1);
   FH1Events := nil;
   FWaker := nil;
+  FMethodWaker := nil;
   FEvents := nil;
   FInSend := False;
   FSendRequested := False;
@@ -357,6 +373,9 @@ begin
   // refusal, and a refused connection is closed by the caller.
   result := false;
   try
+    // a server that stops accepts no new connection
+    if FServer.Draining then
+      exit;
     // the accepted socket is blocking while TLS is on, so the socket deadline
     // and the mORMot2 SSL_accept deadline together bound the handshake.  A
     // client that stalls holds its IO thread for a bounded time only
@@ -802,13 +821,36 @@ end;
 procedure THttp2AsyncServer.Notify(const AEvent: TServerEvent);
 begin
   if FObserver <> nil then
+  try
     FObserver.OnEvent(AEvent);
+  except
+    // an observer must not end an IO thread; its exception is dropped
+  end;
 end;
 
 procedure THttp2AsyncServer.TlsHandshakeFailed(const ADetail: string);
 begin
   FCounters.TlsFailed;
   Notify(seTlsHandshakeFailed, 0, lkReset, ADetail);
+end;
+
+procedure THttp2AsyncServer.BeginDrain;
+var
+  Instances: TAsyncConnectionDynArray;
+  I: Integer;
+  Conn: THttp2AsyncConnection;
+begin
+  FDraining := True;
+  Instances := GetConnectionInstances;
+  for I := 0 to High(Instances) do
+  begin
+    Conn := THttp2AsyncConnection(Instances[I]);
+    if (Conn <> nil) and (Conn.H1 <> nil) then
+    begin
+      Conn.H1.Core.BeginDrain;
+      Conn.Waker.Signal;
+    end;
+  end;
 end;
 
 procedure THttp2AsyncServer.BroadcastGoAway(
@@ -846,7 +888,10 @@ begin
   begin
     Conn := THttp2AsyncConnection(Instances[I]);
     if (Conn <> nil) and (Conn.Core <> nil) then
-      Inc(Result, Conn.Core.OpenStreams);
+      Inc(Result, Conn.Core.OpenStreams)
+    else if (Conn <> nil) and (Conn.H1 <> nil) and Conn.H1.Core.Busy then
+      // a request that runs on an HTTP/1.1 connection counts as one open stream
+      Inc(Result);
   end;
 end;
 
@@ -862,7 +907,11 @@ begin
   Event.LimitKind := ALimit;
   Event.ErrorCode := ecNoError;
   Event.Detail := ADetail;
-  FObserver.OnEvent(Event);
+  try
+    FObserver.OnEvent(Event);
+  except
+    // an observer must not end an IO thread; its exception is dropped
+  end;
 end;
 
 procedure THttp2AsyncServer.Start;
@@ -885,14 +934,15 @@ begin
     FChannels.CloseAll(AMode);
 end;
 
-procedure THttp2AsyncServer.Stop;
+procedure THttp2AsyncServer.Stop(const AWaitMs: Integer);
 begin
+  FDraining := True;
   // the channels that are still open end first, so no stream outlives its
   // handler pool; a channel that already ended is not touched twice
   if FChannels <> nil then
     FChannels.CloseAll(ccAbort);
   if FHandlers <> nil then
-    FHandlers.Stop;
+    FHandlers.Stop(AWaitMs);
   Shutdown;
   if FStreamPool <> nil then
     FStreamPool.Stop;

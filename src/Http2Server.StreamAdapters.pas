@@ -282,15 +282,18 @@ end;
 
 procedure TServerStreamResponse.SendHeaders(const AStatus: Integer;
   const AHeaders: THeaderBlock; const AEndStream: Boolean);
+var
+  Prepared: THeaderBlock;
 begin
   CheckNotDetached;
+  // a refused header block leaves no trace: the state changes after the check
+  CheckResponseHeaders(AHeaders);
+  Prepared := WithDate(PrepareH2ResponseHeaders(AHeaders), AStatus);
   FHeadersSent := True;
   // an interim status (1xx) is not the final status
   if AStatus >= 200 then
     FStatus := AStatus;
-  CheckResponseHeaders(AHeaders);
-  FStream.QueueResponseHeaders(AStatus,
-    WithDate(PrepareH2ResponseHeaders(AHeaders), AStatus), AEndStream);
+  FStream.QueueResponseHeaders(AStatus, Prepared, AEndStream);
 end;
 
 procedure TServerStreamResponse.Write(const AData: TBytes);

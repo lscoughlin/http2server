@@ -131,10 +131,20 @@ length, the refused total, the timed-out total and the dropped-before-dispatch
 total (`src/Http2Server.Admission.pas:213-221`). A test reads them to check the
 bound under load.
 
-`THandlerPool.Stop` (`src/Http2Server.Admission.pas:840`) runs in four steps.
-The pool stops acceptance, so a later `Admit` refuses at once. The queue drains
-and every waiting entry is refused per the refusal mode. The pool waits for the
-running handlers up to `GracefulStopTimeoutMs`. A handler that still runs after
-that wait is cancelled on its stream, which raises `EStreamCancelled` in the
-handler thread. The pool then waits for every worker thread to finish, so no
-handler thread stays alive after `Stop` returns.
+`THandlerPool.Stop` runs in four steps. The pool stops acceptance, so a later
+`Admit` refuses at once. The queue drains and every waiting entry is refused per
+the refusal mode. The pool waits for the running handlers up to
+`GracefulStopTimeoutMs`. A handler that still runs after that wait is cancelled
+on its stream or its job, which raises `EStreamCancelled` in the handler thread.
+The pool then waits for the worker threads one more time, with the same bound.
+A worker that still runs after this wait ignores the cancellation. The pool
+counts it in `StuckThreads`, lets it end alone and keeps the state that it may
+read, so the stop never waits for a handler without end.
+
+The server calls `Stop` with a short bound after its own drain wait. The drain
+wait used the graceful time already, so the first wait of the pool is skipped and
+the whole stop keeps one deadline.
+
+**The observer rule.** The server catches every exception of
+`IHttp2ServerObserver.OnEvent` and drops it. An observer that raises does not end
+a handler thread or an IO thread, so the pools keep their size.

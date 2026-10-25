@@ -8,6 +8,8 @@ notes:
     server.
   - An observer runs on the thread that raised the event, so a slow observer
     slows that thread.  The default observer does nothing.
+  - The server catches and drops an exception of OnEvent, so an observer that
+    raises does not end an IO thread or a handler thread.
   - The counters are truthful. Every total counts a real event and no number
     is guessed.
 ---

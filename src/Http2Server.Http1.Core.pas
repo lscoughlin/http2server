@@ -85,6 +85,8 @@ type
     FUpgraded: Boolean;
     /// when the first octet of the request in progress arrived; 0 when none
     FHeadStartMs: QWord;
+    /// the server stops: no request of this connection keeps it alive
+    FDraining: Boolean;
     procedure Enqueue(const AData: TBytes);
     procedure Advance;
     procedure RefuseDirect(const AStatus: Integer);
@@ -124,6 +126,11 @@ type
     property Busy: Boolean read GetBusy;
     /// a writer asked for the connection to close without waiting
     function AbortRequested: Boolean;
+    /// the server stops. An idle connection closes once its output has left. A
+    /// request in progress finishes, and its response says `connection: close`
+    procedure BeginDrain;
+    /// cut the exchanges from this core, before the owner frees what a call reaches
+    procedure ReleaseHost;
     /// the connection was upgraded and carries raw bytes
     function Upgraded: Boolean;
 
@@ -338,6 +345,30 @@ begin
     FWaker.Signal;
 end;
 
+procedure TH1Core.BeginDrain;
+var
+  Current: TH1Exchange;
+begin
+  FLock.Acquire;
+  try
+    FDraining := True;
+    Current := FCurrent;
+    // an idle connection has nothing to wait for
+    if (Current = nil) and (FParser.Buffered = 0) and (FHeadStartMs = 0) and
+       not FUpgraded then
+      FCloseAfter := True;
+  finally
+    FLock.Release;
+  end;
+  if Current <> nil then
+    Current.RequestClose;
+end;
+
+procedure TH1Core.ReleaseHost;
+begin
+  FLink.Orphan;
+end;
+
 function TH1Core.AbortRequested: Boolean;
 begin
   FLock.Acquire;
@@ -464,7 +495,9 @@ begin
   FCurrent := Exchange;
   FExchangeDone := False;
   FRequestDone := False;
-  FKeepAfter := AHead.KeepAlive;
+  FKeepAfter := AHead.KeepAlive and not FDraining;
+  if FDraining then
+    Exchange.RequestClose;
   // the request enters the same queue as an HTTP/2 stream. A refusal comes back
   // as a call of Refuse on the job, which ends the exchange
   FEvents.Admit(Exchange);
@@ -504,7 +537,7 @@ begin
   FLock.Acquire;
   try
     FExchangeDone := True;
-    FKeepAfter := AKeepAlive and not AFailed;
+    FKeepAfter := AKeepAlive and not AFailed and not FDraining;
     if not FKeepAfter then
       FCloseAfter := True;
     Advance;

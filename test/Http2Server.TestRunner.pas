@@ -79,6 +79,7 @@ uses
   Http2Server.H2Lifecycle.Test,
   Http2Server.H2Locks.Test,
   Http2Server.WsHardening.Test,
+  Http2Server.Lifecycle.Test,
   Http2Server.Server.Test;
 
 const

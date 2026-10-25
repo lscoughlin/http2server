@@ -68,6 +68,8 @@ type
     FGracefulStopMs: Integer;
     FStarted: Boolean;
     FStopped: Boolean;
+    /// 1 once a Stop call took the stop
+    FStopFlag: LongInt;
     /// wait for the open streams, up to the graceful stop timeout
     procedure WaitForStreams;
   public
@@ -88,6 +90,10 @@ type
 
 implementation
 
+const
+  /// the wait for a handler that was cancelled, after the graceful drain
+  cCancelWaitMs = 1000;
+
 { THttp2Server }
 
 constructor THttp2Server.Create(const AFactory: THttp2ServerFactory;
@@ -107,9 +113,10 @@ end;
 destructor THttp2Server.Destroy;
 begin
   Stop;
+  // the watchdog of the WebSocket environment ends before the server it calls
+  FWsEnv.Stop;
   FAsync.Free;
   FAsync := nil;
-  FWsEnv.Stop;
   FWsEnvRef := nil;
   inherited Destroy;
 end;
@@ -121,8 +128,16 @@ begin
       'not started again');
   if FStarted then
     Exit;
+  try
+    FAsync.Start;
+  except
+    // a failed start leaves nothing bound: the stop path frees the port and
+    // the threads, and the server is spent like a stopped one
+    FStopped := True;
+    FAsync.Stop(0);
+    raise;
+  end;
   FStarted := True;
-  FAsync.Start;
 end;
 
 procedure THttp2Server.WaitForStreams;
@@ -143,19 +158,24 @@ end;
 
 procedure THttp2Server.Stop;
 begin
-  if FStopped then
+  // two Stop calls at once run the stop once
+  if InterlockedExchange(FStopFlag, 1) <> 0 then
     Exit;
   FStopped := True;
   if FAsync = nil then
     Exit;
-  // the GOAWAY tells every peer that no new stream is served, the bounded
-  // wait drains the open streams, and the pool stop cancels the rest
+  // new connections close at once and each HTTP/1.1 connection closes after
+  // its request; the GOAWAY tells every HTTP/2 peer that no new stream is
+  // served, the bounded wait drains the open work, and the pool stop cancels
+  // the rest
+  FAsync.BeginDrain;
   FAsync.BroadcastGoAway(ecNoError);
   // a detached stream never ends by itself, so its owner is told to close it;
   // the queued bytes and END_STREAM still leave within the bounded wait
   FAsync.CloseChannels(ccGraceful);
   WaitForStreams;
-  FAsync.Stop;
+  // the drain used the graceful time; the cancel wait is short
+  FAsync.Stop(cCancelWaitMs);
 end;
 
 function THttp2Server.Port: Integer;
