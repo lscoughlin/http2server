@@ -128,14 +128,10 @@ type
     /// the request broke after the head: answer AStatus if no answer started,
     /// wake the handler and end the exchange so the connection closes
     procedure Fail(const AStatus: Integer);
-    function ResponseStarted: Boolean;
     /// milliseconds since body octets last arrived; 0 once the body has ended
     function BodyIdleMs(const ANowMs: QWord): QWord;
     /// milliseconds since the head arrived; 0 once the body has ended
     function BodyAgeMs(const ANowMs: QWord): QWord;
-    /// the request has ended and the body was read or dropped
-    function BodyEnded: Boolean;
-    function ResponseFinished: Boolean;
 
     // IServerRequest
     function Method: string;
@@ -256,16 +252,6 @@ begin
   RTLEventSetEvent(FBodyEv);
 end;
 
-function TH1Exchange.BodyEnded: Boolean;
-begin
-  FLock.Acquire;
-  try
-    Result := FBodyEnded;
-  finally
-    FLock.Release;
-  end;
-end;
-
 function TH1Exchange.BodyIdleMs(const ANowMs: QWord): QWord;
 begin
   FLock.Acquire;
@@ -287,16 +273,6 @@ begin
       Result := 0
     else
       Result := ANowMs - FStartMs;
-  finally
-    FLock.Release;
-  end;
-end;
-
-function TH1Exchange.ResponseFinished: Boolean;
-begin
-  FLock.Acquire;
-  try
-    Result := FFinished;
   finally
     FLock.Release;
   end;
@@ -751,16 +727,6 @@ begin
   try
     Result := not FHeadersSent;
     FHeadersSent := True;
-  finally
-    FLock.Release;
-  end;
-end;
-
-function TH1Exchange.ResponseStarted: Boolean;
-begin
-  FLock.Acquire;
-  try
-    Result := FHeadersSent;
   finally
     FLock.Release;
   end;

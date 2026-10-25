@@ -73,8 +73,6 @@ type
     destructor Destroy; override;
     /// the connection ended or the exchange broke; the sink is told
     procedure PeerGone;
-    /// the exchange finished by itself; drop the owner
-    procedure OwnerEnded;
 
     // IDuplexChannel
     function Send(const AData: TBytes): TSendResult;
@@ -391,19 +389,6 @@ begin
   end;
   if Sink <> nil then
     Sink.PeerClosed(False);
-end;
-
-procedure TH1ChunkedChannel.OwnerEnded;
-begin
-  FLock.Acquire;
-  try
-    FOwner := nil;
-    if FState <> csClosed then
-      FState := csClosed;
-    Release;
-  finally
-    FLock.Release;
-  end;
 end;
 
 end.

@@ -81,7 +81,11 @@ type
     FLineChecked: Boolean;
     FLeadingEmpty: Integer;
     FRequest: TH1RequestLine;
+    // the octets from FScanAt on, FScanLen of them, hold no CR (a scan memo)
+    FScanAt, FScanLen: Integer;
+    FScanWork: Int64;
     function Unparsed: Integer;
+    function FirstCr(const AFrom, AEnd: Integer): Integer;
     procedure Fail(const AVerdict: TH1Verdict);
     procedure Compact;
     procedure Run;
@@ -103,7 +107,8 @@ type
     procedure NextRequest;
     /// octets held in the buffer that no request consumed
     function Buffered: Integer;
-    property State: TH1ParserState read FState;
+    /// the octets that the line scans looked at so far (a test reads it)
+    property ScanWork: Int64 read FScanWork;
   end;
 
 implementation
@@ -163,6 +168,29 @@ begin
   FHeadDone := False;
   FLineChecked := False;
   FLeadingEmpty := 0;
+  FScanLen := 0;
+end;
+
+/// the offset of the first CR in [AFrom, AEnd), or AEnd when there is none
+// - a scan of the unfinished line at the start of the buffer resumes where the
+//   last scan stopped, so a slow sender costs one comparison for each octet
+function TH1Parser.FirstCr(const AFrom, AEnd: Integer): Integer;
+var
+  I, From: Integer;
+begin
+  From := AFrom;
+  if (AFrom = 0) and (FScanLen > 0) and (FScanAt = FStart) and (FScanLen <= AEnd) then
+    From := FScanLen;
+  I := From;
+  while (I < AEnd) and (FBuf[FStart + I] <> 13) do
+    Inc(I);
+  Inc(FScanWork, I - From);
+  if (AFrom = 0) and (I = AEnd) then
+  begin
+    FScanAt := FStart;
+    FScanLen := AEnd;
+  end;
+  Result := I;
 end;
 
 function TH1Parser.Unparsed: Integer;
@@ -187,9 +215,11 @@ begin
   begin
     FStart := 0;
     FEnd := 0;
+    FScanLen := 0;
   end
   else if FStart > 4096 then
   begin
+    FScanLen := 0;
     Move(FBuf[FStart], FBuf[0], FEnd - FStart);
     Dec(FEnd, FStart);
     FStart := 0;
@@ -242,10 +272,11 @@ var
   I, N: Integer;
 begin
   N := Unparsed;
-  for I := 0 to N - 1 do
-    if FBuf[FStart + I] = 13 then
-      Exit(I > ALimit);
-  Result := N > ALimit;
+  I := FirstCr(0, N);
+  if I < N then
+    Result := I > ALimit
+  else
+    Result := N > ALimit;
 end;
 
 /// true when a header line, or the header section so far, passes its limit
@@ -261,9 +292,7 @@ begin
   Total := FCtx.Head.Len;
   while P < N do
   begin
-    I := P;
-    while (I < N) and (FBuf[FStart + I] <> 13) do
-      Inc(I);
+    I := FirstCr(P, N);
     Len := I - P;
     if Len > FLimits.MaxHeaderLine then
       Exit(True);

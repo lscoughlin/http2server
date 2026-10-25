@@ -37,7 +37,7 @@ SRC        = $(wildcard src/*.pas)
 EXAMPLESRC = $(wildcard examples/*.pas)
 BIN        = bin
 
-.PHONY: all test examples mtls-live clean
+.PHONY: all test examples mtls-live tls-live clean
 
 all: $(BIN)/.library.stamp
 
@@ -73,6 +73,15 @@ mtls-live: all | $(BIN)
 	sh tools/certs/make_mtls_pki.sh $(MTLS_PKI)
 	$(FPC) $(FPCFLAGS) -Fu$(HTTP2CLIENT) -Fu./test/mtls -FE$(BIN) test/mtls/Http2Server.MtlsLive.pas
 	$(BIN)/Http2Server.MtlsLive $(MTLS_PKI)
+
+# Live validation of the ALPN policy against the sibling client: two servers in
+# one process, with and without the HTTP/1.1 fallback, and real TLS handshakes
+# with several ALPN offers. It puts no load on the server.
+tls-live: all | $(BIN)
+	rm -rf $(MTLS_PKI)
+	sh tools/certs/make_mtls_pki.sh $(MTLS_PKI)
+	$(FPC) $(FPCFLAGS) -Fu$(HTTP2CLIENT) -Fu./test/mtls -FE$(BIN) test/tls/Http2Server.TlsLive.pas
+	$(BIN)/Http2Server.TlsLive $(MTLS_PKI)
 
 clean:
 	rm -rf $(BIN) src/*.o src/*.ppu test/*.o test/*.ppu examples/*.o examples/*.ppu

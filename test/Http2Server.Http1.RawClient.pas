@@ -78,6 +78,7 @@ type
     FSlowMs: Integer;
     FHugeDone: Integer;
     FHugeEnded: Integer;
+    FHugeStarted: Integer;
   public
     constructor Create;
     destructor Destroy; override;
@@ -86,6 +87,8 @@ type
     function Calls: Integer;
     /// how many /huge responses the handler wrote to the end
     function HugeDone: Integer;
+    /// how many /huge handlers began to write
+    function HugeStarted: Integer;
     /// how many /huge handlers ended, whole or cut
     function HugeEnded: Integer;
     property SlowMs: Integer read FSlowMs write FSlowMs;
@@ -366,6 +369,16 @@ begin
   end;
 end;
 
+function TTestHandler.HugeStarted: Integer;
+begin
+  FLock.Acquire;
+  try
+    Result := FHugeStarted;
+  finally
+    FLock.Release;
+  end;
+end;
+
 function TTestHandler.HugeDone: Integer;
 begin
   FLock.Acquire;
@@ -492,6 +505,12 @@ begin
   begin
     SetLength(Part, 65536);
     FillChar(Part[0], Length(Part), Ord('y'));
+    FLock.Acquire;
+    try
+      Inc(FHugeStarted);
+    finally
+      FLock.Release;
+    end;
     AResponse.SendHeaders(200, Len(128 * 65536), False);
     try
       for I := 1 to 128 do

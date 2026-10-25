@@ -51,6 +51,7 @@ task build        # build the library unit
 task test         # run the fpcunit suite
 task docs:check   # check the documentation tree
 task validate     # run the external conformance tools
+task tls-live     # check the ALPN policy in live handshakes (needs ../http2client)
 ```
 
 ## Mutual TLS

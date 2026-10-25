@@ -14,8 +14,8 @@ notes:
 }
 /// HTTP/2 server connection core
 // - Feed takes bytes from the socket and TakeOutput gives bytes for the socket.
-// - The core holds no lock of its own: the caller holds the connection lock for
-//   the whole of every call, so one thread uses the HPACK encoder and decoder.
+// - One connection lock guards the core. Feed runs under it, and every other
+//   entry takes it, so one thread at a time uses the HPACK encoder and decoder.
 // - The options record carries every limit. The core holds no limit literal.
 unit Http2Server.Connection;
 

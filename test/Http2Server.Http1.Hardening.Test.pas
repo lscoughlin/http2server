@@ -22,7 +22,9 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes, fpcunit, testregistry,
   SyncObjs, Http2Server, Http2Server.Duplex, Http2Server.Http1.SocketChannel,
-  Http2Server.Http1.RawClient;
+  Http2Server.Http1.RawClient, Http2Server.Http1.Limits, Http2Server.Http1.Parser,
+  Http2Server.Http1.TestKit, Http2Server.Http1.Core, Http2Server.Http1.Host,
+  Http2Server.HandlerJob;
 
 type
   /// a sink that records the octets in the order of delivery
@@ -38,6 +40,19 @@ type
     procedure PeerClosed(const AClean: Boolean);
     procedure WriteDrained;
     function Data: string;
+  end;
+
+  /// takes the jobs of a core and the octets of an undecided upgrade
+  TCoreProbe = class(TInterfacedObject, IH1Events, IH1Inbound)
+  public
+    Jobs: Integer;
+    Octets: Integer;
+    /// the pool refuses each job at once
+    Refusing: Boolean;
+    Depth, MaxDepth: Integer;
+    procedure Admit(const AJob: IHandlerJob);
+    procedure Inbound(const AData; const ACount: Integer);
+    procedure ConnectionEnded;
   end;
 
   /// feeds numbered octets to a channel from a second thread
@@ -66,6 +81,9 @@ type
     procedure TestPipelineOverflowDoesNotCancelTheRequestInProgress;
     procedure TestTrickledBodyEndsAtTheTotalDeadline;
     procedure TestEarlyOctetsReachTheSinkBeforeNewerOnes;
+    procedure TestHeaderScanCostGrowsLinearly;
+    procedure TestOctetsDuringARefusedUpgradeReturnToTheParser;
+    procedure TestRefusedPipelineDoesNotNestTheCalls;
   end;
 
 implementation
@@ -301,6 +319,126 @@ begin
     Channel.ConnectionEnded;
     SinkRef := nil;
     Ref := nil;
+  end;
+end;
+
+procedure THttp1HardeningTest.TestHeaderScanCostGrowsLinearly;
+var
+  Sink: TH1Capture;
+  Ref: IH1ParserSink;
+  Parser: TH1Parser;
+  Head, Filler: string;
+  I: Integer;
+  C: Char;
+begin
+  Sink := TH1Capture.Create(True);
+  Ref := Sink;
+  Parser := TH1Parser.Create(THttp11Limits.Create.WithMaxHeaderLine(8192), Ref);
+  try
+    Head := 'GET / HTTP/1.1'#13#10'Host: x'#13#10'X-Slow: ';
+    Parser.Feed(Head[1], Length(Head));
+    C := 'a';
+    for I := 1 to 6000 do
+      Parser.Feed(C, 1);
+    // H1-7: a scan that restarts at the line start costs about 18 million
+    // comparisons here; a scan that resumes costs about 6000
+    AssertTrue('H1-7: the scan work is linear in the octets, was ' +
+      IntToStr(Parser.ScanWork), Parser.ScanWork < 4 * (6000 + Length(Head)));
+    Filler := #13#10#13#10;
+    Parser.Feed(Filler[1], Length(Filler));
+    AssertTrue('the request is complete', Pos('E', Sink.Text) > 0);
+    Sink.Attach(nil);
+  finally
+    Parser.Free;
+  end;
+end;
+
+{ TCoreProbe }
+
+procedure TCoreProbe.Admit(const AJob: IHandlerJob);
+begin
+  Inc(Jobs);
+  Inc(Depth);
+  if Depth > MaxDepth then
+    MaxDepth := Depth;
+  if Refusing then
+    AJob.Refuse(jrQueueFull);
+  Dec(Depth);
+end;
+
+procedure TCoreProbe.Inbound(const AData; const ACount: Integer);
+begin
+  Inc(Octets, ACount);
+end;
+
+procedure TCoreProbe.ConnectionEnded;
+begin
+end;
+
+procedure THttp1HardeningTest.TestOctetsDuringARefusedUpgradeReturnToTheParser;
+var
+  Options: TH1CoreOptions;
+  Probe: TCoreProbe;
+  EventsRef: IH1Events;
+  InboundRef: IH1Inbound;
+  Core: TH1Core;
+  Head, Next: TBytes;
+begin
+  FillChar(Options, SizeOf(Options), 0);
+  Options.Limits := THttp11Limits.Create;
+  Options.Scheme := 'http';
+  Probe := TCoreProbe.Create;
+  EventsRef := Probe;
+  InboundRef := Probe;
+  Core := TH1Core.Create(Options, EventsRef);
+  try
+    Head := TEncoding.ASCII.GetBytes('GET / HTTP/1.1'#13#10'Host: x'#13#10#13#10);
+    Core.Feed(Head);
+    AssertEquals('the request is admitted', 1, Probe.Jobs);
+    Core.UpgradeBegin(InboundRef);
+    Next := TEncoding.ASCII.GetBytes('GET /next HTTP/1.1'#13#10);
+    Core.Feed(Next);
+    AssertEquals('the channel saw the octets', Length(Next), Probe.Octets);
+    Core.UpgradeCancel;
+    // H1-5: the channel drops its copy, so the parser must hold the octets
+    AssertEquals('H1-5: the parser holds the octets of the next request',
+      Length(Next), Core.BufferedAfterHead);
+  finally
+    Core.ReleaseHost;
+    Core.Free;
+  end;
+end;
+
+procedure THttp1HardeningTest.TestRefusedPipelineDoesNotNestTheCalls;
+var
+  Options: TH1CoreOptions;
+  Probe: TCoreProbe;
+  EventsRef: IH1Events;
+  Core: TH1Core;
+  One, All: TBytes;
+  I, Count: Integer;
+begin
+  FillChar(Options, SizeOf(Options), 0);
+  Options.Limits := THttp11Limits.Create;
+  Options.Scheme := 'http';
+  Probe := TCoreProbe.Create;
+  Probe.Refusing := True;
+  EventsRef := Probe;
+  Core := TH1Core.Create(Options, EventsRef);
+  try
+    One := TEncoding.ASCII.GetBytes('GET / HTTP/1.1'#13#10'Host: x'#13#10#13#10);
+    Count := 400;
+    SetLength(All, Length(One) * Count);
+    for I := 0 to Count - 1 do
+      Move(One[0], All[I * Length(One)], Length(One));
+    // the first request is in progress while the others arrive in one read
+    Core.Feed(All);
+    // H1-10: each refused request used to run the next one inside its own call
+    AssertTrue('H1-10: the admit calls do not nest, depth ' + IntToStr(Probe.MaxDepth),
+      Probe.MaxDepth <= 2);
+  finally
+    Core.ReleaseHost;
+    Core.Free;
   end;
 end;
 

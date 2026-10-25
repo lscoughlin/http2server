@@ -81,8 +81,6 @@ type
     procedure Drain(const AStreams: TObjectList<TServerStream>);
     /// copy and clear the frames this unit has queued
     function TakeOutput(out AData: TBytes): Boolean;
-    /// true while a byte still waits for a turn
-    function HasWork: Boolean;
     /// apply a peer SETTINGS_MAX_FRAME_SIZE value
     procedure ApplyPeerFrameSize(const AValue: LongWord);
     /// the frame size the drain will obey, after both limits are compared
@@ -165,11 +163,6 @@ begin
   FQueuedCount := 0;
   // the IO thread holds the bytes now, so the next write may wake it again
   FWakePending := False;
-end;
-
-function TOutputDrain.HasWork: Boolean;
-begin
-  Result := FQueuedCount > 0;
 end;
 
 function TOutputDrain.ActiveCount(

@@ -71,6 +71,10 @@ header lines, the head before the body, each chunk-size line before its chunk, a
 the end of the chunked body. The adapter reads the trailer section itself, because
 the parser reads it as one line.
 
+The line scans of the guard resume where the last scan of the same unfinished line
+stopped. A sender that trickles one octet at a time into a long header line therefore
+costs one comparison for each octet, and not a scan from the start of the line.
+
 The parser of mORMot2 is lenient in places that matter for request smuggling. The
 probe tests in `test/Http2Server.Http1.Chunked.Test.pas` record what it accepts
 alone:
@@ -245,8 +249,11 @@ A handler can upgrade an HTTP/1.1 request to a WebSocket (see
 the core sends the octets that arrive to the channel and no longer to the parser. The
 head of the `101` response leaves through the exchange, and the core marks the
 connection as upgraded: the exchange ends without a close, and the connection goes on
-as raw bytes. A refused upgrade returns the connection to the parser, which holds no
-octet of the refused request. The idle check of the driver leaves an upgraded
+as raw bytes. While the upgrade is undecided, the core keeps a copy of the octets that go
+to the channel, up to 64 KiB. A refused upgrade returns the connection to the parser, and
+the parser takes that copy as the start of the next request, because the closed channel
+drops its own copy. When more than 64 KiB arrived in the undecided window, the connection
+closes after the refusal. The idle check of the driver leaves an upgraded
 connection alone.
 
 ## What a handler sees

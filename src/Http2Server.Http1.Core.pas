@@ -32,6 +32,10 @@ uses
   Http2Server.Http1.Limits, Http2Server.Http1.Guard, Http2Server.Http1.Parser,
   Http2Server.Http1.Host, Http2Server.Http1.ResponseHead, Http2Server.Http1.Exchange;
 
+const
+  /// the most octets that the core keeps while an upgrade is undecided
+  cH1HeldMax = 65536;
+
 type
   /// the octets that the socket holds back, beyond the queue of the core
   TH1PendingProbe = function: Int64 of object;
@@ -83,6 +87,11 @@ type
     FInbound: IH1Inbound;
     /// the 101 response is out: the connection carries raw bytes
     FUpgraded: Boolean;
+    /// the octets that went to the target while the upgrade was undecided; a
+    /// refused upgrade hands them back to the parser
+    FHeld: TBytes;
+    /// more octets came than FHeld may hold
+    FHeldLost: Boolean;
     /// when the first octet of the request in progress arrived; 0 when none
     FHeadStartMs: QWord;
     /// the server stops: no request of this connection keeps it alive
@@ -321,6 +330,7 @@ begin
     FCurrentRef := nil;
     FCurrent := nil;
     FUpgraded := True;
+    FHeld := nil;
   finally
     FLock.Release;
   end;
@@ -331,6 +341,13 @@ begin
   FLock.Acquire;
   try
     FInbound := nil;
+    // the octets that the closed channel dropped belong to the next request
+    if FHeldLost then
+      FCloseAfter := True
+    else if Length(FHeld) > 0 then
+      FParser.Feed(FHeld[0], Length(FHeld));
+    FHeld := nil;
+    FHeldLost := False;
   finally
     FLock.Release;
   end;
@@ -465,6 +482,18 @@ begin
       Exit;
     // an upgrade is decided or done: the octets belong to its channel
     Target := FInbound;
+    if (Target <> nil) and not FUpgraded then
+    begin
+      // keep a copy until the upgrade is final; an overflow closes the
+      // connection after a refusal, never serves a torn request
+      if Length(FHeld) + Length(AData) <= cH1HeldMax then
+      begin
+        SetLength(FHeld, Length(FHeld) + Length(AData));
+        Move(AData[0], FHeld[Length(FHeld) - Length(AData)], Length(AData));
+      end
+      else
+        FHeldLost := True;
+    end;
     if Target = nil then
     begin
       if (FHeadStartMs = 0) and (FCurrent = nil) then

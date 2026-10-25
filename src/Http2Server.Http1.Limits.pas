@@ -96,8 +96,9 @@ begin
   Result.FMaxChunkSize := 1048576;
   Result.FMaxChunkExtension := 1024;
   Result.FMaxTrailerOctets := 4096;
-  // the parser holds the body in memory, so the body limit is the bound of the
-  // memory of one request
+  // the exchange buffers the body until the handler reads it, with no
+  // backpressure on the socket, so the body limit is the bound of the memory of
+  // one request
   Result.FMaxBodySize := 16777216;
   Result.FMaxPipelinedOctets := 65536;
   Result.FBodyDeadlineMs := 30000;

@@ -165,12 +165,7 @@ begin
 end;
 
 function TBlockingWaiter.Wait(const ATimeoutMs: Integer): TWaitResult;
-var
-  Hook: TCancelHook;
-  Pool: TCancelWorkerPool;
 begin
-  Hook := nil;
-  Pool := nil;
   FLock.Acquire;
   try
     if FCancelled then
@@ -197,8 +192,6 @@ begin
     begin
       // the cancel path owns the hook; a wait never runs it here
       FPending := False;
-      Hook := FHook;
-      Pool := FPool;
       Result := wrCancelled;
     end
     else if FPending then
@@ -211,9 +204,6 @@ begin
   finally
     FLock.Release;
   end;
-  // a cancellation that found no pool can only be reported, never hooked
-  if (Pool = nil) and Assigned(Hook) then
-    Hook := nil;
 end;
 
 procedure TBlockingWaiter.Signal;

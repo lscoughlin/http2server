@@ -622,7 +622,12 @@ begin
     C.Send('GET /huge HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
     // 8 MiB is far above the queue limit and the buffers of the socket, so a
     // handler that nobody slows down would finish at once
-    Sleep(1500);
+    Deadline := GetTickCount64 + ResponseMs;
+    while (FHandler.HugeStarted = 0) and (GetTickCount64 < Deadline) do
+      Sleep(5);
+    AssertEquals('the handler began to write', 1, FHandler.HugeStarted);
+    // the write blocks within a few chunks; the wait lets a runaway handler finish
+    Sleep(300);
     AssertEquals('the handler waits for the reader', 0, FHandler.HugeDone);
     AssertTrue('and the client reads all of it', C.ReadResponse(False, 20000, R));
     AssertEquals(128 * 65536, Length(R.Body));
@@ -639,6 +644,7 @@ procedure THttp1LiveTest.TestAClientThatNeverReadsDoesNotPinTheOnlyHandlerThread
 var
   A, B: TRawHttp;
   R: TRawResponse;
+  Deadline: QWord;
 begin
   // one handler thread and a short idle period: a client that never reads must
   // not hold the thread for ever
@@ -647,7 +653,11 @@ begin
   B := TRawHttp.Create(FServer.Port);
   try
     A.Send('GET /huge HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
-    Sleep(500);   // the handler now waits for the reader that never comes
+    // the handler now waits for the reader that never comes
+    Deadline := GetTickCount64 + ResponseMs;
+    while (FHandler.HugeStarted = 0) and (GetTickCount64 < Deadline) do
+      Sleep(5);
+    AssertEquals('the handler began to write', 1, FHandler.HugeStarted);
     B.Send('GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
     AssertTrue('the second client is served once the idle period closed the first',
       B.ReadResponse(False, 15000, R));

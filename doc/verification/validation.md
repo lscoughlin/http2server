@@ -84,6 +84,25 @@ none, so the server reader keeps no object.
 Gaps: a client of a public CA that the system store trusts is untested, and the
 Linux amd64 run is open.
 
+### ALPN policy in a live handshake
+
+The run of 2026-10-25 on macOS aarch64 drives two servers in one process, one
+with the HTTP/1.1 fallback and one without it, through the TLS socket of the
+sibling client at `../http2client` (`make tls-live`). It holds no load.
+
+| Offer of the client | Fallback on | Fallback off |
+|---|---|---|
+| `h2` | `h2` | `h2` |
+| `http/1.1`, `h2` | `h2` | `h2` |
+| `spdy/3`, `h2` | `h2` | `h2` |
+| `spdy/3` | handshake refused | handshake refused |
+| `http/1.1` | `http/1.1`, answer `200` | handshake refused |
+| no ALPN extension | `http/1.1`, answer `200` | handshake ends, connection closed, no answer |
+
+The run reports 21 checks passed and 0 failed. The first server keeps its policy
+after the second server runs, so two servers in one process hold separate ALPN
+policies.
+
 ### The stability of the IO pool under abusive load
 
 A sustained abusive load leaves the mORMot2 IO pool threads running and the

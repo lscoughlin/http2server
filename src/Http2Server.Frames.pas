@@ -7,7 +7,8 @@ notes:
   - Copied from the sibling HTTP/2 client project, source file
     Http2.Frames.pas, source revision 2b63ac290c86c61339e97226784bc61d3b354f06.
   - The unit name and every uses reference are renamed into the
-    Http2Server namespace. No other change is present.
+    Http2Server namespace. The server later removed the code that only a client
+    uses.
 ---
 }
 /// HTTP/2 frame types, header and payload records
@@ -174,9 +175,6 @@ function HeaderPriorityDependsOn(const AFrame: TFrame): LongWord;
 function ExtractHeaderBlock(const AFrame: TFrame): TBytes;
 /// the DATA payload with padding removed
 function ExtractDataPayload(const AFrame: TFrame): TBytes;
-/// how many header-list octets a HEADERS frame may carry (block minus padding)
-function HeaderBlockOffset(const AFrame: TFrame): Integer;
-
 { ---- stream I/O ---- }
 
 /// read one frame; raises EHttpConnectionClosed on a short header/payload
@@ -339,12 +337,8 @@ end;
 class function TConnectionSettings.Defaults: TConnectionSettings;
 begin
   Result.HeaderTableSize := 4096;
-  // RFC 9113 section 6.6: a client that does not support server push MUST
-  // advertise SETTINGS_ENABLE_PUSH = 0; a peer that then sends PUSH_PROMISE
-  // is committing a connection PROTOCOL_ERROR (section 6.6). This client
-  // implements no pushed-stream state, so the honest and required value
-  // is 0 — advertising 1 while ignoring PUSH_PROMISE is the bug the
-  // h2-client-test-harness case 8.2/1 looks for.
+  // RFC 9113 section 6.6: a server never pushes here, and it never sends
+  // PUSH_PROMISE, so the value it advertises is 0
   Result.EnablePush := False;
   Result.MaxConcurrentStreams := 100;   // matches MaxStreamsPerConnection
   Result.InitialWindowSize := 65535;
@@ -702,31 +696,6 @@ begin
   Result := Raw and MaxStreamId;
 end;
 
-function HeaderBlockOffset(const AFrame: TFrame): Integer;
-var
-  PadLen: Integer;
-begin
-  Result := 0;
-  if AFrame.IsPadded then
-  begin
-    if Length(AFrame.Payload) < 1 then
-      raise EHttpProtocolError.Create('padded frame has no pad length',
-        ecProtocolError);
-    PadLen := AFrame.Payload[0];
-    Inc(Result);
-    if Length(AFrame.Payload) < Result + PadLen then
-      raise EHttpProtocolError.Create('padding exceeds frame payload size',
-        ecProtocolError);
-  end;
-  // HEADERS may carry a 5-byte priority block before the header block,
-  // present only when the PRIORITY ($20) flag is set
-  if (AFrame.Header.FrameType = ftHeaders) and AFrame.IsPriority then
-    Inc(Result, 5);
-  if Result > Length(AFrame.Payload) then
-    raise EHttpProtocolError.Create('frame payload too short for its fields',
-      ecProtocolError);
-end;
-
 function StripPadding(const AFrame: TFrame; const AOffset: Integer): TBytes;
 var
   PadLen, EndOfs: Integer;
@@ -898,8 +867,8 @@ begin
         if Len <> 4 then
           raise EHttpProtocolError.Create('WINDOW_UPDATE payload must be 4 bytes',
             ecFrameSizeError);
-        if ParseWindowUpdate(AFrame) = 0 then
-          ; // ParseWindowUpdate already raises on a zero increment
+        // ParseWindowUpdate raises on a zero increment
+        ParseWindowUpdate(AFrame);
       end;
     ftContinuation:
       if AFrame.Header.StreamId = 0 then
