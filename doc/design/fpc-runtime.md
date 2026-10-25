@@ -81,11 +81,12 @@ compiled and run against the same toolchain. The server inherits them.
 ## The build line
 
 The `Makefile` compiles `src/Http2Server.pas` with `-Cn` and `-FE$(BIN)`
-(`Makefile:44-45`). `-Cn` omits the linker stage, so the compiler produces
+(the rule of the stamp file). `-Cn` omits the linker stage, so the compiler produces
 `.ppu` and `.o` outputs but no executable. `-FE$(BIN)` places those outputs in
-the `bin/` directory. The `Makefile` target names `bin/libhttp2server.a`, which
-is the conventional library name; the actual product of `-Cn` is the compiled
-unit.
+the `bin/` directory. The target `all` depends on the stamp file
+`bin/.library.stamp`, which the rule touches after a successful compile, so `make
+all` rebuilds only when a source changed. The actual product of `-Cn` is the
+compiled unit.
 
 The test target compiles `test/Http2Server.RunTests.pas` with the `./test`
 directory on the unit search path, then runs the binary

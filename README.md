@@ -37,6 +37,7 @@ the copied protocol units.
 - `doc/design/public-api.md` holds the surface a caller uses.
 - `doc/design/sse.md` holds the server-sent event stream.
 - `doc/design/http1.md` holds the HTTP/1.1 fallback.
+- `doc/design/access-log.md` holds the access log: one record per request, written through `WithAccessLogWriter`.
 - `doc/design/websocket.md` holds the WebSocket session, the handshakes and the limits.
 - `doc/design/mtls.md` holds mutual TLS: the client certificate modes, the trust and the identity.
 - `doc/verification/validation.md` holds the conformance record.

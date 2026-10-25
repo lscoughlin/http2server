@@ -8,6 +8,9 @@ notes:
   - The core names no mORMot unit, so these tests drive it with byte arrays
     and no socket.
   - The frame inputs follow RFC 9113 sections 4.2, 5.1.1, 5.1.2, 6.5 and 6.9.
+  - This unit holds the shared fixture and the framing, stream and GOAWAY
+    tests. The abuse bucket, credit and output tests are in the unit
+    Http2Server.Connection.Flow.Test.
 ---
 }
 /// Connection core tests for Http2Server.Connection
@@ -46,8 +49,9 @@ type
     property TripKind: TLimitKind read FTripKind;
   end;
 
-  TConnectionCoreTest = class(TTestCase)
-  private
+  /// the shared fixture and frame helpers of the connection core tests
+  TConnectionFixture = class(TTestCase)
+  protected
     FCore: TServerConnectionCore;
     FEvents: TRecordingEvents;
     FClock: TManualMonotonicClock;
@@ -88,6 +92,9 @@ type
       const AFrameType: TFrameType): Integer;
     function StatusOf(const AFrame: TFrame): string;
     procedure TearDown; override;
+  end;
+
+  TConnectionCoreTest = class(TConnectionFixture)
   published
     procedure TestServerSettingsIsTheFirstFrame;
     procedure TestWrongPrefaceIsRefused;
@@ -114,14 +121,6 @@ type
     procedure TestClientGoAwayLetsOpenStreamsFinish;
     procedure TestClientGoAwayAnswersAndKeepsReading;
     procedure TestRstStreamKeepsTheConnection;
-    procedure TestResetAbuseTripsTheBucket;
-    procedure TestBucketTripSendsEnhanceYourCalm;
-    procedure TestControlFrameAbuseTripsTheBucket;
-    procedure TestConnectionCreditReturnsOnBuffer;
-    procedure TestStreamCreditFollowsAHandlerRead;
-    procedure TestResponseHeadersAreEncodedOnce;
-    procedure TestLongHeaderListKeepsRunsContiguous;
-    procedure TestClosedStreamsAreFreed;
   end;
 
 implementation
@@ -163,9 +162,9 @@ begin
   FTripKind := AKind;
 end;
 
-{ TConnectionCoreTest }
+{ TConnectionFixture }
 
-function TConnectionCoreTest.PlainOptions: TConnectionCoreOptions;
+function TConnectionFixture.PlainOptions: TConnectionCoreOptions;
 begin
   Result.ConnectionWindow := TestConnectionWindow;
   Result.InitialStreamWindow := TestStreamWindow;
@@ -183,7 +182,7 @@ begin
   Result.MaxOutputBytes := 0;
 end;
 
-function TConnectionCoreTest.BuildLimits(
+function TConnectionFixture.BuildLimits(
   const ACapacity: Integer): TConnectionLimits;
 var
   R, C: TTokenBucketOptions;
@@ -195,7 +194,7 @@ begin
   Result := TConnectionLimits.Create(FClock, R, C);
 end;
 
-procedure TConnectionCoreTest.MakeCoreWith(
+procedure TConnectionFixture.MakeCoreWith(
   const AOptions: TConnectionCoreOptions; const ACapacity: Integer);
 begin
   FOptions := AOptions;
@@ -205,12 +204,12 @@ begin
   FCore := TServerConnectionCore.Create(FOptions, FEvents, FLimits, FClock);
 end;
 
-procedure TConnectionCoreTest.MakeCore(const ACapacity: Integer);
+procedure TConnectionFixture.MakeCore(const ACapacity: Integer);
 begin
   MakeCoreWith(PlainOptions, ACapacity);
 end;
 
-function TConnectionCoreTest.NewCore(
+function TConnectionFixture.NewCore(
   const ACapacity: Integer): TServerConnectionCore;
 begin
   Release;
@@ -218,7 +217,7 @@ begin
   Result := FCore;
 end;
 
-procedure TConnectionCoreTest.Release;
+procedure TConnectionFixture.Release;
 begin
   // the interface reference owns the core, so only the class field clears
   FCore := nil;
@@ -231,18 +230,18 @@ begin
   FClock := nil;
 end;
 
-procedure TConnectionCoreTest.TearDown;
+procedure TConnectionFixture.TearDown;
 begin
   Release;
 end;
 
-function TConnectionCoreTest.PrefaceBytes: TBytes;
+function TConnectionFixture.PrefaceBytes: TBytes;
 begin
   SetLength(Result, ClientPrefaceSize);
   Move(ClientPreface[0], Result[0], ClientPrefaceSize);
 end;
 
-function TConnectionCoreTest.Pack(const APreface: Boolean;
+function TConnectionFixture.Pack(const APreface: Boolean;
   const AFrames: array of TFrame): TBytes;
 var
   I, Offset, N, At: Integer;
@@ -273,7 +272,7 @@ begin
     Move(Body[0], Result[ClientPrefaceSize], Length(Body));
 end;
 
-function TConnectionCoreTest.BlockOf(const ANames: array of string;
+function TConnectionFixture.BlockOf(const ANames: array of string;
   const AValues: array of string): TBytes;
 var
   Codec: THpackCodec;
@@ -294,7 +293,7 @@ begin
   end;
 end;
 
-function TConnectionCoreTest.RequestFrame(AStreamId: LongWord;
+function TConnectionFixture.RequestFrame(AStreamId: LongWord;
   const AEndStream: Boolean): TFrame;
 var
   Flags: TFrameFlags;
@@ -308,7 +307,7 @@ begin
   Result := TFrame.Create(ftHeaders, Flags, AStreamId, Block);
 end;
 
-function TConnectionCoreTest.Greedy(AStreamId: LongWord): TFrame;
+function TConnectionFixture.Greedy(AStreamId: LongWord): TFrame;
 var
   Block: TBytes;
 begin
@@ -317,7 +316,7 @@ begin
   Result := TFrame.Create(ftHeaders, [ffEndHeaders], AStreamId, Block);
 end;
 
-function TConnectionCoreTest.DataFrame(AStreamId: LongWord;
+function TConnectionFixture.DataFrame(AStreamId: LongWord;
   const ACount: Integer; const AEndStream: Boolean): TFrame;
 var
   Payload: TBytes;
@@ -334,7 +333,7 @@ begin
   Result := TFrame.Create(ftData, Flags, AStreamId, Payload);
 end;
 
-function TConnectionCoreTest.OutputFrames: TArray<TFrame>;
+function TConnectionFixture.OutputFrames: TArray<TFrame>;
 var
   Data: TBytes;
   Offset, N: Integer;
@@ -363,7 +362,7 @@ begin
   end;
 end;
 
-function TConnectionCoreTest.Slice(const AData: TBytes; const AStart,
+function TConnectionFixture.Slice(const AData: TBytes; const AStart,
   ACount: Integer): TBytes;
 begin
   Result := nil;
@@ -373,7 +372,7 @@ begin
   Move(AData[AStart], Result[0], ACount);
 end;
 
-function TConnectionCoreTest.RstPayload(
+function TConnectionFixture.RstPayload(
   const ACode: THttp2ErrorCode): TBytes;
 begin
   SetLength(Result, 4);
@@ -383,7 +382,7 @@ begin
   Result[3] := Ord(ACode);
 end;
 
-function TConnectionCoreTest.GoAwayPayload(const ALastStreamId: LongWord;
+function TConnectionFixture.GoAwayPayload(const ALastStreamId: LongWord;
   const ACode: THttp2ErrorCode): TBytes;
 begin
   SetLength(Result, 8);
@@ -397,7 +396,7 @@ begin
   Result[7] := Ord(ACode);
 end;
 
-function TConnectionCoreTest.AckSettingsOf(
+function TConnectionFixture.AckSettingsOf(
   const AFrames: TArray<TFrame>): Boolean;
 var
   I: Integer;
@@ -408,7 +407,7 @@ begin
       Exit(True);
 end;
 
-function TConnectionCoreTest.GoAwayCodeOf(
+function TConnectionFixture.GoAwayCodeOf(
   const AFrames: TArray<TFrame>): THttp2ErrorCode;
 var
   Id: LongWord;
@@ -417,14 +416,14 @@ begin
   ParseGoAway(AnyOf(AFrames, ftGoAway), Id, Result, Debug);
 end;
 
-function TConnectionCoreTest.FirstTypeOf(
+function TConnectionFixture.FirstTypeOf(
   const AFrames: TArray<TFrame>): TFrameType;
 begin
   AssertTrue('the output holds a frame', Length(AFrames) > 0);
   Result := AFrames[0].Header.FrameType;
 end;
 
-function TConnectionCoreTest.IndexOf(const AFrames: TArray<TFrame>;
+function TConnectionFixture.IndexOf(const AFrames: TArray<TFrame>;
   const AFrameType: TFrameType): Integer;
 var
   I: Integer;
@@ -435,7 +434,7 @@ begin
       Exit(I);
 end;
 
-function TConnectionCoreTest.AnyOf(const AFrames: TArray<TFrame>;
+function TConnectionFixture.AnyOf(const AFrames: TArray<TFrame>;
   const AFrameType: TFrameType): TFrame;
 var
   I: Integer;
@@ -446,7 +445,7 @@ begin
   Fail(Format('no frame of type %d in the output', [Ord(AFrameType)]));
 end;
 
-function TConnectionCoreTest.CountOf(const AFrames: TArray<TFrame>;
+function TConnectionFixture.CountOf(const AFrames: TArray<TFrame>;
   const AFrameType: TFrameType): Integer;
 var
   I: Integer;
@@ -457,7 +456,7 @@ begin
       Inc(Result);
 end;
 
-function TConnectionCoreTest.StatusOf(const AFrame: TFrame): string;
+function TConnectionFixture.StatusOf(const AFrame: TFrame): string;
 var
   Codec: THpackCodec;
   Headers: THeaderBlock;
@@ -474,6 +473,8 @@ begin
     Codec.Free;
   end;
 end;
+
+{ TConnectionCoreTest }
 
 procedure TConnectionCoreTest.TestServerSettingsIsTheFirstFrame;
 var
@@ -929,238 +930,6 @@ begin
   AssertTrue('the stream is cancelled', Stream.IsCancelled);
   Stream.ReleaseRef;
   AssertFalse('the connection stays open', FCore.GoAwaySent);
-end;
-
-procedure TConnectionCoreTest.TestResetAbuseTripsTheBucket;
-var
-  Frames: TArray<TFrame>;
-  List: array of TFrame;
-  I: Integer;
-begin
-  NewCore(3);
-  // a reset on an idle stream is a fault, so each reset needs an open
-  // stream: the list opens a stream and then resets it
-  SetLength(List, 20);
-  for I := 0 to 9 do
-  begin
-    List[I * 2] := RequestFrame(LongWord(I) * 2 + 1, False);
-    List[I * 2 + 1] := TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
-      RstPayload(ecCancel));
-  end;
-  FCore.Feed(Pack(True, List));
-  Frames := OutputFrames;
-  AssertTrue('the reset flood trips the bucket', FEvents.Tripped);
-  AssertEquals('the reset bucket tripped', Ord(lkReset),
-    Ord(FEvents.TripKind));
-  AssertTrue('the output stays bounded', Length(Frames) <= 40);
-  AssertTrue('the GOAWAY left the core', FCore.GoAwaySent);
-end;
-
-procedure TConnectionCoreTest.TestBucketTripSendsEnhanceYourCalm;
-var
-  Frames: TArray<TFrame>;
-  Id: LongWord;
-  Code: THttp2ErrorCode;
-  Debug: TBytes;
-  List: array of TFrame;
-  I: Integer;
-begin
-  NewCore(2);
-  // each reset follows its own open stream, because a reset on an idle
-  // stream is a connection fault that ends the feed at the first frame
-  SetLength(List, 10);
-  for I := 0 to 4 do
-  begin
-    List[I * 2] := RequestFrame(LongWord(I) * 2 + 1, False);
-    List[I * 2 + 1] := TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
-      RstPayload(ecCancel));
-  end;
-  FCore.Feed(Pack(True, List));
-  Frames := OutputFrames;
-  ParseGoAway(AnyOf(Frames, ftGoAway), Id, Code, Debug);
-  AssertEquals('a tripped bucket says ENHANCE_YOUR_CALM',
-    Ord(ecEnhanceYourCalm), Ord(Code));
-  AssertEquals('the GOAWAY names the last processed stream', 3, Id);
-end;
-
-procedure TConnectionCoreTest.TestControlFrameAbuseTripsTheBucket;
-var
-  I: Integer;
-  List: array of TFrame;
-  Ping: TBytes;
-begin
-  // a control bucket of one token trips on the second PING
-  Release;
-  FOptions := PlainOptions;
-  FClock := TManualMonotonicClock.Create;
-  FEvents := TRecordingEvents.Create;
-  FLimits := TConnectionLimits.Create(FClock,
-    TTokenBucketOptions.Create.WithCapacity(10000).WithRefillPerSecond(0)
-      .WithCostBeforeDispatch(1).WithCostAfterDispatch(2),
-    TTokenBucketOptions.Create.WithCapacity(1).WithRefillPerSecond(0)
-      .WithCostBeforeDispatch(1).WithCostAfterDispatch(1));
-  FCore := TServerConnectionCore.Create(FOptions, FEvents, FLimits, FClock);
-  Ping := BlockOf(['a'], ['b']);
-  SetLength(Ping, 8);
-  SetLength(List, 4);
-  for I := 0 to Length(List) - 1 do
-    List[I] := TFrame.Create(ftPing, [], 0, Ping);
-  FCore.Feed(Pack(True, List));
-  AssertTrue('a PING flood trips the bucket', FEvents.Tripped);
-  AssertEquals('the PING bucket tripped', Ord(lkPing),
-    Ord(FEvents.TripKind));
-end;
-
-procedure TConnectionCoreTest.TestConnectionCreditReturnsOnBuffer;
-var
-  Override: TConnectionCoreOptions;
-  Frames: TArray<TFrame>;
-  Wu: TFrame;
-  I: Integer;
-begin
-  Override := PlainOptions;
-  Override.ConnectionUpdateThreshold := 100;
-  NewCore;
-  Release;
-  MakeCoreWith(Override, 10000);
-  FCore.Feed(Pack(True, [RequestFrame(1, False),
-    DataFrame(1, 1000)]));
-  Frames := OutputFrames;
-  Wu := AnyOf(Frames, ftWindowUpdate);
-  AssertEquals('the connection WINDOW_UPDATE is credited', 0,
-    Wu.Header.StreamId);
-  AssertEquals('the buffer returns the connection credit',
-    Int64(TestConnectionWindow), FCore.ConnectionWindowSize);
-  // a second body frame keeps the connection window open without a handler
-  for I := 1 to 3 do
-    FCore.Feed(Pack(False, [DataFrame(1, 1000)]));
-  AssertTrue('the connection never stalls while the handler is idle',
-    FCore.ConnectionWindowSize > 0);
-end;
-
-procedure TConnectionCoreTest.TestStreamCreditFollowsAHandlerRead;
-var
-  Override: TConnectionCoreOptions;
-  Stream: TServerStream;
-  Frames: TArray<TFrame>;
-  Buf: array[0..127] of Byte;
-  I: Integer;
-begin
-  Override := PlainOptions;
-  Override.StreamUpdateThreshold := 100;
-  NewCore;
-  Release;
-  MakeCoreWith(Override, 10000);
-  FCore.Feed(Pack(True, [RequestFrame(1, False),
-    DataFrame(1, 1000)]));
-  OutputFrames;
-  Stream := FCore.StreamById(1);
-  Frames := OutputFrames;
-  AssertEquals('no stream credit before a handler read', 0,
-    CountOf(Frames, ftWindowUpdate));
-  for I := 1 to 8 do
-    Stream.Read(Buf, SizeOf(Buf));
-  FCore.Flush;
-  Frames := OutputFrames;
-  AssertTrue('a handler read releases stream credit',
-    CountOf(Frames, ftWindowUpdate) > 0);
-  AssertEquals('the read octets are credited', Int64(TestStreamWindow),
-    FCore.StreamWindowSize(1));
-end;
-
-procedure TConnectionCoreTest.TestResponseHeadersAreEncodedOnce;
-var
-  Stream: TServerStream;
-  Frames: TArray<TFrame>;
-  Headers: THeaderBlock;
-  Head: TFrame;
-begin
-  NewCore;
-  FCore.Feed(Pack(True, [RequestFrame(1, False)]));
-  OutputFrames;
-  Stream := FCore.StreamById(1);
-  SetLength(Headers, 1);
-  Headers[0].Name := 'content-type';
-  Headers[0].Value := 'text/plain';
-  Stream.QueueResponseHeaders(200, Headers, False);
-  FCore.Flush;
-  Frames := OutputFrames;
-  AssertEquals('one response header block makes one HEADERS frame', 1,
-    CountOf(Frames, ftHeaders));
-  Head := AnyOf(Frames, ftHeaders);
-  AssertEquals('the response carries its status', '200', StatusOf(Head));
-  AssertEquals('the response uses the request stream', 1, Head.Header.StreamId);
-  // the second flush must not repeat the block
-  FCore.Flush;
-  AssertEquals('a repeated flush queues nothing', 0,
-    CountOf(OutputFrames, ftHeaders));
-end;
-
-procedure TConnectionCoreTest.TestLongHeaderListKeepsRunsContiguous;
-var
-  Override: TConnectionCoreOptions;
-  Stream: TServerStream;
-  Frames: TArray<TFrame>;
-  Headers: THeaderBlock;
-  I, HeadAt, ContAt: Integer;
-  Encoded: TBytes;
-begin
-  Override := PlainOptions;
-  Override.MaxFrameSize := 64;
-  NewCore;
-  Release;
-  MakeCoreWith(Override, 10000);
-  FCore.Feed(Pack(True, [RequestFrame(1, False)]));
-  OutputFrames;
-  SetLength(Headers, 1);
-  Headers[0].Name := 'x-long';
-  Headers[0].Value := StringOfChar('v', 400);
-  Stream := FCore.StreamById(1);
-  Stream.QueueResponseHeaders(200, Headers, False);
-  FCore.Flush;
-  Frames := OutputFrames;
-  HeadAt := IndexOf(Frames, ftHeaders);
-  AssertTrue('a long header list makes a HEADERS frame', HeadAt >= 0);
-  AssertTrue('a long header list makes CONTINUATION frames',
-    CountOf(Frames, ftContinuation) > 0);
-  // the first CONTINUATION follows the HEADERS frame at once
-  AssertEquals('the header run is contiguous', Ord(ftHeaders),
-    Ord(Frames[HeadAt].Header.FrameType));
-  AssertEquals('the frame after HEADERS is a CONTINUATION',
-    Ord(ftContinuation), Ord(Frames[HeadAt + 1].Header.FrameType));
-  ContAt := HeadAt + CountOf(Frames, ftContinuation);
-  AssertTrue('the run ends with END_HEADERS',
-    Frames[ContAt].IsEndHeaders);
-  // every frame of the run names the same stream
-  for I := HeadAt to ContAt do
-    AssertEquals('every frame of the run names the stream', 1,
-      Frames[I].Header.StreamId);
-end;
-
-procedure TConnectionCoreTest.TestClosedStreamsAreFreed;
-var
-  Before, After: PtrUInt;
-  I: Integer;
-begin
-  NewCore;
-  FCore.Feed(Pack(True, []));
-  OutputFrames;
-  Before := GetFPCHeapStatus.CurrHeapUsed;
-  // each cycle opens a stream and then resets it, so the core closes it
-  for I := 0 to 1999 do
-  begin
-    FCore.Feed(Pack(False, [
-      RequestFrame(LongWord(I) * 2 + 1, False),
-      TFrame.Create(ftRstStream, [], LongWord(I) * 2 + 1,
-        RstPayload(ecCancel))]));
-    OutputFrames;
-  end;
-  After := GetFPCHeapStatus.CurrHeapUsed;
-  AssertEquals('every closed stream left the core', 0, FCore.OpenStreams);
-  // the heap grows by the fixed cost of the last stream only, not by one
-  // stream per cycle: a retained stream costs about 700 bytes
-  AssertTrue('a closed stream is freed, not retained',
-    (After - Before) < 100000);
 end;
 
 initialization

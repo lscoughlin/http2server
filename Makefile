@@ -39,10 +39,13 @@ BIN        = bin
 
 .PHONY: all test examples mtls-live clean
 
-all: $(BIN)/libhttp2server.a
+all: $(BIN)/.library.stamp
 
-$(BIN)/libhttp2server.a: $(SRC) | $(BIN)
+# -Cn skips the link step, so the compiler writes units and no .a file. A stamp
+# file records the last build, and make rebuilds only when a source changed.
+$(BIN)/.library.stamp: $(SRC) | $(BIN)
 	$(FPC) $(FPCFLAGS) -Cn -FE$(BIN) src/Http2Server.pas
+	touch $@
 
 $(BIN):
 	mkdir -p $(BIN)

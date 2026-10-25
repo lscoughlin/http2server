@@ -802,29 +802,8 @@ begin
 end;
 
 function THttp2AsyncServer.GetLastOperationIdleSeconds: cardinal;
-var
-  Ms: Integer;
-
-  function Seconds(const AValue: Integer): cardinal;
-  begin
-    if AValue <= 0 then
-      exit(0);
-    // the base class compares in 32-bit seconds, so a sub-second timeout is
-    // rounded up to one second
-    result := cardinal(AValue div 1000);
-    if result = 0 then
-      result := 1;
-  end;
-
 begin
-  // the idle callback is the one place that both timeouts are checked, so the
-  // callback runs at the earlier of the two: an idle close uses the idle
-  // timeout, and a first-header-block close uses the header timeout
-  result := Seconds(FFactory.IdleTimeoutMs);
-  if (FFactory.HeaderTimeoutMs > 0) and
-     ((result = 0) or
-      (Seconds(FFactory.HeaderTimeoutMs) < result)) then
-    result := Seconds(FFactory.HeaderTimeoutMs);
+  result := IdleCheckSeconds(FFactory.IdleTimeoutMs, FFactory.HeaderTimeoutMs);
 end;
 
 procedure THttp2AsyncServer.ConnectionOpened;

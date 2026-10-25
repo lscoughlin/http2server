@@ -29,6 +29,12 @@ uses
 // - an empty host binds every IPv4 address
 function BindAddressText(const AHost: string; const APort: Integer): RawUtf8;
 
+/// the period of the idle callback, in whole seconds
+// - the callback is the one place that checks both timeouts, so it runs at the
+//   earlier of the two. A sub-second timeout rounds up to one second, because
+//   the base class compares in 32-bit seconds. 0 means no check
+function IdleCheckSeconds(const AIdleMs, AHeaderMs: Integer): Cardinal;
+
 /// the TLS policy of the listener, with the client certificate settings
 function BuildTlsPolicy(const AFactory: THttp2ServerFactory): TTlsPolicy;
 
@@ -50,6 +56,23 @@ procedure SetHandshakeDeadline(const ASocket: TNetSocket;
   const ARequestedMs: LongWord);
 
 implementation
+
+function IdleCheckSeconds(const AIdleMs, AHeaderMs: Integer): Cardinal;
+
+  function Seconds(const AValue: Integer): Cardinal;
+  begin
+    if AValue <= 0 then
+      exit(0);
+    result := Cardinal(AValue div 1000);
+    if result = 0 then
+      result := 1;
+  end;
+
+begin
+  result := Seconds(AIdleMs);
+  if (AHeaderMs > 0) and ((result = 0) or (Seconds(AHeaderMs) < result)) then
+    result := Seconds(AHeaderMs);
+end;
 
 function BindAddressText(const AHost: string; const APort: Integer): RawUtf8;
 var

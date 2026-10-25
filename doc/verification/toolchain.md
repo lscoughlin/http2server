@@ -175,3 +175,11 @@ task setup:deps               # idempotent mORMot2 pin
 make test                     # exit code 0
 task test                     # exit code 0
 ```
+
+## Continuous integration
+
+The repository holds no CI configuration. A hosted service needs an account and a
+decision about cost, and the maintainer has made neither. The gate that a CI file
+would run is the three commands `make all examples test` and `task docs:check`.
+A maintainer runs them before each commit, together with the `h2spec` runs of
+`tools/validate/run.sh`.

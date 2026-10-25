@@ -292,4 +292,5 @@ The core holds no socket, no thread and no clock of its own. A test builds a
 core with `TConnectionCoreOptions`, feeds bytes and reads frames. The class
 `TManualMonotonicClock` (`src/Http2Server.Limits.pas`) supplies the time, so
 a limit test controls the bucket state. The test unit
-`test/Http2Server.Connection.Test.pas` drives the core this way.
+`test/Http2Server.Connection.Test.pas` and
+`test/Http2Server.Connection.Flow.Test.pas` drive the core this way.
