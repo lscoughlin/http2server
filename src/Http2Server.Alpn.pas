@@ -16,6 +16,8 @@ notes:
 }
 unit Http2Server.Alpn;
 
+{$mode delphi}{$H+}
+
 interface
 
 uses
