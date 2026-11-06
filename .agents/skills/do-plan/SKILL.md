@@ -5,7 +5,7 @@ description: >-
   and codebase. Never edits doc/ or code directly — any documentation update
   a plan calls for becomes a task or story in the plan for do-build to carry
   out. Works read-only, directly in the current checkout (no worktree), and
-  writes plan files to .ai/plans/planned/.
+  writes plan files to plan/.
 ---
 
 # Plan Skill
@@ -16,7 +16,7 @@ Plan**: a set of stories and tasks that `do-build` can execute. This skill is re
 Reference Documentation, that requirement becomes a task in the plan, not an edit you make here.
 
 There is no worktree for this skill. It produces nothing git-tracked — the plan file lives under
-the gitignored `.ai/plans/` — so read specs and code directly in the checkout this session already
+the gitignored `plan/` — so read specs and code directly in the checkout this session already
 has open.
 
 ## Implementation Plans
@@ -24,7 +24,12 @@ has open.
 Implementation plans provide actionable tasks for AI/LLM agents to write the code (and, where
 called for, the docs).
 
-- **Location**: `.ai/plans/planned/[plan-name].md`
+- **Location**: `plan/[plan-name].md`, as `AGENTS.md` (section Plans) requires. Read the top of
+  `plan/README.md` and one existing plan (for example `plan/hardening.md`) first, and match their
+  layout: a status section, rules for every story, and numbered stories. A large plan
+  can put each story in `plan/stories/NN-name.md`, continuing the highest number there; a small plan keeps its stories in its own file.
+  Update the story list in `plan/README.md`. Text follows ASD-STE100 (`AGENTS.md`, section
+  Language).
 - **Content**: A set of stories and tasks that an AI/LLM agent can use to implement the instructed
   changes. Reference the existing specs under `doc/` that describe current behavior.
 - **Documentation-update tasks**: every plan must explicitly check whether the change it describes
@@ -40,13 +45,17 @@ called for, the docs).
   - **Tone**: doc prose must be descriptive and explanatory, never imperative — it specifies *what*
     the software is and *how* it works, not instructions to follow.
   - **Rule**: doc content must never reference implementation plans.
-  - **Frontmatter**: any touched file over ~120 lines, or any `README.md`, needs the ≤20-line
-    frontmatter block from `../../../AGENTS.md` Section 4 (`scope`, `primary_types`, `db_tables`,
-    `related_docs`, `invariants`).
-  - **Location**: organize according to `../../../doc/README.md`.
+  - **Frontmatter**: every document in `doc/` (except the `.txt` copies in `doc/references/`)
+    starts with YAML front matter, as `../../../AGENTS.md` (section Documentation front matter)
+    defines: `license` on line 2, `copyright`, and optional keys such as `keywords`, `notes`,
+    `scope`, `primary_types`, `db_tables`, `related_docs` and `invariants`. A new document gets
+    the block; an edited document keeps its block, and the task updates `related_docs` and
+    `invariants` when the change affects them.
+  - **Location**: organize according to `../../../doc/README.md`. Every document in `doc/` is
+    linked from that file, so a new document needs a row in its route map.
 - **Rule**: Implementation plans **MAY** (and typically should) reference the specifications
   defined in the Reference Documentation, by path relative to the repo root (`doc/...`, not
-  relative to the plan file itself — `.ai/plans/planned/` is a nested directory and a
+  relative to the plan file itself — `plan/stories/` is a nested directory and a
   plan-file-relative path would resolve wrong).
 - **Rule**: Implementation plans **MUST NEVER** link to or reference any file (or entry within a file) under
   `.ai/plans/**` that this run marks consumed (see Workflow steps 0 and 4) — a brainstorm output, a backlog
@@ -54,12 +63,12 @@ called for, the docs).
   constraints, and context out of it into the plan's own prose instead of pointing at it. Consumed sources are
   ephemeral scratch that gets renamed or edited out (step 4) and aren't guaranteed to stick around at that
   path — a plan that leans on one staying in place isn't self-contained.
-- **`.ai/plans/` is gitignored.** It never travels with a branch. Nothing here needs a worktree or
+- **`plan/` is gitignored** (`.gitignore`, line 1). It never travels with a branch. Nothing here needs a worktree or
   a merge — the plan file is written once, in place, and `do-build` reads it from the same spot.
-- **A plan touching a tested product line should name which SIT/UAT suites its Story-level
-  tasks are expected to extend**, using
-  [sit-uat-suites.md](../../../doc/base/technical/testing/sit-uat-suites.md)'s change-area mapping
-  table — that's what `do-build` checks the diff against before merge.
+- **A plan names the test units its stories extend** (`test/*.Test.pas`), and the checks each
+  story ends with: `make test`, `make examples` and `task docs:check`, plus `h2spec` and the abuse
+  tool when the wire behaviour changes (`../../../doc/verification/validation.md`). A story puts
+  new tests in a new test unit when the existing test file is near the 1000-line limit.
 
 ## Workflow
 
@@ -85,7 +94,7 @@ called for, the docs).
    Reach for `ast-grep-nav` first for structural/shape searches, `ctags-nav` for exact symbol-name
    lookups, and the `docs-search` skill / `rg` for text.
 3. **Plan and Task**: create or update the **Implementation Plan** at
-   `.ai/plans/planned/[plan-name].md`. Break the work down into logical stories and tasks that map
+   `plan/[plan-name].md` (and `plan/stories/`). Break the work down into logical stories and tasks that map
    to the specifications already in `doc/`, with references to the relevant files (repo-root-
    relative paths). Any doc/ work the change requires goes in as its own task(s) or story, per the
    rules above — do not write to `doc/` yourself. If step 0 flagged a `.ai/plans/**` source file
@@ -112,7 +121,7 @@ Plans don't have a test suite to gate them — a human reading them is the check
 plan as ready for `do-build` on your own judgment that the draft looks complete.
 
 1. When the plan is ready, summarize what it contains and point the user at
-   `.ai/plans/planned/[plan-name].md` for review.
+   `plan/[plan-name].md` for review.
 2. If the user asks for changes, keep iterating on the same plan file.
 3. Treat the plan as ready for `do-build` only once the user has explicitly approved. "Looks
    good", "go build it", "approved" (or the equivalent) counts; silence does not.
