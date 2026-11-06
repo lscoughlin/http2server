@@ -35,6 +35,9 @@ type
     procedure SetUp; override;
   published
     procedure TestNegativeTimeoutsAreRejected;
+    procedure TestNegativeLifetimeIsRejected;
+    procedure TestZeroAndPositiveLifetimeIsAccepted;
+    procedure TestBothLifetimeProblemsComeInOneCall;
     procedure TestBucketWithoutCapacityIsRejected;
     procedure TestZeroWindowsAreRejected;
     procedure TestZeroStreamLimitIsRejected;
@@ -79,6 +82,42 @@ begin
   AssertTrue('idle', Rejects(Base.WithIdleTimeout(-1), 'idle timeout'));
   AssertTrue('header', Rejects(Base.WithHeaderTimeout(-1), 'header timeout'));
   AssertTrue('graceful', Rejects(Base.WithGracefulStopTimeout(-1), 'graceful'));
+end;
+
+procedure TConfigRangesTest.TestNegativeLifetimeIsRejected;
+begin
+  AssertTrue('age', Rejects(Base.WithMaxConnectionAge(-1),
+    'the maximum connection age is below 0'));
+  AssertTrue('streams', Rejects(Base.WithMaxStreamsPerConnection(-1),
+    'the maximum streams per connection is below 0'));
+end;
+
+procedure TConfigRangesTest.TestZeroAndPositiveLifetimeIsAccepted;
+var
+  Problems: TArray<string>;
+begin
+  AssertTrue('age 0', Base.WithMaxConnectionAge(0).Validate(Problems));
+  AssertTrue('age positive',
+    Base.WithMaxConnectionAge(60000).Validate(Problems));
+  AssertTrue('streams 0',
+    Base.WithMaxStreamsPerConnection(0).Validate(Problems));
+  AssertTrue('streams positive',
+    Base.WithMaxStreamsPerConnection(100).Validate(Problems));
+end;
+
+procedure TConfigRangesTest.TestBothLifetimeProblemsComeInOneCall;
+var
+  Problems: TArray<string>;
+  Bad: THttp2ServerFactory;
+begin
+  Bad := Base.WithMaxConnectionAge(-1).WithMaxStreamsPerConnection(-1);
+  AssertFalse('the bad factory fails validation', Bad.Validate(Problems));
+  AssertTrue('both problems arrive at once: ' + IntToStr(Length(Problems)),
+    Length(Problems) >= 2);
+  AssertTrue('the age problem is in the list',
+    Rejects(Bad, 'the maximum connection age is below 0'));
+  AssertTrue('the stream problem is in the list',
+    Rejects(Bad, 'the maximum streams per connection is below 0'));
 end;
 
 procedure TConfigRangesTest.TestBucketWithoutCapacityIsRejected;

@@ -186,6 +186,8 @@ type
     FIdleTimeoutMs: Integer;
     FHeaderTimeoutMs: Integer;
     FGracefulStopTimeoutMs: Integer;
+    FMaxConnectionAgeMs: Integer;
+    FMaxStreamsPerConnection: Integer;
     FHandler: IHttp2Handler;
     FAccessLogWriter: IAccessLogWriter;
     FClock: IMonotonicClock;
@@ -311,6 +313,9 @@ type
     /// the time a graceful stop waits for the open streams, in milliseconds
     function WithGracefulStopTimeout(
       const AValue: Integer): THttp2ServerFactory;
+    /// the greatest age of a connection, in milliseconds; 0 turns the limit off
+    function WithMaxConnectionAge(const AValue: Integer): THttp2ServerFactory;
+    function WithMaxStreamsPerConnection(const AValue: Integer): THttp2ServerFactory;
 
     // ---- wiring ----
 
@@ -391,6 +396,8 @@ type
     property IdleTimeoutMs: Integer read FIdleTimeoutMs;
     property HeaderTimeoutMs: Integer read FHeaderTimeoutMs;
     property GracefulStopTimeoutMs: Integer read FGracefulStopTimeoutMs;
+    property MaxConnectionAgeMs: Integer read FMaxConnectionAgeMs;
+    property MaxStreamsPerConnection: Integer read FMaxStreamsPerConnection;
 
     // ---- wiring ----
 
@@ -595,6 +602,8 @@ begin
   Result.FIdleTimeoutMs := 60000;
   Result.FHeaderTimeoutMs := 30000;
   Result.FGracefulStopTimeoutMs := 10000;
+  Result.FMaxConnectionAgeMs := 0;
+  Result.FMaxStreamsPerConnection := 0;
   Result.FHandler := nil;
   Result.FAccessLogWriter := nil;
   Result.FClock := TMonotonicClock.Create;
@@ -839,6 +848,19 @@ begin
   Result.FGracefulStopTimeoutMs := AValue;
 end;
 
+function THttp2ServerFactory.WithMaxConnectionAge(const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FMaxConnectionAgeMs := AValue;
+end;
+
+function THttp2ServerFactory.WithMaxStreamsPerConnection(
+  const AValue: Integer): THttp2ServerFactory;
+begin
+  Result := Self;
+  Result.FMaxStreamsPerConnection := AValue;
+end;
+
 function THttp2ServerFactory.WithHandler(
   const AValue: IHttp2Handler): THttp2ServerFactory;
 begin
@@ -963,6 +985,10 @@ begin
     Add('the header timeout is below 0');
   if FGracefulStopTimeoutMs < 0 then
     Add('the graceful stop timeout is below 0');
+  if FMaxConnectionAgeMs < 0 then
+    Add('the maximum connection age is below 0');
+  if FMaxStreamsPerConnection < 0 then
+    Add('the maximum streams per connection is below 0');
   if FHandler = nil then
     Add('the handler is not assigned');
 

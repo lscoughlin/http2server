@@ -15,6 +15,7 @@ primary_types:
 db_tables: None.
 related_docs:
   - doc/design/limits.md
+  - doc/design/lifecycle.md
   - doc/design/protocol.md
   - doc/design/tls.md
 invariants:
@@ -35,14 +36,14 @@ its value, so a stored factory is safe to copy and to fork.
 
 ## The factory record
 
-`THttp2ServerFactory` is a record (`src/Http2Server.Config.pas:122`). Its
+`THttp2ServerFactory` is a record (`src/Http2Server.Config.pas:152`). Its
 fields are private and its properties are read-only, so a caller changes a
 setting only through a `WithX` method.
 
 `Create` is a static class function that returns the record with the defaults
-(`src/Http2Server.Config.pas:457-524`). The defaults appear once, in that body.
+(`src/Http2Server.Config.pas:541-610`). The defaults appear once, in that body.
 The two option records hold their own defaults in their own `Create` bodies
-(`src/Http2Server.Config.pas:376`, `src/Http2Server.Config.pas:425`). The
+(`src/Http2Server.Config.pas:413`, `src/Http2Server.Config.pas:509`). The
 figure below shows the three records and their relation.
 
 ```mermaid
@@ -84,7 +85,7 @@ sets a value.
 | `Http11` | `WithHttp11Limits` | the record `THttp11Limits`: the limits of the HTTP/1.1 parser (see [http1](http1.md)) |
 | `ClearTextAllowed` | `WithClearTextAllowed` | allows cleartext connections (HTTP/2 with prior knowledge, and HTTP/1.1 when the fallback is on); off by default |
 
-The listener settings are declared at `src/Http2Server.Config.pas:124-128`.
+The listener fields are at `src/Http2Server.Config.pas:154-157` (host, port, backlog, cleartext) and at `src/Http2Server.Config.pas:169-172` (fallback, HTTP/1.1 limits, WebSocket).
 
 ### The TLS settings
 
@@ -136,8 +137,8 @@ hooks run at the same time.
 ### The queue settings
 
 `TQueueOptions` is a record with its own fluent methods
-(`src/Http2Server.Config.pas:96`). `THttp2ServerFactory.WithQueue` accepts the
-record whole (`src/Http2Server.Config.pas:624`).
+(`src/Http2Server.Config.pas:126`). `THttp2ServerFactory.WithQueue` accepts the
+record whole (`src/Http2Server.Config.pas:710`).
 
 | Setting | `WithX` | Meaning |
 |---|---|---|
@@ -145,7 +146,7 @@ record whole (`src/Http2Server.Config.pas:624`).
 | `MaxWaitMs` | `WithMaxWaitMs` | the greatest wait of a queued request |
 | `RefusalMode` | `WithRefusalMode` | the action when the queue is full |
 
-`TQueueRefusalMode` has two values (`src/Http2Server.Config.pas:50-53`). The
+`TQueueRefusalMode` has two values (`src/Http2Server.Config.pas:56-60`). The
 value `rmRefuseStream` resets the stream with `REFUSED_STREAM`. The value
 `rmHttp503` answers HTTP 503. The two answers differ in the retry rule. RFC
 9113 §5.1.2 states that the error code decides whether automatic retry is
@@ -166,7 +167,7 @@ the free handlers is refused at once.
 | `MaxContinuationFrames` | `WithMaxContinuationFrames` | the greatest count of `CONTINUATION` frames in one header block |
 | `HeaderTableSize` | `WithHeaderTableSize` | `SETTINGS_HEADER_TABLE_SIZE` of the HPACK codecs |
 
-The stream settings are declared at `src/Http2Server.Config.pas:143-149`. The
+The stream settings are declared at `src/Http2Server.Config.pas:173-179`. The
 protocol limits come from the protocol units, not from the factory:
 `MinAllowedFrameSize` and `MaxAllowedFrameSize`
 (`src/Http2Server.Frames.pas:42`, `src/Http2Server.Frames.pas:44`), and
@@ -177,8 +178,8 @@ settings in `TConnectionSettings` (`src/Http2Server.Frames.pas:94`).
 
 The factory holds one `TTokenBucketOptions` per limited client action: the
 reset bucket and one bucket per control frame kind
-(`src/Http2Server.Config.pas:150-155`). Each bucket has its own `WithX`
-method (`src/Http2Server.Config.pas:702-742`). `TTokenBucketOptions` is the
+(`src/Http2Server.Config.pas:180-185`). Each bucket has its own `WithX`
+method (`src/Http2Server.Config.pas:788-828`). `TTokenBucketOptions` is the
 fluent record of `src/Http2Server.Limits.pas:71`; [limits](limits.md)
 describes the bucket itself.
 
@@ -204,7 +205,16 @@ from the caller of `TryTake`.
 | `HeaderTimeoutMs` | `WithHeaderTimeout` | the time the header block of a request may take |
 | `GracefulStopTimeoutMs` | `WithGracefulStopTimeout` | the time a graceful stop waits for the open streams |
 
-The timeout settings are declared at `src/Http2Server.Config.pas:156-158`.
+The timeout settings are declared at `src/Http2Server.Config.pas:186-188`.
+
+### The connection lifetime settings
+
+| Setting | `WithX` | Meaning |
+|---|---|---|
+| `MaxConnectionAgeMs` | `WithMaxConnectionAge` | the time from accept after which the server retires the connection; 0 (the default) turns the limit off |
+| `MaxStreamsPerConnection` | `WithMaxStreamsPerConnection` | the number of requests one connection serves before the server retires it; 0 (the default) turns the limit off |
+
+The lifetime fields are at `src/Http2Server.Config.pas:189-190`. Both defaults are 0, set in `Create` (`src/Http2Server.Config.pas:605-606`). `Validate` rejects a negative value of either one (`src/Http2Server.Config.pas:988-991`). [lifecycle](lifecycle.md) describes the retire.
 
 ### The wiring
 
@@ -214,7 +224,7 @@ The timeout settings are declared at `src/Http2Server.Config.pas:156-158`.
 | `AccessLogWriter` | `WithAccessLogWriter` | the receiver of the access log records; nil (the default) writes no log, see [access-log](access-log.md) |
 | `Clock` | `WithClock` | the clock of the token buckets and of the timeouts |
 
-The wiring is declared at `src/Http2Server.Config.pas:159-161`. `IHttp2Handler`
+The wiring is declared at `src/Http2Server.Config.pas:191-193`. `IHttp2Handler`
 is the handler contract (`src/Http2Server.Seam.pas:168-172`). `IMonotonicClock` is the
 clock interface, and `TMonotonicClock` is its real implementation
 (`src/Http2Server.Limits.pas:40`, `src/Http2Server.Limits.pas:47`). `Create`
@@ -223,7 +233,7 @@ builds the default clock, so a caller sets no clock for a normal server.
 ## Validation
 
 `Validate(out AProblems: TArray<string>): Boolean` collects every problem of
-the settings into one list (`src/Http2Server.Config.pas:786`). The answer is
+the settings into one list (`src/Http2Server.Config.pas:885`). The answer is
 `True` and the list is empty when every setting is correct. The answer is
 `False` and the list holds one message per problem when a setting is wrong.
 The method does not stop at the first problem.
@@ -252,6 +262,8 @@ The rules are:
 | the header table size is at most 2^31-1 | the header table size is above the limit |
 | each of the six control buckets has a capacity of at least 1 and a refill rate of at least 0 | the bucket capacity is below 1, or the refill rate is below 0 |
 | the idle, header and graceful stop timeouts are at least 0 | the timeout is below 0 |
+| the maximum connection age is at least 0 | the maximum connection age is below 0 |
+| the stream cap is at least 0 | the maximum streams per connection is below 0 |
 | the handler is assigned | the handler is not assigned |
 
 Port 0 is legal, and it asks the operating system for a free port. A queue depth
@@ -280,7 +292,7 @@ The values are:
 | Queue | depth 64, maximum wait 5000 ms, refusal by `REFUSED_STREAM` |
 | Streams | 100 concurrent streams, 65535 stream window, 65535 connection window, 16384 frame size, 65536 header list size, 16 `CONTINUATION` frames, 4096 header table |
 | Buckets | reset bucket 1000 tokens with a refill of 100 per second and costs 1 and 5; `PING`, `SETTINGS`, `empty DATA` and `CONTINUATION` 100 tokens with a refill of 10 per second; `WINDOW_UPDATE` 10000 tokens with a refill of 4000 per second |
-| Timeouts | idle 60000 ms, header 30000 ms, graceful stop 10000 ms |
+| Timeouts | idle 60000 ms, header 30000 ms, graceful stop 10000 ms, maximum age off, maximum streams per connection off |
 | Wiring | no handler, the process monotonic clock |
 
 ## What the factory does not hold

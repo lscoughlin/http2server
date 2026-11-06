@@ -10,7 +10,8 @@ notes:
   - The frame inputs follow RFC 9113 sections 4.2, 5.1.1, 5.1.2, 6.5 and 6.9.
   - This unit holds the shared fixture and the framing, stream and GOAWAY
     tests. The abuse bucket, credit and output tests are in the unit
-    Http2Server.Connection.Flow.Test.
+    Http2Server.Connection.Flow.Test. The connection lifetime tests are in
+    the unit Http2Server.Connection.Lifetime.Test.
 ---
 }
 /// Connection core tests for Http2Server.Connection
@@ -26,7 +27,7 @@ uses
   SysUtils, Classes, fpcunit, testregistry,
   Http2Server.Errors, Http2Server.Frames, Http2Server.Hpack,
   Http2Server.Limits, Http2Server.Connection, Http2Server.Seam,
-  Http2Server.Stream;
+  Http2Server.Stream, Http2Server.Observer;
 
 type
   /// records every event the core raises
@@ -37,16 +38,19 @@ type
     FClosing: Integer;
     FTripKind: TLimitKind;
     FTripped: Boolean;
+    FRetired: TArray<TServerEvent>;
   public
     procedure RequestReady(const AStream: TServerStream);
     procedure StreamReset(const AStream: TServerStream);
     procedure ConnectionClosing;
     procedure LimitTripped(const AKind: TLimitKind);
+    procedure RecordRetire(const AEvent: TServerEvent);
     property Requests: Integer read FRequests;
     property Resets: Integer read FResets;
     property Closing: Integer read FClosing;
     property Tripped: Boolean read FTripped;
     property TripKind: TLimitKind read FTripKind;
+    property Retired: TArray<TServerEvent> read FRetired;
   end;
 
   /// the shared fixture and frame helpers of the connection core tests
@@ -162,6 +166,12 @@ begin
   FTripKind := AKind;
 end;
 
+procedure TRecordingEvents.RecordRetire(const AEvent: TServerEvent);
+begin
+  SetLength(FRetired, Length(FRetired) + 1);
+  FRetired[High(FRetired)] := AEvent;
+end;
+
 { TConnectionFixture }
 
 function TConnectionFixture.PlainOptions: TConnectionCoreOptions;
@@ -180,6 +190,7 @@ begin
   Result.StreamUpdateThreshold := TestStreamThreshold;
   Result.ConnectProtocol := False;
   Result.MaxOutputBytes := 0;
+  Result.MaxStreams := 0;
 end;
 
 function TConnectionFixture.BuildLimits(
@@ -202,6 +213,7 @@ begin
   FEvents := TRecordingEvents.Create;
   FLimits := BuildLimits(ACapacity);
   FCore := TServerConnectionCore.Create(FOptions, FEvents, FLimits, FClock);
+  FCore.OnRetired := FEvents.RecordRetire;
 end;
 
 procedure TConnectionFixture.MakeCore(const ACapacity: Integer);

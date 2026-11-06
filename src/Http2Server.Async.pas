@@ -116,8 +116,19 @@ type
     FSendRequested: Boolean;
     /// guards the two send flags
     FSendLock: TCriticalSection;
+    FAcceptedMs: QWord; // the accept time in milliseconds, for the age sweep
+    FJitterPermille: Integer; // the age reduction in permille, drawn at accept
+    FRetireDeadlineMs: QWord; // the end of the retire grace, or 0
     procedure StartHttp2;
     procedure StartHttp1;
+    /// the age-sweep decision of the server for this connection
+    procedure CheckAge(const ANowMs: QWord;
+      const AMaxAgeMs, AGraceMs: Integer);
+    /// the retire notice of a core: raise it on the observer of the server
+    procedure RetireNotified(const AEvent: TServerEvent);
+    /// the retire notice of the HTTP/1.1 core: raise it without a GOAWAY,
+    /// because no GOAWAY frame leaves the server on a HTTP/1.1 retire
+    procedure H1RetireNotified(const AEvent: TServerEvent);
     /// the method the waker calls: drain the core and write
     procedure WakeOutput;
     function OnReadHttp1: TPollAsyncSocketOnReadWrite;
@@ -180,6 +191,9 @@ type
     // - the base class returns zero, which disables the event, so the server
     //   enables it with the factory idle timeout
     function GetLastOperationIdleSeconds: cardinal; override;
+    /// retire the connections past their maximum age, once per second
+    // - the idle callback misses busy connections, so the sweep runs here
+    procedure IdleEverySecond; override;
   public
     /// create the listener from the factory
     // - the factory must pass Validate before this call
@@ -263,10 +277,9 @@ end;
 procedure THttp2AsyncConnection.AfterCreate;
 begin
   FServer := THttp2AsyncServer(fOwner);
-  FHeaderDeadlineSec := TAsyncConnectionSec(GetTickCount64 div 1000);
-  if FServer.Factory.HeaderTimeoutMs > 0 then
-    FHeaderDeadlineSec := FHeaderDeadlineSec + TAsyncConnectionSec(
-      cardinal((FServer.Factory.HeaderTimeoutMs + 999) div 1000));
+  FAcceptedMs := GetTickCount64; FJitterPermille := Random(101);
+  FHeaderDeadlineSec := HeaderDeadlineSec(GetTickCount64,
+    FServer.Factory.HeaderTimeoutMs);
   FIdleSeconds := cardinal(FServer.Factory.IdleTimeoutMs div 1000);
   FSendLock := TCriticalSection.Create;
   FMode := cmUndecided;
@@ -274,52 +287,28 @@ begin
 end;
 
 procedure THttp2AsyncConnection.StartHttp2;
-var
-  Options: TConnectionCoreOptions;
-  Limits: TConnectionLimits;
 begin
-  Options := FServer.CoreOptions;
-  // every control kind carries its own bucket.  The kinds differ in their
-  // legitimate rate: a WINDOW_UPDATE accompanies each window a peer refills,
-  // so a large body needs thousands of them, while a CONTINUATION frame
-  // follows only a header block that already passed the frame size.  One
-  // shared bucket of the least capacity would trip on a legitimate large body
-  Limits := TConnectionLimits.CreateByKind(FServer.Factory.Clock,
-    FServer.Factory.ResetBucket, FServer.ControlBucket,
-    [TControlBucketOption.Create(lkPing, FServer.Factory.PingBucket),
-     TControlBucketOption.Create(lkSettings, FServer.Factory.SettingsBucket),
-     TControlBucketOption.Create(lkEmptyData,
-       FServer.Factory.EmptyDataBucket),
-     TControlBucketOption.Create(lkWindowUpdate,
-       FServer.Factory.WindowUpdateBucket),
-     TControlBucketOption.Create(lkContinuation,
-       FServer.Factory.ContinuationBucket)]);
   FEvents := THttp2ConnectionEvents.Create(FServer.Handlers, FServer.Notify,
     FServer.Counters.StreamResetted, FServer.Counters.BucketTripped,
     PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
-  FCore := TServerConnectionCore.Create(Options, FEvents, Limits,
-    FServer.Factory.Clock);
+  FCore := TServerConnectionCore.Create(FServer.CoreOptions, FEvents,
+    BuildConnectionLimits(FServer.Factory), FServer.Factory.Clock);
   FMethodWaker := TMethodWaker.Create(WakeOutput);
   FWaker := FMethodWaker;
   FCore.SetWriteWaker(FWaker);
+  FCore.OnRetired := RetireNotified;
   FMode := cmHttp2;
 end;
 
 procedure THttp2AsyncConnection.StartHttp1;
 var
-  Options: TH1CoreOptions;
   Core: TH1Core;
 begin
-  Options.Limits := FServer.Factory.Http11;
-  if fSecure <> nil then
-    Options.Scheme := 'https'
-  else
-    Options.Scheme := 'http';
-  Options.OutboundLimit := FServer.Factory.ChannelQueueLimit;
-  Options.WriteStallMs := FServer.Factory.IdleTimeoutMs;
   FH1Events := THttp1ConnectionEvents.Create(FServer.Handlers,
     PeerAddressText(RemoteIP, fRemoteIP4), FClientCert);
-  Core := TH1Core.Create(Options, FH1Events);
+  Core := TH1Core.Create(
+    BuildH1CoreOptions(FServer.Factory, fSecure <> nil), FH1Events);
+  Core.OnRetired := H1RetireNotified;
   FMethodWaker := TMethodWaker.Create(WakeOutput);
   FWaker := FMethodWaker;
   Core.SetWriteWaker(FWaker);
@@ -351,6 +340,7 @@ begin
   FSendRequested := False;
   FClientCert := nil;
   FMode := cmUndecided;
+  FRetireDeadlineMs := 0;
   FServer := nil;
 end;
 
@@ -479,8 +469,7 @@ begin
     // The GOAWAY frame of a trip or a graceful stop must reach the peer, so
     // the close waits for the whole output drain.  A close before the drain
     // drops the queued GOAWAY and the peer never learns why the socket ended.
-    if FCore.IsClosing and (FCore.OpenStreams = 0) and
-       (not FCore.HasOutput) and (PendingWrite = 0) then
+    if Http2Drained(FCore, PendingWrite) then
       exit(soClose);
   finally
     Http2IoThreadLeave;
@@ -497,7 +486,6 @@ begin
     result := soContinue;
     if FMode = cmHttp1 then
     begin
-      FH1.Core.NotifyDrain;
       ApplyClosePhase;
       exit;
     end;
@@ -508,8 +496,7 @@ begin
     // stream ends, because the trip already drained it, so the decision runs
     // here too: the close waits for the frames, and the peer learns why the
     // socket ended.
-    if FCore.IsClosing and (FCore.OpenStreams = 0) and
-       (not FCore.HasOutput) and (PendingWrite = 0) then
+    if Http2Drained(FCore, PendingWrite) then
       result := soClose;
   finally
     Http2IoThreadLeave;
@@ -615,10 +602,7 @@ begin
   // the close decision of an HTTP/1.1 exchange can come after the last write,
   // so the end of every send loop looks at it too
   if FMode = cmHttp1 then
-  begin
-    FH1.Core.NotifyDrain;
     ApplyClosePhase;
-  end;
 end;
 
 function THttp2AsyncConnection.OnLastOperationIdle(
@@ -641,36 +625,72 @@ begin
   end;
   if FMode = cmUndecided then
   begin
-    // no octet decided the protocol within the header timeout
-    if (FHeaderDeadlineSec <> 0) and (nowsec > FHeaderDeadlineSec) then
-    begin
-      fOwner.ConnectionRemove(Handle);
-      exit(True);
-    end;
-    // a connection that never sent an octet is idle
-    if (FIdleSeconds <> 0) and (nowsec - fLastOperation >= FIdleSeconds) then
+    if IdleUndecidedClose(nowsec, FHeaderDeadlineSec, fLastOperation, FIdleSeconds) then
     begin
       fOwner.ConnectionRemove(Handle);
       exit(True);
     end;
     exit;
   end;
-  if FCore = nil then
-    exit;
-  // the first header block did not complete within the header timeout
-  if (FHeaderDeadlineSec <> 0) and (nowsec > FHeaderDeadlineSec) then
-  begin
-    fOwner.ConnectionRemove(Handle);
-    Exit(True);
-  end;
-  // an idle connection with no stream and no queued output is closed, so an
-  // idle client does not hold a socket for ever
-  if (FIdleSeconds <> 0) and (nowsec - fLastOperation >= FIdleSeconds) and
-     (FCore.OpenStreams = 0) and not FCore.HasOutput then
+  if (FCore <> nil) and IdleHttp2Close(nowsec, FHeaderDeadlineSec,
+    fLastOperation, FIdleSeconds, FCore.OpenStreams, FCore.HasOutput) then
   begin
     fOwner.ConnectionRemove(Handle);
     Result := True;
   end;
+end;
+
+procedure THttp2AsyncConnection.RetireNotified(const AEvent: TServerEvent);
+begin
+  FServer.Notify(AEvent);
+  FServer.Notify(seGoAwaySent, 0, lkReset,
+    'the server sends GOAWAY on a retired connection');
+end;
+
+procedure THttp2AsyncConnection.H1RetireNotified(const AEvent: TServerEvent);
+begin
+  FServer.Notify(AEvent);
+end;
+
+procedure THttp2AsyncConnection.CheckAge(const ANowMs: QWord;
+  const AMaxAgeMs, AGraceMs: Integer);
+var
+  Action: TAgeAction;
+begin
+  if FMode = cmUndecided then
+  begin
+    if AgeExpired(ANowMs, FAcceptedMs, AMaxAgeMs, FJitterPermille) then
+      fOwner.ConnectionRemove(Handle);
+    Exit;
+  end;
+  if FMode = cmHttp1 then
+    Action := Http1AgeAction(FH1, ANowMs, FAcceptedMs, AMaxAgeMs,
+      FJitterPermille, FRetireDeadlineMs)
+  else
+    Action := Http2AgeAction(FCore, ANowMs, FAcceptedMs, AMaxAgeMs,
+      FJitterPermille, PendingWrite, FRetireDeadlineMs);
+  case Action of
+    aaCloseNow:
+      fOwner.ConnectionRemove(Handle);
+    aaRetireH2:
+      FCore.Retire(RetireDetailMaxAge);
+    aaFinalizeH2:
+      FCore.SendFinalGoAway;
+    aaDrainH1:
+      begin
+        FH1.Core.BeginDrain;
+        FServer.Notify(seConnectionRetired, 0, lkReset, RetireDetailMaxAge);
+      end;
+  end;
+  // every forward step except the at-once close wakes the writer: the
+  // retire and the drain still have a GOAWAY or a close to send
+  if Action in [aaRetireH2, aaFinalizeH2, aaDrainH1] then
+    FWaker.Signal;
+  if Action in [aaRetireH2, aaDrainH1] then
+    FRetireDeadlineMs := ANowMs + QWord(AGraceMs);
+  // a zero grace closes at once, as Stop with a zero wait does
+  if (Action in [aaRetireH2, aaDrainH1]) and (AGraceMs <= 0) then
+    fOwner.ConnectionRemove(Handle);
 end;
 
 procedure THttp2AsyncConnection.OnClose;
@@ -707,6 +727,7 @@ end;
 
 procedure THttp2AsyncConnection.ApplyClosePhase;
 begin
+  FH1.Core.NotifyDrain;
   case FH1.ClosePhase(PendingWrite, TAsyncConnectionSec(GetTickCount64 div 1000),
     cDrainSeconds) of
     cpHalfClose:
@@ -735,8 +756,8 @@ begin
     fRd.Reset;
   end;
   FH1.Received(Data, FServer.Factory.HeaderTimeoutMs);
+  // the send loop ends with the close phase, so no second call runs here
   SendPendingOutput;
-  ApplyClosePhase;
 end;
 
 { THttp2AsyncServer }
@@ -806,32 +827,41 @@ begin
   result := IdleCheckSeconds(FFactory.IdleTimeoutMs, FFactory.HeaderTimeoutMs);
 end;
 
+procedure THttp2AsyncServer.IdleEverySecond;
+var
+  Instances: TAsyncConnectionDynArray;
+  I: Integer;
+begin
+  inherited IdleEverySecond;
+  if FFactory.MaxConnectionAgeMs <= 0 then
+    Exit;
+  // the idle callback misses busy connections. A drained connection closes
+  // on its write completion, never on the idle timer
+  Instances := GetConnectionInstances;
+  for I := 0 to High(Instances) do
+    if Instances[I] <> nil then
+      THttp2AsyncConnection(Instances[I]).CheckAge(GetTickCount64,
+        FFactory.MaxConnectionAgeMs, FFactory.GracefulStopTimeoutMs);
+end;
+
 procedure THttp2AsyncServer.ConnectionOpened;
 begin
-  FCounters.ConnectionOpened;
-  Notify(seConnectionAccepted, 0, lkReset, 'the socket is accepted');
+  ReportOpened(FCounters, FObserver);
 end;
 
 procedure THttp2AsyncServer.ConnectionClosed;
 begin
-  FCounters.ConnectionClosed;
-  Notify(seConnectionClosed, 0, lkReset, 'the connection ended');
+  ReportClosed(FCounters, FObserver);
 end;
 
 procedure THttp2AsyncServer.Notify(const AEvent: TServerEvent);
 begin
-  if FObserver <> nil then
-  try
-    FObserver.OnEvent(AEvent);
-  except
-    // an observer must not end an IO thread; its exception is dropped
-  end;
+  ReportEvent(FObserver, AEvent);
 end;
 
 procedure THttp2AsyncServer.TlsHandshakeFailed(const ADetail: string);
 begin
-  FCounters.TlsFailed;
-  Notify(seTlsHandshakeFailed, 0, lkReset, ADetail);
+  ReportTlsFailed(FCounters, FObserver, ADetail);
 end;
 
 procedure THttp2AsyncServer.WaitBindDone;
@@ -909,21 +939,8 @@ end;
 
 procedure THttp2AsyncServer.Notify(const AKind: TServerEventKind;
   const AStreamId: LongWord; const ALimit: TLimitKind; const ADetail: string);
-var
-  Event: TServerEvent;
 begin
-  if FObserver = nil then
-    exit;
-  Event.Kind := AKind;
-  Event.StreamId := AStreamId;
-  Event.LimitKind := ALimit;
-  Event.ErrorCode := ecNoError;
-  Event.Detail := ADetail;
-  try
-    FObserver.OnEvent(Event);
-  except
-    // an observer must not end an IO thread; its exception is dropped
-  end;
+  ReportEventKind(FObserver, AKind, AStreamId, ALimit, ADetail);
 end;
 
 procedure THttp2AsyncServer.Start;

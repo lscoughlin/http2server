@@ -40,6 +40,8 @@ type
     procedure TestGetAnswersWithContentLengthAndDate;
     procedure TestRequestFieldsReachTheHandler;
     procedure TestKeepAliveAcrossTenRequests;
+    procedure TestRequestCapClosesAfterTheSecondResponse;
+    procedure TestRequestCapOffKeepsTheSocketOpen;
     procedure TestPostWithBody;
     procedure TestChunkedPostIsDecoded;
     procedure TestResponseWithoutLengthIsChunked;
@@ -147,6 +149,56 @@ begin
     end;
     AssertFalse('the connection stayed open', C.Closed);
     AssertEquals(10, FHandler.Calls);
+  finally
+    C.Free;
+  end;
+end;
+
+procedure THttp1LiveTest.TestRequestCapClosesAfterTheSecondResponse;
+var
+  C: TRawHttp;
+  R: TRawResponse;
+begin
+  StartServer(LiveFactory(FHandlerRef).WithMaxStreamsPerConnection(2));
+  C := TRawHttp.Create(FServer.Port);
+  try
+    C.Send('GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF +
+      'GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF +
+      'GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
+    AssertTrue('the first answer', C.ReadResponse(False, ResponseMs, R));
+    AssertEquals(200, R.Status);
+    AssertEquals('hello', R.Body);
+    AssertTrue('the second answer', C.ReadResponse(False, ResponseMs, R));
+    AssertEquals(200, R.Status);
+    AssertEquals('the capped answer says close', 'close', LowerCase(R.Header('connection')));
+    AssertTrue('the server closed the socket', C.WaitClosed(ResponseMs));
+    AssertFalse('no third answer on that socket',
+      C.ReadResponse(False, 1000, R));
+    AssertEquals('the request behind the cap never ran', 2, FHandler.Calls);
+  finally
+    C.Free;
+  end;
+end;
+
+procedure THttp1LiveTest.TestRequestCapOffKeepsTheSocketOpen;
+var
+  C: TRawHttp;
+  R: TRawResponse;
+  I: Integer;
+begin
+  StartServer(LiveFactory(FHandlerRef));
+  C := TRawHttp.Create(FServer.Port);
+  try
+    for I := 1 to 3 do
+    begin
+      C.Send('GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
+      AssertTrue('response ' + IntToStr(I), C.ReadResponse(False, ResponseMs, R));
+      AssertEquals('hello', R.Body);
+      AssertTrue('no close on response ' + IntToStr(I),
+        LowerCase(R.Header('connection')) <> 'close');
+    end;
+    AssertFalse('the socket stayed open', C.Closed);
+    AssertEquals(3, FHandler.Calls);
   finally
     C.Free;
   end;

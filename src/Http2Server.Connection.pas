@@ -31,7 +31,7 @@ uses
   Http2Server.FlowControl, Http2Server.Limits, Http2Server.Seam,
   Http2Server.Stream, Http2Server.Headers, Http2Server.Output,
   Http2Server.HpackConnection, Http2Server.RequestValidation,
-  Http2Server.Connection.Core;
+  Http2Server.Observer, Http2Server.Connection.Core;
 
 type
   /// the per-connection values the core needs (see Http2Server.Connection.Core)
@@ -41,10 +41,25 @@ type
   /// the stream host adapter of one core (see Http2Server.Connection.Core)
   TCoreStreamHost = Http2Server.Connection.Core.TCoreStreamHost;
 
+  /// the retire notice of one connection: the core calls it once with a
+  /// seConnectionRetired event when a retire starts, and the server raises
+  /// that event on its own observer
+  TRetireNotify = procedure(const AEvent: TServerEvent) of object;
+
   /// the server connection state machine
   // - the fields, the output queue and the stream table are in the base class
   TServerConnectionCore = class(TConnectionCoreBase)
   private
+    /// the accepted streams over the life of this connection
+    FStreamTotal: LongWord;
+    /// a retire started, so the connection takes no new stream
+    FRetired: Boolean;
+    /// the final GOAWAY left the core
+    FFinalGoAwaySent: Boolean;
+    /// the ids of the open RFC 8441 WebSocket streams of this connection
+    FWsIds: TArray<LongWord>;
+    /// fired once with a seConnectionRetired event when a retire starts
+    FOnRetired: TRetireNotify;
     procedure ProcessFrame(const AFrame: TFrame);
     procedure ProcessPriority(const AFrame: TFrame);
     procedure ProcessHeaders(const AFrame: TFrame);
@@ -58,12 +73,40 @@ type
     procedure ProcessPing(const AFrame: TFrame);
     procedure ProcessGoAway(const AFrame: TFrame);
     procedure ProcessWindowUpdate(const AFrame: TFrame);
+    /// mark the retire and raise its events; False means a retire runs
+    function StartRetire(const ADetail: string): Boolean;
+    /// true when the head opens an RFC 8441 WebSocket stream
+    function IsWebSocketHead(const AHeaders: THeaderBlock): Boolean;
+    /// remember one open WebSocket stream
+    procedure MarkWebSocket(const AStreamId: LongWord);
+    /// the open WebSocket streams of this connection
+    function GetOpenWebSocketStreams: Integer;
+  protected
+    procedure CloseStream(const AStream: TServerStream); override;
   public
     /// consume bytes from the socket; a partial frame stays buffered
     procedure Feed(const AData: TBytes);
+    /// start a graceful retire for AReason, with the warning GOAWAY
+    // - callable from any thread; the caller signals the write waker after
+    //   it. A second call sends nothing: one GOAWAY covers a double call
+    procedure Retire(const AReason: string);
+    /// queue the final GOAWAY of a retire, with the real last stream id
+    // - the age sweep calls this after the drain time; the caller signals
+    //   the write waker after it. A second call sends nothing
+    procedure SendFinalGoAway;
+    /// true once a retire started
+    property Retired: Boolean read FRetired;
+    /// the open RFC 8441 WebSocket streams of this connection
+    property OpenWebSocketStreams: Integer read GetOpenWebSocketStreams;
+    /// fired once with a seConnectionRetired event when a retire starts
+    property OnRetired: TRetireNotify read FOnRetired write FOnRetired;
   end;
 
 implementation
+
+const
+  /// RFC 9113 section 6.8: the warning GOAWAY names 2^31-1 as the last id
+  cGoAwayWarningId = $7FFFFFFF;
 
 /// true when the block holds the :protocol pseudo-header of an extended CONNECT
 function HasProtocolPseudo(const ABlock: THeaderBlock): Boolean;
@@ -292,7 +335,20 @@ begin
       Discard := True;
     end
     else
+    begin
       Stream := NewStream(AFrame.Header.StreamId);
+      // the stream cap counts every accepted stream over the life of the
+      // connection; a refused stream never reaches this point
+      Inc(FStreamTotal);
+      if (FOptions.MaxStreams > 0) and (FStreamTotal >= FOptions.MaxStreams) then
+      begin
+        // the stream that reaches the cap is served; StartRetire closes the
+        // connection to new streams, so later HEADERS frames take the
+        // refusal path above (RFC 9113 section 5.1.2)
+        if StartRetire(RetireDetailMaxStreams) then
+          SendGoAway(FLastStreamId, ecNoError);
+      end;
+    end;
   end;
   // RFC 9113 section 5.3.1: a HEADERS frame may carry a priority block, and
   // a stream that depends on itself is a stream error
@@ -447,6 +503,10 @@ begin
   begin
     AStream.SetDeclaredLength(Verdict.DeclaredLength);
     AStream.MarkRequestHead;
+    // an RFC 8441 WebSocket stream stays open past the maximum age, so the
+    // age sweep needs its count: the :protocol pseudo-header marks it
+    if IsWebSocketHead(AHeaders) then
+      MarkWebSocket(AStream.StreamId);
   end;
   Result := True;
 end;
@@ -735,6 +795,112 @@ begin
       end;
     end;
   end;
+end;
+
+function TServerConnectionCore.StartRetire(const ADetail: string): Boolean;
+var
+  Event: TServerEvent;
+begin
+  // the cap path calls this under the read lock; Retire calls it with the
+  // lock taken here, so the mark is set once whatever the caller
+  LockConn;
+  try
+    Result := not FRetired;
+    if not Result then
+      Exit;
+    FRetired := True;
+    FClosing := True;
+    if FEvents <> nil then
+      FEvents.ConnectionClosing;
+    if Assigned(FOnRetired) then
+    begin
+      Event.Kind := seConnectionRetired;
+      Event.StreamId := 0;
+      Event.LimitKind := lkReset;
+      Event.ErrorCode := ecNoError;
+      Event.Detail := ADetail;
+      Event.WsCode := 0;
+      FOnRetired(Event);
+    end;
+  finally
+    UnlockConn;
+  end;
+end;
+
+procedure TServerConnectionCore.Retire(const AReason: string);
+begin
+  // GracefulGoAway takes the connection lock itself, so the retire is
+  // marked first: a second call finds the mark and sends nothing
+  if not StartRetire(AReason) then
+    Exit;
+  // RFC 9113 section 6.8: the warning names 2^31-1, and the final GOAWAY
+  // names the real last stream after the drain time; no PING runs between
+  GracefulGoAway(cGoAwayWarningId, ecNoError);
+end;
+
+procedure TServerConnectionCore.SendFinalGoAway;
+begin
+  // the age sweep calls this after the drain time with the real last id.
+  // SendGoAway skips a second GOAWAY, so the final frame is queued here
+  LockConn;
+  try
+    if (not FRetired) or FFinalGoAwaySent then
+      Exit;
+    FFinalGoAwaySent := True;
+    QueueFrame(BuildGoAwayFrame(FLastStreamId, ecNoError, nil));
+    FGoAwaySent := True;
+    FClosing := True;
+  finally
+    UnlockConn;
+  end;
+end;
+
+function TServerConnectionCore.IsWebSocketHead(
+  const AHeaders: THeaderBlock): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AHeaders) do
+    if (AHeaders[I].Name = ':protocol') and
+       SameText(AHeaders[I].Value, 'websocket') then
+      Exit(True);
+  Result := False;
+end;
+
+procedure TServerConnectionCore.MarkWebSocket(const AStreamId: LongWord);
+var
+  I: Integer;
+begin
+  for I := 0 to High(FWsIds) do
+    if FWsIds[I] = AStreamId then
+      Exit;
+  SetLength(FWsIds, Length(FWsIds) + 1);
+  FWsIds[High(FWsIds)] := AStreamId;
+end;
+
+function TServerConnectionCore.GetOpenWebSocketStreams: Integer;
+begin
+  LockConn;
+  try
+    Result := Length(FWsIds);
+  finally
+    UnlockConn;
+  end;
+end;
+
+procedure TServerConnectionCore.CloseStream(const AStream: TServerStream);
+var
+  I: Integer;
+begin
+  if AStream <> nil then
+    for I := High(FWsIds) downto 0 do
+      if FWsIds[I] = AStream.StreamId then
+      begin
+        FWsIds[I] := FWsIds[High(FWsIds)];
+        SetLength(FWsIds, Length(FWsIds) - 1);
+        Break;
+      end;
+  inherited CloseStream(AStream);
 end;
 
 end.

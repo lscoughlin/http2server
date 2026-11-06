@@ -18,6 +18,7 @@ related_docs:
   - seam.md
   - sse.md
   - configuration.md
+  - public-api.md
 invariants:
   - The handler contract is the same on both protocols.
   - One connection serves one request at a time, and responses leave in request order.
@@ -157,6 +158,20 @@ with `Connection: close`.
 The parser answers 400 to `Transfer-Encoding:chunked` and `Content-Length:5` written
 with no space after the colon. The fields are valid, but the cross-check of the
 framing refuses them. The refusal is safe, since no request is smuggled.
+
+## The request cap
+
+`TH1CoreOptions.MaxRequests` (`src/Http2Server.Http1.Core.pas:60`) bounds the
+requests of one connection. `BuildH1CoreOptions` sets it from
+`MaxStreamsPerConnection` (`src/Http2Server.Async.Options.pas:231`), so the
+same factory setting serves both protocols. A value of 0 turns the cap off.
+
+The core counts every admitted request head
+(`src/Http2Server.Http1.Core.pas:538`). The exchange that reaches the cap is
+served, and its response carries `Connection: close`, as in a drain. The retire
+fires once for the connection, and the server raises `seConnectionRetired` with
+the stream-cap detail (see [public-api](public-api.md)). A refused head never
+reaches the counter, so a defective request does not retire the connection.
 
 ## The staged close
 

@@ -139,6 +139,27 @@ control bucket on each limited control frame. A `False` answer starts the
 close sequence. The observer receives the bucket trip, and then the
 `GOAWAY` sent event.
 
+## Three different limits
+
+Three limits bound different parts of a connection. The concurrent stream
+limit bounds the streams that are open at one time. The stream cap
+(`MaxStreamsPerConnection`) counts every accepted stream over the life of the
+connection and retires it at the cap. The token buckets bound the rate of
+control actions and close the connection with `ENHANCE_YOUR_CALM` when a
+bucket trips.
+
+The three answers differ as well. Past the concurrent limit, a new stream is
+refused with `REFUSED_STREAM` and the connection stays open. At the stream
+cap, the server sends GOAWAY with `NO_ERROR` (RFC 9113 section 6.8) and
+refuses later streams the same way. A refused stream never ran, so a client
+retries it on a new connection (RFC 9113 sections 5.1.2 and 8.7). On
+HTTP/1.1 the cap answers `Connection: close` instead (see
+[connection](connection.md) and [http1](http1.md)).
+
+RFC 9113 is the source for the GOAWAY and refusal rules. It was checked on
+2026-11-06 at https://www.rfc-editor.org/info/rfc9113. The plain-text copy is
+doc/references/rfc9113.txt.
+
 ## WebSocket buckets
 
 A session has two token buckets of the class in this unit. The control bucket
@@ -173,26 +194,26 @@ streaming pool and uses no token bucket.
 ## The default limits
 
 `THttp2ServerFactory.Create` sets the default of every bucket
-(`src/Http2Server.Config.pas:457`). The reset bucket holds 1000 tokens, with
+(`src/Http2Server.Config.pas:541`). The reset bucket holds 1000 tokens, with
 a refill of 100 tokens a second, a cost of one token before dispatch and
-five tokens after it (`src/Http2Server.Config.pas:492-496`).
+five tokens after it (`src/Http2Server.Config.pas:576-580`).
 
 The `SETTINGS`, `empty DATA` and `CONTINUATION` buckets each hold 100 tokens,
-with a refill of 10 tokens a second (`src/Http2Server.Config.pas:500-505` and `515-517`). The
-`PING` bucket holds the same values (`src/Http2Server.Config.pas:497-499`). Each
+with a refill of 10 tokens a second (`src/Http2Server.Config.pas:584-589` and `599-601`). The
+`PING` bucket holds the same values (`src/Http2Server.Config.pas:581-583`). Each
 of these kinds is a flood signal with no legitimate high rate, so a small
 bucket is the correct default.
 
 The `WINDOW_UPDATE` bucket holds 10000 tokens, with a refill of 4000 tokens
-a second (`src/Http2Server.Config.pas:512-514`). The capacity admits a whole
+a second (`src/Http2Server.Config.pas:596-598`). The capacity admits a whole
 burst of a few megabytes, and the refill rate sits above the measured
 rate of 2450 frames a second with headroom. A small bucket of 100 tokens
 closed a healthy connection on a body of less than two megabytes: 107
 control frames arrived before the body ended. The measurement is in
 [validation](../verification/validation.md).
 
-The queue depth of 64 (`src/Http2Server.Config.pas:431`) and the IO thread
-count of 4 (`src/Http2Server.Config.pas:471`) come from the same seam
+The queue depth of 64 (`src/Http2Server.Config.pas:515`) and the IO thread
+count of 4 (`src/Http2Server.Config.pas:555`) come from the same seam
 measurement. The listener, stream and timeout values are the chosen protocol
 and operational bounds: RFC 9113 section 6.5.2 sets 100 concurrent streams as
 the customary value, 16384 is the frame size that RFC 9113 section 4.2

@@ -37,9 +37,9 @@ the uses clause and sees the whole public surface.
 `THttp2ServerFactory` (`src/Http2Server.Config.pas`) holds every setting of a
 server. The record is immutable: each `WithX` method answers a copy with one
 field changed, so a stored factory is safe to reuse and to fork. The defaults
-appear once, in `Create` (`src/Http2Server.Config.pas:457-524`).
+appear once, in `Create` (`src/Http2Server.Config.pas:541-610`).
 
-`Validate` (`src/Http2Server.Config.pas:786`) collects every problem into one
+`Validate` (`src/Http2Server.Config.pas:885`) collects every problem into one
 list, so a caller sees all problems in one call.
 
 ## Build
@@ -160,11 +160,11 @@ rules. The facade `Http2Server` re-exports `ISseStream`, `TSseEvent`,
 
 ## The observation events
 
-`IHttp2ServerObserver` (`src/Http2Server.Observer.pas:94-97`) holds one
+`IHttp2ServerObserver` (`src/Http2Server.Observer.pas:107-110`) holds one
 method, `OnEvent(const AEvent: TServerEvent)`. The server raises one event per
 state change that a caller acts on. `TServerEventKind`
-(`src/Http2Server.Observer.pas:34-68`) names eighteen kinds. The table lists the
-thirteen kinds of the HTTP/2 core. The five WebSocket kinds are named in the
+(`src/Http2Server.Observer.pas:36-77`) names twenty kinds. The table lists the
+fourteen kinds of the HTTP/2 core. The five WebSocket kinds are named in the
 section "WebSocket":
 
 | Kind | Raised when |
@@ -182,13 +182,21 @@ section "WebSocket":
 | `seHandlerException` | a handler raised |
 | `seStreamDetached` | a handler detached its stream into a channel |
 | `seStreamDetachRefused` | a detach was refused because the limit of detached streams was reached |
+| `seConnectionRetired` | a retire started: the connection stops taking new requests |
+
+`seConnectionRetired` is raised once per connection, on the thread that starts
+the retire. `Detail` names the reason: `maximum connection age` or `maximum
+streams per connection` (`RetireDetailMaxAge` and `RetireDetailMaxStreams` in
+`src/Http2Server.Observer.pas:80-83`). `StreamId` is 0. An HTTP/2 retire is
+followed by `seGoAwaySent`, because a GOAWAY frame goes out. The observer never
+parses `Detail`, as the record contract states.
 
 `OnEvent` runs on the thread that raised the event. That thread is an IO
 thread, a handler-pool thread, or the caller of `Start` and `Stop`. A slow
 `OnEvent` slows that thread, and on an IO thread it can delay the wake-up of a
 connection. An observer that blocks belongs on its own queue.
 
-`TNullServerObserver` (`src/Http2Server.Observer.pas:100`) discards every event.
+`TNullServerObserver` (`src/Http2Server.Observer.pas:113`) discards every event.
 A server with no observer carries no observation cost.
 
 The connection events come from `THttp2ConnectionEvents`
@@ -197,7 +205,7 @@ The connection events come from `THttp2ConnectionEvents`
 
 ## The statistics
 
-`TServerStats` (`src/Http2Server.Observer.pas:109`) holds five gauges and four
+`TServerStats` (`src/Http2Server.Observer.pas:122`) holds five gauges and four
 totals for the HTTP/2 core. It also holds the WebSocket counters `WsSessions`
 (a gauge), `WsMessagesIn`, `WsMessagesOut`, `WsBytesIn`, `WsBytesOut`,
 `WsProtocolErrors` and `WsPingTimeouts` (totals).

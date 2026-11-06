@@ -20,6 +20,7 @@ related_docs:
   - doc/design/seam.md
   - doc/design/admission.md
   - doc/design/io-pool.md
+  - doc/design/lifecycle.md
 invariants:
   - The core holds no socket. It consumes bytes and it produces bytes.
   - One connection core owns one HPACK encoder and one HPACK decoder.
@@ -85,7 +86,7 @@ The core holds each rule in one place.
 | `RST_STREAM` | The payload is four bytes or the frame is `FRAME_SIZE_ERROR`. A frame on an idle stream is `PROTOCOL_ERROR`. | `ProcessRstStream` (`:519`) |
 | `SETTINGS` | An acknowledged frame with a payload is `FRAME_SIZE_ERROR`. A frame is a delta onto the settings of the peer. | `ProcessSettings` |
 | `PING` | Stream zero is required. The payload is eight bytes. An acknowledged frame adds no frame. | `ProcessPing` (`:551`) |
-| `GOAWAY` | Stream zero is required. The open streams finish, the core answers with its own GOAWAY and takes no new stream. | `ProcessGoAway` |
+| `GOAWAY` | Stream zero is required. The open streams finish, the core answers with its own GOAWAY and takes no new stream. When the count of accepted streams reaches `MaxStreams`, the core retires the connection: it serves that stream and sends GOAWAY with `NO_ERROR` and the last accepted stream id; later header blocks take the refusal path (`src/Http2Server.Connection.pas:342-349`). | `ProcessGoAway` |
 | `WINDOW_UPDATE` | A frame on an idle stream is `PROTOCOL_ERROR`. A frame on a closed stream carries no action. A stream window above the maximum is a stream error of type `FLOW_CONTROL_ERROR`. | `ProcessWindowUpdate` (`:605`) |
 | `PUSH_PROMISE` | A server never receives this frame. It is `PROTOCOL_ERROR` (RFC 9113 section 8.2). | `ProcessFrame` |
 
@@ -157,11 +158,19 @@ connection, because a frame with a hole cannot continue.
 **The block of a refused stream.** A header block always runs through the HPACK
 decoder, because the dynamic table of the peer already holds its fields
 (RFC 9113 section 4.3). A stream above the concurrent-stream limit, a stream
-after a GOAWAY and a stream that depends on itself get an `RST_STREAM`, and the
+past the stream cap, a stream after a GOAWAY and a stream that depends on
+itself get an `RST_STREAM`, and the
 core then decodes the block and drops the fields. The stream id counts as used
 for the ordering rule of RFC 9113 section 5.1.1 from the HEADERS frame on, so a
 refused id cannot be opened again. A stream that depends on itself is closed and
-frees its slot.
+frees its slot. The cap is `MaxStreams` of `TConnectionCoreOptions`
+(`src/Http2Server.Connection.Core.pas:60`), set from `MaxStreamsPerConnection`;
+0 turns it off. The counter counts every accepted stream over the life of the
+connection, and a refused stream never reaches it. The cap retire sends one
+GOAWAY with the real last stream id, while the age retire warns first (see
+[lifecycle](lifecycle.md)). RFC 9113 is the source for the refusal rule. It was
+checked on 2026-11-06 at https://www.rfc-editor.org/info/rfc9113. The plain-text
+copy is doc/references/rfc9113.txt.
 
 **The reset set.** The core remembers the last 256 stream ids for which it sent an
 `RST_STREAM` (`TStreamIdSet`). A `DATA` frame for such an id was in flight before

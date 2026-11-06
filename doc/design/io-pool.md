@@ -22,6 +22,7 @@ related_docs:
   - doc/design/connection.md
   - doc/design/output.md
   - doc/design/configuration.md
+  - doc/design/lifecycle.md
 invariants:
   - The IO pool sweeps connections under the per-connection mORMot lock and never runs a handler.
   - A wake-up reaches the owning IO pool through an edge-triggered flag and one retry after a failed lock.
@@ -201,6 +202,22 @@ first header block did not complete within the factory `HeaderTimeoutMs`, and
 it closes an idle connection with no open stream and no queued output. The
 close is `TAsyncConnections.ConnectionRemove` (`mormot.net.async.pas:3699`),
 because a write to an idle connection would itself need the write lock.
+
+## The age sweep
+
+mORMot2 calls `OnLastOperationIdle` only for a connection that did no read
+and no write in the last second. An active connection gets its activity flag
+cleared instead and no call (`mormot.net.async.pas:656` declares the virtual
+`IdleEverySecond`, and the walk at `mormot.net.async.pas:3835-3915` skips the
+flagged connections). A busy connection therefore never reaches the idle rule.
+
+The server overrides `IdleEverySecond`
+(`THttp2AsyncServer.IdleEverySecond` in `src/Http2Server.Async.pas:832`). The
+override calls the inherited walk first and returns at once when
+`MaxConnectionAgeMs` is 0, so a server without the limit pays no sweep cost.
+Otherwise it walks every live connection once per second and runs the age
+decision for its mode: retire, drain, finalise or force-close (see
+[lifecycle](lifecycle.md)).
 
 ## The poller of each platform
 

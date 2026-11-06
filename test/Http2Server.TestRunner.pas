@@ -33,6 +33,8 @@ uses
   Http2Server.Config.Test,
   Http2Server.Connection.Test,
   Http2Server.Connection.Flow.Test,
+  Http2Server.Connection.Lifetime.Test,
+  Http2Server.Async.Age.Test,
   Http2Server.Errors.Test,
   Http2Server.Frames.Test,
   Http2Server.Hpack.Test,

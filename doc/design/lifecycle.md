@@ -15,6 +15,7 @@ related_docs:
   - doc/design/io-pool.md
   - doc/design/admission.md
   - doc/design/configuration.md
+  - doc/design/websocket.md
 invariants:
   - Start binds the port and returns; it never blocks for a request.
   - Stop is idempotent. A second call does nothing.
@@ -22,6 +23,7 @@ invariants:
   - The graceful wait is bounded by the graceful stop timeout.
   - A server that stopped is built again, not started again.
   - The handler pool stops before the IO pools, so no handler touches a connection that the IO side already released.
+  - A retired connection closes once its streams drain or when the retire grace passes.
 ---
 # The server lifecycle
 
@@ -71,6 +73,65 @@ second.
 
 `THttp2AsyncConnection.OnLastOperationIdle`
 applies both rules and asks the IO side to remove the connection.
+
+## The connection lifetime limits
+
+Two factory settings bound the life of one connection beyond the idle and
+header rules: `MaxConnectionAgeMs` and `MaxStreamsPerConnection` (see
+[configuration](configuration.md)). Both default to 0, which turns the limit
+off.
+
+A retire ends new work on a connection while the work in flight finishes.
+One shared retire path serves both settings. The server raises
+`seConnectionRetired` once per connection when the retire starts (see
+[public-api](public-api.md)).
+
+For HTTP/2 the retire sends GOAWAY with `NO_ERROR` twice. The first frame is
+a warning with the last stream identifier 2^31-1, which RFC 9113 section 6.8
+recommends for a graceful shutdown. The second frame carries the real last
+processed stream identifier after the drain time. The connection closes when
+no stream is open and no output is queued. The stream that reaches the cap is
+served, and later header blocks are refused with `REFUSED_STREAM`. Such a
+refused stream never ran, so a client retries it on a new connection (RFC
+9113 sections 5.1.2 and 8.7). When the retire grace (`GracefulStopTimeoutMs`)
+has passed and the connection is still open, the server closes it at once. A
+grace of 0 closes at once, as `Stop` with a zero wait does.
+
+For HTTP/1.1 the retire drains the core (`BeginDrain`). The current response
+carries `Connection: close`, and an idle connection closes once its output
+has left. The exchange that reaches the request cap is served with
+`Connection: close` in the same way. A connection whose protocol is still
+undecided closes at once, because no request has started on it.
+
+The age check runs once per second from the `IdleEverySecond` override
+(`src/Http2Server.Async.pas:832`), which walks every connection. The walk is
+needed because the idle rule alone never sees a busy connection (see
+[io-pool](io-pool.md)). The sweep returns at once when the maximum age is 0.
+The age starts at accept, and the time source is the same tick count that the
+header deadline uses.
+
+The effective age of one connection is the setting minus a random part of up
+to 10 percent, drawn once per connection at accept (`AgeExpired` in
+`src/Http2Server.Async.Options.pas:63`, with the decision values in
+`TAgeAction` at `src/Http2Server.Async.Options.pas:80`). The effective age is
+never longer than the setting, so the setting stays a hard upper bound.
+
+An upgraded connection is exempt from the maximum age. The sweep never
+retires an HTTP/1.1 connection that carried a WebSocket upgrade, and it
+skips an HTTP/2 connection while a WebSocket stream is open on it. The forced
+close never cuts such a stream. When the last WebSocket stream ends, the next
+sweep checks the age again. The stream cap still counts a WebSocket stream as
+one stream (see [websocket](websocket.md)).
+
+The stream cap differs from the concurrent stream limit. The concurrent limit
+bounds the streams that are open at one time. The cap counts every accepted
+stream over the life of the connection (HTTP/2) or every admitted request
+head (HTTP/1.1). A refused stream never reaches either counter (see
+[limits](limits.md)).
+
+RFC 9113 is the source for the GOAWAY and refusal rules. It was checked on
+2026-11-06 at https://www.rfc-editor.org/info/rfc9113. The plain-text copy is
+doc/references/rfc9113.txt.
 
 ## Stop
 

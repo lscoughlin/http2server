@@ -56,6 +56,8 @@ type
     /// the most octets that the output queue of one connection may hold; a
     /// peer that does not read ends the connection above it. Zero sets no cap
     MaxOutputBytes: LongWord;
+    /// how many requests one connection serves before it retires; 0 is off
+    MaxStreams: LongWord;
   end;
 
   /// the core raises one of these events for every state change the server acts on
@@ -193,7 +195,7 @@ type
     /// charge the reset bucket for an RST_STREAM that a frame of the peer made
     // the server send, so a peer cannot ask for resets without a bound
     procedure ChargePeerReset;
-    procedure CloseStream(const AStream: TServerStream);
+    procedure CloseStream(const AStream: TServerStream); virtual;
     procedure ReapClosedStreams;
     /// queue an RST_STREAM for a stream that the local side refused
     // - the handler pool calls this from a worker thread, and the frame

@@ -30,7 +30,8 @@ uses
   SysUtils, Classes, SyncObjs, Generics.Collections,
   Http2Server.Hpack, Http2Server.Output, Http2Server.HandlerJob, Http2Server.Duplex,
   Http2Server.Http1.Limits, Http2Server.Http1.Guard, Http2Server.Http1.Parser,
-  Http2Server.Http1.Host, Http2Server.Http1.ResponseHead, Http2Server.Http1.Exchange;
+  Http2Server.Http1.Host, Http2Server.Http1.ResponseHead, Http2Server.Http1.Exchange,
+  Http2Server.Errors, Http2Server.Limits, Http2Server.Observer;
 
 const
   /// the most octets that the core keeps while an upgrade is undecided
@@ -47,9 +48,17 @@ type
     procedure Admit(const AJob: IHandlerJob);
   end;
 
+  /// the retire notice of one HTTP/1.1 connection: the core calls it once
+  /// with a seConnectionRetired event when the request cap retires the
+  /// connection
+  TH1RetireNotify = procedure(const AEvent: TServerEvent) of object;
+
   TH1CoreOptions = record
     Limits: THttp11Limits;
     Scheme: string;
+    /// the number of requests one connection serves before it closes with
+    /// `connection: close`; 0 turns the limit off
+    MaxRequests: Integer;
     /// the backlog of unsent octets at which a handler write waits
     OutboundLimit: Int64;
     /// a handler write that sees no progress for this time aborts the connection;
@@ -99,6 +108,13 @@ type
     /// a defect came behind the request in progress: it finishes, then the
     /// connection closes
     FStopAfter: Boolean;
+    /// the admitted request heads of this connection, for the request cap
+    FRequests: LongWord;
+    /// the request cap retired the connection, so the retire fires once
+    FRetired: Boolean;
+    /// fired once with the stream-cap detail when the request cap retires
+    /// the connection
+    FOnRetired: TH1RetireNotify;
     procedure Enqueue(const AData: TBytes);
     procedure Advance;
     procedure RefuseDirect(const AStatus: Integer);
@@ -145,6 +161,9 @@ type
     procedure ReleaseHost;
     /// the connection was upgraded and carries raw bytes
     function Upgraded: Boolean;
+    /// fired once with a seConnectionRetired event when the request cap
+    /// retires the connection
+    property OnRetired: TH1RetireNotify read FOnRetired write FOnRetired;
 
     // TH1Host: the exchange calls these through the link
     procedure EnqueueOutput(const AData: TBytes); override;
@@ -513,10 +532,12 @@ var
   Options: TH1ExchangeOptions;
   Exchange: TH1Exchange;
   Ref: IInterface;
+  Event: TServerEvent;
 begin
   // the lock of the core is held by the caller
   FHeadStartMs := 0;
   Inc(FOrdinal, 2);
+  Inc(FRequests);
   Options.Scheme := FOptions.Scheme;
   Options.OutboundLimit := FOptions.OutboundLimit;
   Options.BodyDeadlineMs := FOptions.Limits.BodyDeadlineMs;
@@ -531,6 +552,27 @@ begin
   FKeepAfter := AHead.KeepAlive and not FDraining;
   if FDraining then
     Exchange.RequestClose;
+  // the exchange that reaches the request cap answers with
+  // `connection: close`, like a drain; a refused head never reaches this point
+  if (FOptions.MaxRequests > 0) and (FRequests >= LongWord(FOptions.MaxRequests)) then
+  begin
+    FKeepAfter := False;
+    Exchange.RequestClose;
+    if not FRetired then
+    begin
+      FRetired := True;
+      if Assigned(FOnRetired) then
+      begin
+        Event.Kind := seConnectionRetired;
+        Event.StreamId := 0;
+        Event.LimitKind := lkReset;
+        Event.ErrorCode := ecNoError;
+        Event.Detail := RetireDetailMaxStreams;
+        Event.WsCode := 0;
+        FOnRetired(Event);
+      end;
+    end;
+  end;
   // the request enters the same queue as an HTTP/2 stream. A refusal comes back
   // as a call of Refuse on the job, which ends the exchange
   FEvents.Admit(Exchange);

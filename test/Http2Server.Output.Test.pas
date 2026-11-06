@@ -268,6 +268,7 @@ begin
   Result.StreamUpdateThreshold := 32768;
   Result.ConnectProtocol := False;
   Result.MaxOutputBytes := 0;
+  Result.MaxStreams := 0;
 end;
 
 function TOutputDrainTest.BuildLimits: TConnectionLimits;

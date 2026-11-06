@@ -264,6 +264,7 @@ begin
   Result.Core.StreamUpdateThreshold := cDefaultWindow div 2;
   Result.Core.ConnectProtocol := False;
   Result.Core.MaxOutputBytes := 0;
+  Result.Core.MaxStreams := 0;
   Result.BucketCapacity := 100000;
   Result.ControlCapacity := 100000;
 end;

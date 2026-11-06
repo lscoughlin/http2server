@@ -24,7 +24,7 @@ uses
   SyncObjs, Http2Server, Http2Server.Duplex, Http2Server.Http1.SocketChannel,
   Http2Server.Http1.RawClient, Http2Server.Http1.Limits, Http2Server.Http1.Parser,
   Http2Server.Http1.TestKit, Http2Server.Http1.Core, Http2Server.Http1.Host,
-  Http2Server.HandlerJob;
+  Http2Server.HandlerJob, Http2Server.Observer, Http2Server.Seam;
 
 type
   /// a sink that records the octets in the order of delivery
@@ -49,6 +49,8 @@ type
     Octets: Integer;
     /// the pool refuses each job at once
     Refusing: Boolean;
+    /// each job answers 200 at once, so the next pipelined head parses
+    Complete: Boolean;
     Depth, MaxDepth: Integer;
     procedure Admit(const AJob: IHandlerJob);
     procedure Inbound(const AData; const ACount: Integer);
@@ -71,7 +73,9 @@ type
     FHandler: TTestHandler;
     FHandlerRef: IHttp2Handler;
     FServer: IHttp2Server;
+    FRetired: TArray<TServerEvent>;
     procedure StartServer(const AFactory: THttp2ServerFactory);
+    procedure RecordRetire(const AEvent: TServerEvent);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -84,6 +88,8 @@ type
     procedure TestHeaderScanCostGrowsLinearly;
     procedure TestOctetsDuringARefusedUpgradeReturnToTheParser;
     procedure TestRefusedPipelineDoesNotNestTheCalls;
+    procedure TestBeginDrainSkipsAnUpgradedConnection;
+    procedure TestStreamCapRetireRaisesTheEvent;
   end;
 
 implementation
@@ -363,6 +369,8 @@ begin
     MaxDepth := Depth;
   if Refusing then
     AJob.Refuse(jrQueueFull);
+  if Complete then
+    (AJob as IServerResponse).SendHeaders(200, nil, True);
   Dec(Depth);
 end;
 
@@ -436,6 +444,93 @@ begin
     // H1-10: each refused request used to run the next one inside its own call
     AssertTrue('H1-10: the admit calls do not nest, depth ' + IntToStr(Probe.MaxDepth),
       Probe.MaxDepth <= 2);
+  finally
+    Core.ReleaseHost;
+    Core.Free;
+  end;
+end;
+
+procedure THttp1HardeningTest.TestBeginDrainSkipsAnUpgradedConnection;
+var
+  Options: TH1CoreOptions;
+  Probe: TCoreProbe;
+  EventsRef: IH1Events;
+  InboundRef: IH1Inbound;
+  Core, Idle: TH1Core;
+  Head: TBytes;
+begin
+  FillChar(Options, SizeOf(Options), 0);
+  Options.Limits := THttp11Limits.Create;
+  Options.Scheme := 'http';
+  Probe := TCoreProbe.Create;
+  EventsRef := Probe;
+  InboundRef := Probe;
+  Core := TH1Core.Create(Options, EventsRef);
+  try
+    Head := TEncoding.ASCII.GetBytes('GET / HTTP/1.1'#13#10'Host: x'#13#10#13#10);
+    Core.Feed(Head);
+    AssertEquals('the request is admitted', 1, Probe.Jobs);
+    Core.UpgradeBegin(InboundRef);
+    Core.UpgradeDone;
+    AssertTrue('the connection is upgraded', Core.Upgraded);
+    Core.BeginDrain;
+    AssertFalse('a drain never closes an upgraded connection', Core.WantsClose);
+  finally
+    Core.ReleaseHost;
+    Core.Free;
+  end;
+  Idle := TH1Core.Create(Options, EventsRef);
+  try
+    Idle.BeginDrain;
+    AssertTrue('a drain still closes an idle plain connection', Idle.WantsClose);
+  finally
+    Idle.ReleaseHost;
+    Idle.Free;
+  end;
+end;
+
+procedure THttp1HardeningTest.RecordRetire(const AEvent: TServerEvent);
+begin
+  SetLength(FRetired, Length(FRetired) + 1);
+  FRetired[High(FRetired)] := AEvent;
+end;
+
+procedure THttp1HardeningTest.TestStreamCapRetireRaisesTheEvent;
+var
+  Options: TH1CoreOptions;
+  Probe: TCoreProbe;
+  EventsRef: IH1Events;
+  Core: TH1Core;
+  Head: TBytes;
+begin
+  SetLength(FRetired, 0);
+  FillChar(Options, SizeOf(Options), 0);
+  Options.Limits := THttp11Limits.Create;
+  Options.Scheme := 'http';
+  Options.MaxRequests := 2;
+  Options.OutboundLimit := 1048576;
+  Probe := TCoreProbe.Create;
+  // the probe answers every job at once, so each exchange ends with
+  // keep-alive and the next head reaches HeadComplete
+  Probe.Complete := True;
+  EventsRef := Probe;
+  Core := TH1Core.Create(Options, EventsRef);
+  try
+    Core.OnRetired := RecordRetire;
+    Head := TEncoding.ASCII.GetBytes('GET / HTTP/1.1'#13#10'Host: x'#13#10#13#10);
+    Core.Feed(Head);
+    AssertEquals('the first head is admitted', 1, Probe.Jobs);
+    AssertEquals('no retire before the cap', 0, Length(FRetired));
+    Core.Feed(Head);
+    AssertEquals('the second head is admitted', 2, Probe.Jobs);
+    AssertEquals('one retire fired', 1, Length(FRetired));
+    AssertEquals('the kind is seConnectionRetired', Ord(seConnectionRetired),
+      Ord(FRetired[0].Kind));
+    AssertEquals('the detail names the stream cap', RetireDetailMaxStreams,
+      FRetired[0].Detail);
+    AssertEquals('the retire names stream zero', 0, FRetired[0].StreamId);
+    Core.Feed(Head);
+    AssertEquals('a third head fires nothing more', 1, Length(FRetired));
   finally
     Core.ReleaseHost;
     Core.Free;

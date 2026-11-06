@@ -72,8 +72,17 @@ type
     /// a WebSocket token bucket tripped
     seWsBucketTripped,
     /// a TLS handshake failed while client certificates were on
-    seTlsHandshakeFailed);
+    seTlsHandshakeFailed,
+    /// a retire started: the connection stops taking new requests
+    seConnectionRetired);
 
+const
+  /// Detail of seConnectionRetired when the maximum age starts a retire
+  RetireDetailMaxAge = 'maximum connection age';
+  /// Detail of seConnectionRetired when the stream cap starts a retire
+  RetireDetailMaxStreams = 'maximum streams per connection';
+
+type
   /// one event of the server
   TServerEvent = record
     /// what changed

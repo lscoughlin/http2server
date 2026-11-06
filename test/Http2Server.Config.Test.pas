@@ -61,6 +61,7 @@ type
     procedure TestDefaultStreams;
     procedure TestDefaultBuckets;
     procedure TestDefaultTimeouts;
+    procedure TestConnectionLifetimeSettings;
     procedure TestDefaultWiring;
     procedure TestDefaultTls;
     procedure TestWithDoesNotChangeOriginal;
@@ -256,6 +257,25 @@ begin
   AssertEquals('the default header timeout', 30000, F.HeaderTimeoutMs);
   AssertEquals('the default graceful stop timeout', 10000,
     F.GracefulStopTimeoutMs);
+end;
+
+procedure TFactoryTest.TestConnectionLifetimeSettings;
+var
+  Base, Forked: THttp2ServerFactory;
+begin
+  Base := THttp2ServerFactory.Create;
+  AssertEquals('the default maximum connection age', 0, Base.MaxConnectionAgeMs);
+  AssertEquals('the default maximum streams per connection', 0,
+    Base.MaxStreamsPerConnection);
+
+  Forked := Base.WithMaxConnectionAge(60000).WithMaxStreamsPerConnection(100);
+  AssertEquals('the original maximum age is unchanged', 0,
+    Base.MaxConnectionAgeMs);
+  AssertEquals('the original maximum stream count is unchanged', 0,
+    Base.MaxStreamsPerConnection);
+  AssertEquals('the forked maximum age', 60000, Forked.MaxConnectionAgeMs);
+  AssertEquals('the forked maximum stream count', 100,
+    Forked.MaxStreamsPerConnection);
 end;
 
 procedure TFactoryTest.TestDefaultWiring;

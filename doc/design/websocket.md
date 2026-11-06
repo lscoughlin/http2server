@@ -19,6 +19,8 @@ related_docs:
   - http1.md
   - sse.md
   - configuration.md
+  - lifecycle.md
+  - limits.md
 invariants:
   - A session runs on any IDuplexChannel and does not know the protocol under it.
   - The handler is called on a thread of the streaming pool, one call at a time for a session, in the order of the events, and never on an IO thread.
@@ -279,7 +281,9 @@ session. No `101` goes out before `Init` accepts.
   case-sensitive tokens (RFC 7936); an empty server list passes every offer on.
 - **The idle time.** An upgraded connection is not closed by the idle timeout of
   HTTP/1.1. The heartbeat of the session keeps it, and a session with the ping
-  interval 0 holds its connection until a peer or the server ends it.
+  interval 0 holds its connection until a peer or the server ends it. The
+maximum connection age never closes such a connection: the age sweep skips an
+upgraded connection (see [lifecycle](lifecycle.md)).
 - **The close.** The server closes the TCP connection after the closing handshake
   (RFC 6455 section 7.1.1) and does not wait for the client to close first. The write
   side closes first, then the connection, as for any close of HTTP/1.1.
@@ -338,6 +342,14 @@ The `DATA` frames of a WebSocket stream use the usual windows of the stream and 
 connection. The session returns credit to the stream when the parser takes the octets,
 and it holds the credit back while its queue is full. An outbound message waits in the
 channel queue, and `Send` answers `srFull` when the queue is full.
+
+### The maximum age
+
+The maximum connection age never closes a WebSocket. The age sweep skips an
+HTTP/2 connection while a WebSocket stream is open on it, and the forced close
+never cuts such a stream. When the last WebSocket stream ends, the next sweep
+checks the age again (see [lifecycle](lifecycle.md)). A WebSocket stream counts
+as one stream toward the stream cap (see [limits](limits.md)).
 
 ### The client certificate
 
