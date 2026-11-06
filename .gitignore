@@ -9,8 +9,11 @@ bin/
 *.a
 spike/*.o
 
-# Vendored third-party checkouts (kept locally, never committed)
+# Vendored third-party checkouts (kept locally, never committed; the
+# second line also covers a symlink file of the same name, which the
+# trailing-slash form does not match)
 third_party/
+/third_party
 
 # Local-only ast-grep MCP wrapper (run from .mcp.json, never committed)
 tools/ast-grep-mcp/
