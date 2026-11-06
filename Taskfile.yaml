@@ -20,6 +20,9 @@
 version: '3'
 
 vars:
+  TSPARSE_REPO: 'third_party/tree-sitter-pascal'
+  TSPARSE_REV: '042119eca2e18a60e56317fb06ee3ba5c32cb447'
+  TSPARSE_LIB: 'third_party/tree-sitter-pascal/libtree-sitter-pascal.dylib'
   FPC:
     sh: echo "${FPC:-fpc}"
   FPC_VERSION:
@@ -80,6 +83,34 @@ tasks:
         else
           echo "$repo already at $rev"
         fi
+
+  vendor:tree-sitter-pascal:
+    desc: Clone and build the revision-pinned tree-sitter-pascal parser for ast-grep (idempotent)
+    cmds:
+      - |
+        set -e
+        repo="{{.TSPARSE_REPO}}"
+        rev="{{.TSPARSE_REV}}"
+        lib="{{.TSPARSE_LIB}}"
+        if [ ! -d "$repo/.git" ]; then
+          echo "cloning tree-sitter-pascal -> $repo"
+          git clone https://github.com/Isopod/tree-sitter-pascal.git "$repo"
+        fi
+        if [ "$(git -C "$repo" rev-parse HEAD)" != "$rev" ]; then
+          echo "pinning $repo at $rev"
+          git -C "$repo" fetch --all --tags 2>/dev/null || true
+          git -C "$repo" checkout "$rev"
+        else
+          echo "$repo already at $rev"
+        fi
+        if [ ! -f "$lib" ] || [ "$repo/src/parser.c" -nt "$lib" ]; then
+          echo "building $lib"
+          cc -O2 -fPIC -shared -o "$lib" "$repo/src/parser.c" -I"$repo/src"
+        else
+          echo "$lib is up to date"
+        fi
+        echo "the library keeps the .dylib name on every OS; dlopen reads the"
+        echo "file format, not the extension, so sgconfig.yml needs no change"
 
   setup:limits:
     desc: Report the open-file limits for the 10,000-connection test

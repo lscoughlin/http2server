@@ -5,8 +5,8 @@
       "args": [
         "run",
         "--project",
-        ".vendor/ast-grep-mcp",
-        ".vendor/ast-grep-mcp/main.py",
+        "tools/ast-grep-mcp",
+        "tools/ast-grep-mcp/main.py",
         "--config",
         "sgconfig.yml"
       ]

@@ -25,6 +25,9 @@ third_party/
 __pycache__/
 *.pyc
 
+# project-local python environments (uv creates tools/ast-grep-mcp/.venv)
+.venv/
+
 # the self-signed certificate that the validation script creates
 test/certs/
 

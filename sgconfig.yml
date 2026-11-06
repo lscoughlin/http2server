@@ -1,0 +1,13 @@
+# ast-grep project configuration.
+#
+# Registers Object Pascal (Delphi/FPC dialect, .pas/.pp/.lpr/.dpr/.inc) as a
+# custom language. The parser is tree-sitter-pascal, checked out by
+# `task setup:deps` into third_party/ and compiled to a native library.
+# Custom parsers are native code: loading needs an explicit opt-in per
+# invocation (`--custom-languages allow`), or a one-time interactive
+# `trust`. See .agents/skills/ast-grep-nav/SKILL.md.
+customLanguages:
+  pascal:
+    libraryPath: third_party/tree-sitter-pascal/libtree-sitter-pascal.dylib
+    extensions: [pas, pp, lpr, dpr, inc]
+    expandoChar: _
