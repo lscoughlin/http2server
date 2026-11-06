@@ -34,7 +34,7 @@ antithesis rounds over something that was already clear just delays the
 user.
 
 This skill never creates a worktree and never edits a file that already
-exists in the repo — no `doc/`, no code, no `.ai/plans/planned/`
+exists in the repo — no `doc/`, no code, no `plan/`
 implementation plans. The only thing it ever writes is one new file under the
 primary checkout's `.ai/plans/brainstorm/` (see Section 4 for why "primary
 checkout" matters here). Everything else stays read-only, in the checkout
@@ -53,7 +53,7 @@ the ones that would change what you'd say:
   surfaces a paired doc the table doesn't cross-link (a subsystem's
   functional doc next to its technical doc is a recurring case; do this
   before grepping by hand). Its corpus stops at `doc/**/*.md`, `*.yaml`, and
-  `units|apps/**/*.pas` — it has no reach into `.ini`/YAML-manifest config,
+  `src/**/*.pas` — it has no reach into `.ini`/YAML-manifest config, the `Makefile` and `Taskfile.yaml`,
   `docker-compose.yml`, or anything under gitignored `.ai/plans/`; once the
   question turns to what a config or script actually does today, fall
   through to direct reads instead of re-querying. If the system already
@@ -115,7 +115,7 @@ the right shape to write up, or is there another angle worth pushing on?"
 
 Once converged, write **one new file** at
 `.ai/plans/brainstorm/<slug>.md`, where `<slug>` is a short slug of the topic
-(this repo's convention, e.g. `rate-balance-cutover`, `channel-fallback`).
+(for example `connection-lifetime-limits`, `tls-protocol-range`).
 
 `.ai/plans/` is gitignored, and `do-build` handles it by always resolving the
 **primary checkout** and reading/writing plan files there — never inside a
