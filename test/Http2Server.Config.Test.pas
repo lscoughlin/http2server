@@ -14,7 +14,7 @@ notes:
 // - run with `make test`.
 // - the immutability tests reuse one factory value, so a shared record can
 //   be forked without a change to the stored value.
-// - the source test reads src/Http2Server.Config.pas, because the rule that
+// - the source test reads the factory sources, because the rule that
 //   every default lives in a Create body is a property of the source text.
 unit Http2Server.Config.Test;
 
@@ -47,8 +47,8 @@ type
     function ProblemText(const AProblems: TArray<string>): string;
     function HasProblem(const AProblems: TArray<string>;
       const AFragment: string): Boolean;
-    /// count of numeric literals greater than one in the factory source that
-    /// lie outside a Create body
+    /// count of numeric literals greater than one in the factory sources
+    /// that lie outside a Create body
     function DefaultsOutsideCreate(out AFaults: string): Integer;
   protected
     procedure SetUp; override;
@@ -85,8 +85,10 @@ type
 implementation
 
 const
-  /// the source file that holds the factory; the test reads this text
-  cConfigSource = 'src/Http2Server.Config.pas';
+  /// the source files that hold the factory; the test reads this text
+  cConfigSources: array[0..3] of string = (
+    'src/Http2Server.Config.pas', 'src/Http2Server.Config.Tls.pas',
+    'src/Http2Server.Config.Limits.pas', 'src/Http2Server.Config.Socket.pas');
 
 { TFakeHandler }
 
@@ -695,12 +697,12 @@ end;
 function TFactoryTest.DefaultsOutsideCreate(out AFaults: string): Integer;
 var
   Lines: TStringList;
-  I, Start, Stop: Integer;
+  I, Start, Stop, S: Integer;
   Line, Token, Roots, Path: string;
   PastHeader, InCreate: Boolean;
   Bodies, Value: Integer;
 
-  function SourcePath: string;
+  function SourcePath(const ASource: string): string;
   const
     Candidates: array[0..2] of string = ('', '..', '../..');
   var
@@ -711,8 +713,8 @@ var
     begin
       Roots := IncludeTrailingPathDelimiter(
         ExpandFileName(GetCurrentDir + PathDelim + Candidates[K]));
-      if FileExists(Roots + cConfigSource) then
-        Exit(Roots + cConfigSource);
+      if FileExists(Roots + ASource) then
+        Exit(Roots + ASource);
     end;
   end;
 
@@ -727,73 +729,76 @@ var
 begin
   Result := 0;
   AFaults := '';
-  Path := SourcePath;
-  AssertTrue('the factory source is present at ' + cConfigSource +
-    ' under the worktree root', Path <> '');
   Lines := TStringList.Create;
   try
-    Lines.LoadFromFile(Path);
-    PastHeader := False;
-    InCreate := False;
     Bodies := 0;
-    for I := 0 to Lines.Count - 1 do
+    for S := Low(cConfigSources) to High(cConfigSources) do
     begin
-      Line := Lines[I];
-      if not PastHeader then
+      Path := SourcePath(cConfigSources[S]);
+      AssertTrue('the factory source is present at ' + cConfigSources[S] +
+        ' under the worktree root', Path <> '');
+      Lines.LoadFromFile(Path);
+      PastHeader := False;
+      InCreate := False;
+      for I := 0 to Lines.Count - 1 do
       begin
-        // the pasdoc and YAML header holds a copyright year, not a limit
-        if Pos('}', Line) > 0 then
-          PastHeader := True;
-        Continue;
-      end;
-      // drop a trailing comment
-      Stop := Pos('//', Line);
-      if Stop > 0 then
-        Line := Copy(Line, 1, Stop - 1);
-
-      if not InCreate then
-      begin
-        // a Create body carries the defaults; the interface declaration of
-        // Create has no '.Create', so it does not start a body
-        if (Pos('class function', Line) > 0) and
-           (Pos('.Create', Line) > 0) then
+        Line := Lines[I];
+        if not PastHeader then
         begin
-          InCreate := True;
-          Inc(Bodies);
+          // the pasdoc and YAML header holds a copyright year, not a limit
+          if Pos('}', Line) > 0 then
+            PastHeader := True;
+          Continue;
         end;
-      end
-      else if Trim(Line) = 'end;' then
-        InCreate := False;
+        // drop a trailing comment
+        Stop := Pos('//', Line);
+        if Stop > 0 then
+          Line := Copy(Line, 1, Stop - 1);
 
-      if InCreate then
-        Continue;
-
-      Start := 1;
-      while Start <= Length(Line) do
-      begin
-        if (Line[Start] >= '0') and (Line[Start] <= '9') and
-           ((Start = 1) or not IsNameChar(Line[Start - 1])) then
+        if not InCreate then
         begin
-          Stop := Start;
-          while (Stop <= Length(Line)) and
-                (Line[Stop] >= '0') and (Line[Stop] <= '9') do
-            Inc(Stop);
-          Token := Copy(Line, Start, Stop - Start);
-          Value := StrToIntDef(Token, 0);
-          // the literals 0 and 1 are structural, not limits
-          if Value > 1 then
+          // a Create body carries the defaults; the interface declaration of
+          // Create has no '.Create', so it does not start a body
+          if (Pos('class function', Line) > 0) and
+             (Pos('.Create', Line) > 0) then
           begin
-            Inc(Result);
-            AFaults := AFaults + 'line ' + IntToStr(I + 1) + ': ' +
-              Trim(Line) + ' | ';
+            InCreate := True;
+            Inc(Bodies);
           end;
-          Start := Stop;
         end
-        else
-          Inc(Start);
+        else if Trim(Line) = 'end;' then
+          InCreate := False;
+
+        if InCreate then
+          Continue;
+
+        Start := 1;
+        while Start <= Length(Line) do
+        begin
+          if (Line[Start] >= '0') and (Line[Start] <= '9') and
+             ((Start = 1) or not IsNameChar(Line[Start - 1])) then
+          begin
+            Stop := Start;
+            while (Stop <= Length(Line)) and
+                  (Line[Stop] >= '0') and (Line[Stop] <= '9') do
+              Inc(Stop);
+            Token := Copy(Line, Start, Stop - Start);
+            Value := StrToIntDef(Token, 0);
+            // the literals 0 and 1 are structural, not limits
+            if Value > 1 then
+            begin
+              Inc(Result);
+              AFaults := AFaults + cConfigSources[S] + ' line ' +
+                IntToStr(I + 1) + ': ' + Trim(Line) + ' | ';
+            end;
+            Start := Stop;
+          end
+          else
+            Inc(Start);
+        end;
       end;
     end;
-    AssertTrue('the source holds the Create bodies', Bodies >= 3);
+    AssertTrue('the sources hold the Create bodies', Bodies >= 3);
   finally
     Lines.Free;
   end;

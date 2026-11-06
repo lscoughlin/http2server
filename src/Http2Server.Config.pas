@@ -44,6 +44,7 @@ uses
   Http2Server.Http1.Limits,
   Http2Server.Ws.Options,
   Http2Server.Mtls.Types,
+  Http2Server.Config.Tls, Http2Server.Config.Limits, Http2Server.Config.Socket,
   Http2Server.Seam;
 
 const
@@ -59,64 +60,8 @@ type
     /// answer HTTP 503
     rmHttp503);
 
-  /// the TLS settings of the listener
-  ///
-  /// A record is a value, so a copy of the factory holds its own TLS
-  /// settings.  The certificate file and the key file are paths on disk.
-  /// The key password is empty for an unencrypted key.
-  TTlsServerOptions = record
-  private
-    FCertificateFile: string;
-    FKeyFile: string;
-    FKeyPassword: string;
-    FHandshakeTimeoutMs: Integer;
-    FClientCertMode: TClientCertMode;
-    FClientCaFile: string;
-    FClientTrustSystemStore: Boolean;
-    FClientPartialChain: Boolean;
-    FClientVerifyDepth: Integer;
-    FClientCertPrincipal: TClientCertPrincipal;
-  public
-    /// the defaults of the TLS settings
-    class function Create: TTlsServerOptions; static;
-    /// the path of the certificate file, in PEM form
-    function WithCertificateFile(const AValue: string): TTlsServerOptions;
-    /// the path of the private key file, in PEM form
-    function WithKeyFile(const AValue: string): TTlsServerOptions;
-    /// the password of an encrypted key, or an empty string
-    function WithKeyPassword(const AValue: string): TTlsServerOptions;
-    /// the time a TLS handshake may take, in milliseconds
-    function WithHandshakeTimeoutMs(
-      const AValue: Integer): TTlsServerOptions;
-    /// whether the server asks a client for a certificate (mutual TLS)
-    function WithClientCertMode(
-      const AValue: TClientCertMode): TTlsServerOptions;
-    /// the PEM file with the trust anchors for client certificates
-    function WithClientCaFile(const AValue: string): TTlsServerOptions;
-    /// whether the operating system store adds trust anchors
-    function WithClientTrustSystemStore(
-      const AValue: Boolean): TTlsServerOptions;
-    /// whether a leaf or intermediate trust anchor is enough
-    function WithClientPartialChain(const AValue: Boolean): TTlsServerOptions;
-    /// the longest accepted chain between a client and a trust anchor
-    function WithClientVerifyDepth(const AValue: Integer): TTlsServerOptions;
-    /// what the server writes to Principal for a verified client
-    function WithClientCertPrincipal(
-      const AValue: TClientCertPrincipal): TTlsServerOptions;
-
-    property CertificateFile: string read FCertificateFile;
-    property KeyFile: string read FKeyFile;
-    property KeyPassword: string read FKeyPassword;
-    property HandshakeTimeoutMs: Integer read FHandshakeTimeoutMs;
-    property ClientCertMode: TClientCertMode read FClientCertMode;
-    property ClientCaFile: string read FClientCaFile;
-    property ClientTrustSystemStore: Boolean read FClientTrustSystemStore;
-    property ClientPartialChain: Boolean read FClientPartialChain;
-    property ClientVerifyDepth: Integer read FClientVerifyDepth;
-    property ClientCertPrincipal: TClientCertPrincipal read FClientCertPrincipal;
-    /// the client certificate settings as the TLS layer reads them
-    function ClientTrust: TClientTrust;
-  end;
+  /// the TLS settings of the listener (see Http2Server.Config.Tls)
+  TTlsServerOptions = Http2Server.Config.Tls.TTlsServerOptions;
 
   /// the request queue settings
   ///
@@ -170,6 +115,7 @@ type
     FHttp11: THttp11Limits;
     FWs: TWsOptions;
     FWsEnabled: Boolean;
+    FServerLimits: TServerLimits; FSocket: TSocketOptions;
     FMaxConcurrentStreams: LongWord;
     FInitialStreamWindow: LongWord;
     FInitialConnectionWindow: LongWord;
@@ -259,6 +205,8 @@ type
 
     /// the settings of the WebSocket part of the server
     function WithWebSockets(const AOptions: TWsOptions): THttp2ServerFactory;
+    function WithServerLimits(const ALimits: TServerLimits): THttp2ServerFactory;
+    function WithSocketOptions(const AOptions: TSocketOptions): THttp2ServerFactory;
 
     // ---- streams ----
 
@@ -371,6 +319,8 @@ type
     property WebSockets: TWsOptions read FWs;
     /// true once WithWebSockets ran; the server then advertises RFC 8441 extended CONNECT
     property WebSocketsEnabled: Boolean read FWsEnabled;
+    property ServerLimits: TServerLimits read FServerLimits;
+    property Socket: TSocketOptions read FSocket;
 
     // ---- streams ----
 
@@ -407,102 +357,6 @@ type
   end;
 
 implementation
-
-{ TTlsServerOptions }
-
-class function TTlsServerOptions.Create: TTlsServerOptions;
-begin
-  Result.FCertificateFile := '';
-  Result.FKeyFile := '';
-  Result.FKeyPassword := '';
-  Result.FHandshakeTimeoutMs := 10000;
-  Result.FClientCertMode := ccmNone;
-  Result.FClientCaFile := '';
-  Result.FClientTrustSystemStore := False;
-  Result.FClientPartialChain := False;
-  Result.FClientVerifyDepth := 4;
-  Result.FClientCertPrincipal := ccpNone;
-end;
-
-function TTlsServerOptions.WithCertificateFile(
-  const AValue: string): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FCertificateFile := AValue;
-end;
-
-function TTlsServerOptions.WithKeyFile(
-  const AValue: string): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FKeyFile := AValue;
-end;
-
-function TTlsServerOptions.WithKeyPassword(
-  const AValue: string): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FKeyPassword := AValue;
-end;
-
-function TTlsServerOptions.WithHandshakeTimeoutMs(
-  const AValue: Integer): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FHandshakeTimeoutMs := AValue;
-end;
-
-function TTlsServerOptions.WithClientCertMode(
-  const AValue: TClientCertMode): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FClientCertMode := AValue;
-end;
-
-function TTlsServerOptions.WithClientCaFile(
-  const AValue: string): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FClientCaFile := AValue;
-end;
-
-function TTlsServerOptions.WithClientTrustSystemStore(
-  const AValue: Boolean): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FClientTrustSystemStore := AValue;
-end;
-
-function TTlsServerOptions.WithClientPartialChain(
-  const AValue: Boolean): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FClientPartialChain := AValue;
-end;
-
-function TTlsServerOptions.WithClientVerifyDepth(
-  const AValue: Integer): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FClientVerifyDepth := AValue;
-end;
-
-function TTlsServerOptions.WithClientCertPrincipal(
-  const AValue: TClientCertPrincipal): TTlsServerOptions;
-begin
-  Result := Self;
-  Result.FClientCertPrincipal := AValue;
-end;
-
-function TTlsServerOptions.ClientTrust: TClientTrust;
-begin
-  Result.Mode := FClientCertMode;
-  Result.CaFile := FClientCaFile;
-  Result.SystemStore := FClientTrustSystemStore;
-  Result.PartialChain := FClientPartialChain;
-  Result.Depth := FClientVerifyDepth;
-  Result.Principal := FClientCertPrincipal;
-end;
 
 { TQueueOptions }
 
@@ -566,6 +420,7 @@ begin
   Result.FHttp11 := THttp11Limits.Create;
   Result.FWs := TWsOptions.Create;
   Result.FWsEnabled := False;
+  Result.FServerLimits := TServerLimits.Create; Result.FSocket := TSocketOptions.Create;
   Result.FMaxConcurrentStreams := 100;
   Result.FInitialStreamWindow := 65535;
   Result.FInitialConnectionWindow := 65535;
@@ -721,6 +576,12 @@ begin
   Result.FWs := AOptions;
   Result.FWsEnabled := True;
 end;
+function THttp2ServerFactory.WithServerLimits(
+  const ALimits: TServerLimits): THttp2ServerFactory;
+begin Result := Self; Result.FServerLimits := ALimits; end;
+function THttp2ServerFactory.WithSocketOptions(
+  const AOptions: TSocketOptions): THttp2ServerFactory;
+begin Result := Self; Result.FSocket := AOptions; end;
 
 function THttp2ServerFactory.WithHttp11Fallback(
   const AValue: Boolean): THttp2ServerFactory;
@@ -931,6 +792,9 @@ begin
     Add('the SSE stall timeout is outside 0 to one hour');
   FHttp11.Problems(Problems);
   FWs.Problems(Problems);
+  FServerLimits.Validate(Problems); FSocket.Validate(Problems);
+  if FTls.MinTlsVersion > FTls.MaxTlsVersion then
+    Add('the minimum TLS version is above the maximum');
   if FQueue.Depth < 0 then
     Add('the queue depth is below 0');
   if FQueue.MaxWaitMs < 0 then

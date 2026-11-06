@@ -141,6 +141,15 @@ close sequence. The observer receives the bucket trip, and then the
 
 ## Three different limits
 
+Three families of limits bound different parts of the server. The table tells
+the families apart.
+
+| Family | What it bounds | The answer past the bound |
+|---|---|---|
+| token buckets (rate) | the rate of resets and control frames per connection, and of control frames and messages per WebSocket session | GOAWAY with `ENHANCE_YOUR_CALM` on HTTP/2 (RFC 9113 section 10.5); Close 1008 on a WebSocket session |
+| per-connection caps (streams, frames, bytes) | the open streams, the accepted streams over the life of the connection, the queued outbound frames and the queued octets | `REFUSED_STREAM` past the concurrent limit with the connection open; GOAWAY with `NO_ERROR` at the stream cap; GOAWAY with `ENHANCE_YOUR_CALM` past an outbound cap |
+| server caps (connections) | the open connections of the whole server | a refused socket with no reply at accept |
+
 Three limits bound different parts of a connection. The concurrent stream
 limit bounds the streams that are open at one time. The stream cap
 (`MaxStreamsPerConnection`) counts every accepted stream over the life of the
@@ -159,6 +168,19 @@ HTTP/1.1 the cap answers `Connection: close` instead (see
 RFC 9113 is the source for the GOAWAY and refusal rules. It was checked on
 2026-11-06 at https://www.rfc-editor.org/info/rfc9113. The plain-text copy is
 doc/references/rfc9113.txt.
+
+## The outbound frame caps
+
+Two caps bound the answers that wait for the peer, beside the buckets
+that bound the rate of the questions. `MaxOutboundFrames` bounds every
+queued outbound frame, and `MaxOutboundControlFrames` bounds the queued
+`PING`, `SETTINGS` and `RST_STREAM` frames. A peer that forces answers
+without reading trips a cap, and the connection ends with a GOAWAY of
+`ENHANCE_YOUR_CALM` (RFC 9113 section 10.5). The count falls as the
+frames leave the socket, so a large response to a steady reader never
+trips a cap. The caps live in `TServerLimits` with the defaults 10000
+and 1000, and 0 turns a cap off. The budget and the batch release rule
+are in [connection](connection.md).
 
 ## WebSocket buckets
 
@@ -194,26 +216,26 @@ streaming pool and uses no token bucket.
 ## The default limits
 
 `THttp2ServerFactory.Create` sets the default of every bucket
-(`src/Http2Server.Config.pas:541`). The reset bucket holds 1000 tokens, with
+(`src/Http2Server.Config.pas:395`). The reset bucket holds 1000 tokens, with
 a refill of 100 tokens a second, a cost of one token before dispatch and
-five tokens after it (`src/Http2Server.Config.pas:576-580`).
+five tokens after it (`src/Http2Server.Config.pas:431-435`).
 
 The `SETTINGS`, `empty DATA` and `CONTINUATION` buckets each hold 100 tokens,
-with a refill of 10 tokens a second (`src/Http2Server.Config.pas:584-589` and `599-601`). The
-`PING` bucket holds the same values (`src/Http2Server.Config.pas:581-583`). Each
+with a refill of 10 tokens a second (`src/Http2Server.Config.pas:439-444` and `454-456`). The
+`PING` bucket holds the same values (`src/Http2Server.Config.pas:436-438`). Each
 of these kinds is a flood signal with no legitimate high rate, so a small
 bucket is the correct default.
 
 The `WINDOW_UPDATE` bucket holds 10000 tokens, with a refill of 4000 tokens
-a second (`src/Http2Server.Config.pas:596-598`). The capacity admits a whole
+a second (`src/Http2Server.Config.pas:451-453`). The capacity admits a whole
 burst of a few megabytes, and the refill rate sits above the measured
 rate of 2450 frames a second with headroom. A small bucket of 100 tokens
 closed a healthy connection on a body of less than two megabytes: 107
 control frames arrived before the body ended. The measurement is in
 [validation](../verification/validation.md).
 
-The queue depth of 64 (`src/Http2Server.Config.pas:515`) and the IO thread
-count of 4 (`src/Http2Server.Config.pas:555`) come from the same seam
+The queue depth of 64 (`src/Http2Server.Config.pas:369`) and the IO thread
+count of 4 (`src/Http2Server.Config.pas:409`) come from the same seam
 measurement. The listener, stream and timeout values are the chosen protocol
 and operational bounds: RFC 9113 section 6.5.2 sets 100 concurrent streams as
 the customary value, 16384 is the frame size that RFC 9113 section 4.2

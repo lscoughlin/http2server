@@ -79,6 +79,12 @@ type
     IgnoreCertificateErrors: boolean;
     /// the client certificate trust and verify mode; ccmNone asks for nothing
     ClientTrust: TClientTrust;
+    /// the lowest accepted TLS version, as an OpenSSL version number
+    /// (TLS1_2_VERSION, TLS1_3_VERSION); 0 keeps the context value
+    MinProtocol: Integer;
+    /// the highest accepted TLS version, as an OpenSSL version number; 0
+    /// keeps the context value
+    MaxProtocol: Integer;
   end;
 
 /// the transport that this policy offers for a connection
@@ -102,8 +108,9 @@ function NegotiatedH2(const ATls: INetTls): boolean;
 function NegotiatedAlpnName(const ATls: INetTls): RawUtf8;
 
 /// apply the policy to a bound socket: the TLS context, then the ALPN callback
-// - returns FALSE when TLS is requested but the certificate is missing, or
-// when the ALPN entry point of libssl is unavailable
+// - returns FALSE when TLS is requested but the certificate is missing, when
+// the ALPN entry point of libssl is unavailable, or when OpenSSL refuses the
+// protocol range
 // - the bind order is AfterBind, then the ALPN callback, because mORMot2
 // creates the server SSL_CTX inside AfterBind
 function ApplyTls(const ABound: TCrtSocket;
@@ -155,6 +162,19 @@ begin
   result := NegotiatedAlpnName(ATls) = 'h2';
 end;
 
+/// set the accepted TLS range on the context
+// - a zero bound keeps the context value. Answers FALSE when OpenSSL refuses
+// the range
+function ApplyProtocolRange(const ACtx: PSSL_CTX;
+  const AMin, AMax: Integer): boolean;
+begin
+  result := True;
+  if AMin <> 0 then
+    result := SSL_CTX_set_min_proto_version(ACtx, AMin) = 1;
+  if result and (AMax <> 0) then
+    result := SSL_CTX_set_max_proto_version(ACtx, AMax) = 1;
+end;
+
 function ApplyTls(const ABound: TCrtSocket;
   const APolicy: TTlsPolicy): boolean;
 begin
@@ -175,6 +195,10 @@ begin
   // so the ALPN callback can only be installed after this call returns
   ABound.DoTlsAfter(cstaBind);
   result := Http2AlpnAttach(ABound, APolicy.AllowHttp11);
+  // the protocol range follows the ALPN callback on the same context
+  if result then
+    result := ApplyProtocolRange(PSSL_CTX(ABound.TLS.AcceptCert),
+      APolicy.MinProtocol, APolicy.MaxProtocol);
   // the client certificate trust and the verify mode follow the ALPN callback
   // on the same context. A mode of ccmNone leaves the context untouched
   if result then

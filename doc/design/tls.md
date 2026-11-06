@@ -150,20 +150,42 @@ socket and no OpenSSL.
 
 | Function | Decision |
 | --- | --- |
-| `TransportFor` | Which transport a policy offers: TLS, cleartext or a refusal (`src/Http2Server.Tls.pas:110-119`). |
-| `HandshakeExpired` | Whether a handshake has used up a deadline; a zero deadline never expires (`src/Http2Server.Tls.pas:120-126`). |
-| `EffectiveHandshakeTimeoutMs` | The deadline the server applies, clamped to the mORMot2 bound (`src/Http2Server.Tls.pas:128-139`). |
-| `NegotiatedH2` and `NegotiatedAlpnName` | Whether the finished handshake selected `h2`; a nil TLS instance answers False (`src/Http2Server.Tls.pas:141-152`). |
+| `TransportFor` | Which transport a policy offers: TLS, cleartext or a refusal (`src/Http2Server.Tls.pas:121-129`). |
+| `HandshakeExpired` | Whether a handshake has used up a deadline; a zero deadline never expires (`src/Http2Server.Tls.pas:131-137`). |
+| `EffectiveHandshakeTimeoutMs` | The deadline the server applies, clamped to the mORMot2 bound (`src/Http2Server.Tls.pas:139-150`). |
+| `NegotiatedH2` and `NegotiatedAlpnName` | Whether the finished handshake selected `h2`; a nil TLS instance answers False (`src/Http2Server.Tls.pas:152-163`). |
 
 `ApplyTls` carries out the policy on a bound socket
-(`src/Http2Server.Tls.pas:154-174`). The order is fixed: mORMot2 creates the
+(`src/Http2Server.Tls.pas:178-207`). The order is fixed: mORMot2 creates the
 server `SSL_CTX` inside `AfterBind`, so the server records the certificate and
 the key, calls `DoTlsAfter(cstaBind)`, and only then installs the ALPN
-callback on the context that `AfterBind` stored in `AcceptCert`. When a client
-certificate mode is set, `ApplyClientTrust` follows the ALPN callback on the same
-context: it loads the trust anchors, sets the verify mode and disables
+callback on the context that `AfterBind` stored in `AcceptCert`. The protocol
+range follows the ALPN callback on the same context, and `ApplyClientTrust`
+follows the range: it loads the trust anchors, sets the verify mode and disables
 renegotiation ([mtls](mtls.md)). The call answers False when no certificate is
-named, the certificate file is absent, or the client CA file cannot be loaded.
+named, the certificate file is absent, the client CA file cannot be loaded, or
+OpenSSL refuses the protocol range.
+
+## The protocol range
+
+RFC 9113 section 9.2 requires TLS version 1.2 or higher for HTTP/2 over TLS.
+RFC 9113 is the source for the version floor. It was checked on 2026-11-06 at
+https://www.rfc-editor.org/info/rfc9113. The plain-text copy is
+doc/references/rfc9113.txt. The factory holds the accepted range in
+`MinTlsVersion` and `MaxTlsVersion` (1.2 to 1.3 by default), and the factory
+refuses a minimum above the maximum at build time. `BuildTlsPolicy`
+(`src/Http2Server.Async.Options.pas:188-206`) copies the range to `MinProtocol`
+and `MaxProtocol` of `TTlsPolicy` (`src/Http2Server.Tls.pas:81-88`) as the
+OpenSSL version numbers `TLS1_2_VERSION` and `TLS1_3_VERSION`. `ApplyTls` sets
+the range on the server context with `SSL_CTX_set_min_proto_version` and
+`SSL_CTX_set_max_proto_version` (`src/Http2Server.Tls.pas:168-176`), after the
+ALPN callback and before the client trust call. A zero bound keeps the context
+value, so a policy that names no range leaves the mORMot2 defaults in place. A
+refused range makes `ApplyTls` answer False, and `Start` then raises instead of
+serving (`THttp2AsyncServer.Start` in `src/Http2Server.Async.pas`), so the
+server never runs with an unset range. The fpcunit suite holds the mapping test
+and the loopback handshake tests of the range in
+`test/Http2Server.TlsProtocols.Test.pas`.
 
 ## The handshake deadline
 
@@ -210,3 +232,6 @@ macOS aarch64.
 | The `INetTls` surface | `third_party/mORMot2/src/net/mormot.net.sock.pas:1183-1233` | 2026-10-07 |
 | The server `SSL_CTX` and its lifetime | `third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:11918-11949` | 2026-10-07 |
 | The blocking handshake and its 5000 ms deadline | `...:11953-12009`, `...:12146-12188` | 2026-10-07 |
+| The range setters, their return of 1 on success, and the meaning of 0 as the library default | OpenSSL 4.1.0 manual page `SSL_CTX_set_min_proto_version(3ssl)` (`/opt/homebrew/share/man/man3`) | 2026-11-06 |
+| The Pascal wrappers and the default range of the server context | `third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:2688-2690`, `...:10853-10860`, `...:11874-11883` | 2026-11-06 |
+| The TLS version floor of 1.2 for HTTP/2 | RFC 9113 section 9.2 (https://www.rfc-editor.org/info/rfc9113, copy in doc/references/rfc9113.txt) | 2026-11-06 |

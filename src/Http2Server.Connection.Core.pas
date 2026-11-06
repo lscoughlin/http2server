@@ -31,7 +31,7 @@ uses
   Http2Server.Errors, Http2Server.Frames, Http2Server.Hpack,
   Http2Server.FlowControl, Http2Server.Limits, Http2Server.Seam,
   Http2Server.Stream, Http2Server.StreamHost, Http2Server.Headers,
-  Http2Server.Output,
+  Http2Server.Output, Http2Server.OutboundBudget,
   Http2Server.HpackConnection, Http2Server.StreamIdSet;
 
 type
@@ -58,6 +58,23 @@ type
     MaxOutputBytes: LongWord;
     /// how many requests one connection serves before it retires; 0 is off
     MaxStreams: LongWord;
+    /// the most outbound frames that may wait for the peer; 0 is off
+    MaxOutboundFrames: LongWord;
+    /// the most outbound PING, SETTINGS and RST_STREAM frames that may
+    /// wait for the peer; 0 is off
+    MaxOutboundControlFrames: LongWord;
+    /// the greatest size of an outbound DATA frame, in octets; 0 sends
+    /// up to MaxFrameSize
+    MaxDataFrameSizeOut: LongWord;
+    /// the greatest wait for a read of a stream, in milliseconds; 0 keeps
+    /// the stream default
+    StreamReadTimeoutMs: Integer;
+    /// the greatest wait for a write of a stream, in milliseconds; 0 keeps
+    /// the stream default
+    StreamWriteTimeoutMs: Integer;
+    /// zero every field, so a caller that sets only the fields it uses
+    /// leaves every other limit off
+    class operator Initialize(var AOptions: TConnectionCoreOptions);
   end;
 
   /// the core raises one of these events for every state change the server acts on
@@ -141,6 +158,9 @@ type
     FOutput: TBytes;
     FOutputCount: Integer;
     FLastStreamId: LongWord;
+    /// the frames that wait for the peer; the IO side releases them as
+    /// the octets leave the socket
+    FBudget: TOutboundBudget;
     FClosing: Boolean;
     FGoAwaySent: Boolean;
     /// the peer sent GOAWAY, so the read loop continues to its last stream
@@ -203,13 +223,6 @@ type
     procedure QueueRefusalFrame(const AStreamId: LongWord;
       const AErrorCode: THttp2ErrorCode);
     procedure FlushLocked;
-    procedure FlushPendingHeaders;
-    procedure FlushStreamCredits;
-    procedure FlushConnectionCredit;
-    /// move the bytes the drain produced into the connection output queue
-    procedure FlushDrainedOutput;
-    procedure EmitHeaderRun(const AStream: TServerStream;
-      const AHeaderBlock: TBytes);
   public
     constructor Create(const AOptions: TConnectionCoreOptions;
       const AEvents: IConnectionEvents; const ALimits: TConnectionLimits;
@@ -218,6 +231,13 @@ type
 
     /// take bytes for the socket; answers False when the queue is empty
     function TakeOutput(out AData: TBytes): Boolean;
+    /// release the outbound batches the peer received
+    // - the IO side calls this with the octets written so far, which is the
+    //   handed-out total minus the octets that still wait in the write path.
+    //   The call takes the connection lock itself
+    procedure ReportWritten(const AWrittenTotal: Int64);
+    /// the octets the core handed to the IO side so far
+    function HandedOutTotal: Int64;
     /// TRUE while bytes wait for the socket
     function HasOutput: Boolean;
     /// encode every pending response header block and queue the frames
@@ -285,6 +305,15 @@ type
   end;
 
 implementation
+
+uses
+  Http2Server.Connection.Flush;
+
+class operator TConnectionCoreOptions.Initialize(
+  var AOptions: TConnectionCoreOptions);
+begin
+  FillChar(AOptions, SizeOf(AOptions), 0);
+end;
 
 const
   /// the longest wait of Orphan for a call in flight, in milliseconds
@@ -410,7 +439,10 @@ begin
   // nil waker because its own edge-triggered flag drives the IO wake-up
   OutOptions.MaxFrameSize := FOptions.MaxFrameSize;
   OutOptions.BytesPerTurn := 0;
+  OutOptions.MaxDataFrameSize := FOptions.MaxDataFrameSizeOut;
   FOut := TOutputDrain.Create(OutOptions, FSend, nil);
+  FBudget := TOutboundBudget.Create(FOptions.MaxOutboundFrames,
+    FOptions.MaxOutboundControlFrames);
   FWakeLock := TCriticalSection.Create;
   // the host adapter is a borrowed reference to this core, so it forms no
   // reference cycle and its lifetime is the core lifetime
@@ -501,6 +533,7 @@ begin
   FHostImpl := nil;
   FWakeLock.Free;
   FOut.Free;
+  FBudget.Free;
   FById.Free;
   // each remaining stream holds the core reference; release it, so a stream
   // that a queue entry or a handler still holds is freed on the last release
@@ -548,14 +581,23 @@ begin
 end;
 
 procedure TConnectionCoreBase.FlushLocked;
+var
+  DrainedFrames, I: Integer;
 begin
   try
-    FlushPendingHeaders;
+    FlushPendingHeaders(FStreams, FHpack, QueueFrame);
     // the handler buffers turn into DATA frames only here, under the lock
     FOut.Drain(FStreams);
-    FlushDrainedOutput;
-    FlushStreamCredits;
-    FlushConnectionCredit;
+    FlushDrainedOutput(FOut, QueueBytes);
+    // the drained DATA frames entered the queue as octets, so they join
+    // the open batch here; the drain produces DATA frames only
+    DrainedFrames := FOut.TakeQueuedFrames;
+    for I := 1 to DrainedFrames do
+      FBudget.CountFrame(ftData);
+    FlushStreamCredits(FStreams, FRecv, FOptions.StreamUpdateThreshold,
+      QueueFrame);
+    FlushConnectionCredit(FRecv, FOptions.ConnectionUpdateThreshold,
+      FConnUpdatePending, QueueFrame);
   except
     // a fault while the output is built ends the connection with a code. No
     // exception may leave: the IO thread and the handler threads both call here
@@ -571,6 +613,21 @@ begin
     FAborted := True;
     FailConnection('the output queue passed its cap', ecEnhanceYourCalm);
   end;
+  // RFC 9113 section 10.5: a peer that forces answers without reading must
+  // not queue frames without a bound either. The control cap is judged
+  // first, so it trips before the total cap when both passed
+  if not FAborted then
+    if FBudget.ControlCapPassed then
+    begin
+      FAborted := True;
+      FailConnection('the outbound control frame cap passed',
+        ecEnhanceYourCalm);
+    end
+    else if FBudget.FrameCapPassed then
+    begin
+      FAborted := True;
+      FailConnection('the outbound frame cap passed', ecEnhanceYourCalm);
+    end;
   // A stream whose two halves have ended is closed.  FById.Count feeds both
   // the concurrent-stream limit and the GOAWAY drain, so a stream that ended
   // must leave the map, or the count stays high for ever.
@@ -604,14 +661,6 @@ begin
   // the waker writes to the socket, which can block, so it runs with the
   // connection lock released (the rule of the lock order in doc/design/connection.md)
   NotifyWantsWrite;
-end;
-
-procedure TConnectionCoreBase.FlushDrainedOutput;
-var
-  Data: TBytes;
-begin
-  if FOut.TakeOutput(Data) then
-    QueueBytes(Data);
 end;
 
 procedure TConnectionCoreBase.DrainPending;
@@ -680,7 +729,29 @@ begin
       Exit;
     SetLength(AData, FOutputCount);
     Move(FOutput[0], AData[0], FOutputCount);
+    // the batch closes: its frames wait in the write path of the IO side
+    FBudget.CloseBatch(FOutputCount);
     FOutputCount := 0;
+  finally
+    UnlockConn;
+  end;
+end;
+
+procedure TConnectionCoreBase.ReportWritten(const AWrittenTotal: Int64);
+begin
+  LockConn;
+  try
+    FBudget.ReportWritten(AWrittenTotal);
+  finally
+    UnlockConn;
+  end;
+end;
+
+function TConnectionCoreBase.HandedOutTotal: Int64;
+begin
+  LockConn;
+  try
+    Result := FBudget.HandedOut;
   finally
     UnlockConn;
   end;
@@ -700,6 +771,7 @@ procedure TConnectionCoreBase.QueueFrame(const AFrame: TFrame);
 var
   Header: TBytes;
 begin
+  FBudget.CountFrame(AFrame.Header.FrameType);
   SetLength(Header, FrameHeaderSize);
   AFrame.Header.WriteTo(Header);
   QueueBytes(Header);
@@ -897,6 +969,11 @@ begin
   Result.SetRefusalHost(FRefusalHost);
   Result.SetLockOwner(FLockOwner);
   Result.UpdateThreshold := FOptions.StreamUpdateThreshold;
+  // a zero timeout is unset, so the stream keeps its own default
+  if FOptions.StreamReadTimeoutMs > 0 then
+    Result.ReadTimeoutMs := FOptions.StreamReadTimeoutMs;
+  if FOptions.StreamWriteTimeoutMs > 0 then
+    Result.WriteTimeoutMs := FOptions.StreamWriteTimeoutMs;
   FStreams.Add(Result);
   FById.Add(AStreamId, Result);
   FSend.OpenStream(AStreamId);
@@ -904,86 +981,9 @@ begin
   FLastStreamId := AStreamId;
 end;
 
-procedure TConnectionCoreBase.EmitHeaderRun(const AStream: TServerStream;
-  const AHeaderBlock: TBytes);
-var
-  Frames: TArray<TFrame>;
-  I: Integer;
-begin
-  // the HPACK unit frames the header block, because the wire order of the
-  // HEADERS frame and its CONTINUATION frames follows the encoder state
-  Frames := FHpack.BuildHeaderRun(AStream.StreamId, AHeaderBlock);
-  for I := 0 to Length(Frames) - 1 do
-    QueueFrame(Frames[I]);
-end;
-
 procedure TConnectionCoreBase.FlushQueue;
 begin
   FlushLocked;
-end;
-
-procedure TConnectionCoreBase.FlushPendingHeaders;
-var
-  I: Integer;
-  Stream: TServerStream;
-  Status: Integer;
-  Headers: THeaderBlock;
-  EndStream: Boolean;
-  Encoded: TBytes;
-begin
-  for I := 0 to FStreams.Count - 1 do
-  begin
-    Stream := FStreams[I];
-    if not Stream.HasPendingHeaders then
-      Continue;
-    if not Stream.TakePendingHeaders(Status, Headers, EndStream) then
-      Continue;
-    Encoded := FHpack.EncodeResponse(Status, Headers);
-    EmitHeaderRun(Stream, Encoded);
-    if EndStream then
-    begin
-      QueueFrame(BuildDataFrame(Stream.StreamId, nil, True));
-      Stream.MarkLocalEnded;
-    end;
-  end;
-end;
-
-procedure TConnectionCoreBase.FlushStreamCredits;
-var
-  I: Integer;
-  Stream: TServerStream;
-  Credit: LongWord;
-begin
-  // the handler thread adds to ConsumedSinceUpdate under the stream lock; the
-  // IO thread reads it here, so the two threads share no container
-  for I := 0 to FStreams.Count - 1 do
-  begin
-    Stream := FStreams[I];
-    Credit := Stream.ConsumedSinceUpdate;
-    if Credit < FOptions.StreamUpdateThreshold then
-      Continue;
-    Stream.ClearConsumed;
-    QueueFrame(BuildWindowUpdateFrame(Stream.StreamId, Credit));
-    FRecv.ApplyStreamUpdate(Stream.StreamId, Credit);
-  end;
-end;
-
-procedure TConnectionCoreBase.FlushConnectionCredit;
-begin
-  if FConnUpdatePending < FOptions.ConnectionUpdateThreshold then
-  begin
-    // an empty window stalls every stream, so it is refilled at once
-    if (FConnUpdatePending > 0) and (FRecv.Connection.Size <= 0) then
-    begin
-      QueueFrame(BuildWindowUpdateFrame(0, FConnUpdatePending));
-      FRecv.ApplyConnectionUpdate(FConnUpdatePending);
-      FConnUpdatePending := 0;
-    end;
-    Exit;
-  end;
-  QueueFrame(BuildWindowUpdateFrame(0, FConnUpdatePending));
-  FRecv.ApplyConnectionUpdate(FConnUpdatePending);
-  FConnUpdatePending := 0;
 end;
 
 end.

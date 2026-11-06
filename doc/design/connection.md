@@ -142,6 +142,31 @@ adds the octets that wait in the socket write buffer. A connection above the cap
 ends with a GOAWAY of `ENHANCE_YOUR_CALM` (RFC 9113 section 10.5), the IO side
 closes the socket at once, and the queued octets are dropped (`Aborted`).
 
+**The frame caps.** Two more options bound the output of one connection.
+`MaxOutboundFrames` bounds every queued frame, and
+`MaxOutboundControlFrames` bounds the queued `PING`, `SETTINGS` and
+`RST_STREAM` frames, which are the answers a peer forces without a bound
+(RFC 9113 section 10.5). The core counts each queued frame in
+`TOutboundBudget` (`src/Http2Server.OutboundBudget.pas`) and aborts past a
+cap with a GOAWAY of `ENHANCE_YOUR_CALM`, as with the octet cap. A limit
+of 0 turns that cap off.
+
+**The batch release rule.** The count means the frames that still wait for
+the peer. `TakeOutput` closes the queued frames into a batch and notes
+the octet offset at which the batch ends. The IO side reports the octets
+written so far after each write, and the budget releases every batch
+whose end offset is at or below that total. A reader that drains
+steadily keeps the count low whatever the total over the life of the
+connection.
+
+**The DATA frame cap.** The option `MaxDataFrameSizeOut` bounds the size
+of one outbound DATA frame. The size of a frame is the smallest of the
+peer `SETTINGS_MAX_FRAME_SIZE`, the factory `MaxFrameSize` and
+`MaxDataFrameSizeOut`; 0 adds no bound. `HEADERS` and `CONTINUATION`
+frames keep the smaller of the first two. A small DATA cap raises the
+frame count of a response, so it needs a higher `MaxOutboundFrames` to
+serve the same body.
+
 **The reset charge.** An `RST_STREAM` that a frame of the peer makes the server
 send is charged to the reset bucket: a PRIORITY or HEADERS frame that names its
 own stream, and a WINDOW_UPDATE that passes 2^31-1 on a stream. The stream closes
@@ -152,6 +177,16 @@ ends with `EHttpTimeout` after `WriteTimeoutMs`, as a read ends after
 `ReadTimeoutMs`. A peer that stops reading cannot hold a handler thread. A write
 that does not reach the mORMot2 write path, after the one retry, ends the
 connection, because a frame with a hole cannot continue.
+
+**The source of the stream timeouts.** The factory sets both deadlines in
+`ServerLimits` (`StreamReadTimeoutMs` and `StreamWriteTimeoutMs`, each 30000 ms
+by default). `BuildConnectionCoreOptions`
+(`src/Http2Server.Async.Options.pas:236-237`) maps them to
+`TConnectionCoreOptions` (`src/Http2Server.Connection.Core.pas:71-74`), and
+`NewStream` (`src/Http2Server.Connection.Core.pas:973-976`) sets them on each
+new stream. A zero option is unset, so the stream keeps its own default. A bare
+`TServerStream` keeps the stream constants of `src/Http2Server.Stream.pas`,
+which agree with the factory defaults; the unit tests guard that agreement.
 
 ## The refusal and reset rules
 
@@ -269,6 +304,27 @@ frames in `FOutput`, and `TakeOutput` answers them to the IO side.
 The wake-up is edge-triggered. The flag `FWakePending` guards one signal per
 transition from "no output" to "output" (`:563`). The document
 [output](output.md) holds the full rule.
+
+## The connection write timeout
+
+The factory setting `ServerLimits.WriteTimeoutMs` bounds the time that the
+output of one connection makes no progress (see
+[configuration](configuration.md)). It defaults to 60000, and 0 turns the
+check off.
+
+The check differs from the stream write timeout. The stream write timeout
+bounds one blocked write call of one handler (`TServerStream.Write` in
+`src/Http2Server.Stream.pas`). The connection write timeout bounds the whole
+connection: when the queued output of an HTTP/2 connection makes no progress
+for the period, the sweep closes the connection and drops the queued octets.
+`OnClose` then cancels the streams, as it does for every lost connection.
+
+The progress of the writes is the last time the output backlog shrank, or
+the time the backlog first appeared after an empty backlog. The sweep
+compares the backlog with the last sweep, so a peer that reads slowly but
+steadily never trips the check. A peer that sends PING frames but never
+reads trips it, because reads are not write progress (see
+[io-pool](io-pool.md)).
 
 ## The connection events
 

@@ -56,8 +56,32 @@ pattern again.
 | Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes in 0.0086 s |
 | Load | `h2load -n 200 -c 10 -m 6 http://127.0.0.1:PORT/` | 200 requests, 0 failed |
 
-The unit suite adds 376 tests with 0 errors and 0 failures. The suite holds
-the local rules; the tools above hold the external rules.
+The unit suite adds 867 tests with 0 errors and 0 failures, as of the
+`make test` run of 2026-11-06. The suite holds the local rules; the tools
+above hold the external rules.
+
+### External validation of the new settings
+
+The run of 2026-11-06 on macOS aarch64 checks the server after the new
+settings landed: the outbound frame caps, the connection cap, the stream
+timeouts, the connection write timeout and the TLS protocol range. The
+example server runs with default settings.
+
+| Check | Command | Result |
+|---|---|---|
+| Full conformance | `h2spec -h 127.0.0.1 -p PORT http2` | 94 tests, 94 passed, 0 skipped, 0 failed |
+| Generic frame rules | `h2spec -h 127.0.0.1 -p PORT generic` | 44 tests, 44 passed, 0 skipped, 0 failed |
+| Validation suite | `task validate` | every check passes, except the WebSocket-over-HTTP/2 step, which skips because the Python packages `h2` and `wsproto` are absent on the host |
+| Abuse limits | `tools/abuse/abuse.py` against a strict-profile server | 7 of 8 pass; the empty-DATA check answers `PROTOCOL_ERROR` where the check expects `ENHANCE_YOUR_CALM` |
+| Large response | `curl --http2-prior-knowledge 'http://127.0.0.1:PORT/large?bytes=8388608'` | 8388608 bytes, status 200 |
+| TLS versions | `openssl s_client -tls1_2` and `-tls1_3` against the loopback certificate | both versions connect with ALPN `h2` |
+
+The abuse result matches the run on main `2bf7004` without these changes
+(7 of 8, the same check fails), so this run introduces no drop. The 8 of 8
+record in the release run below dates from version 0.24.0 and predates the
+change in the empty-DATA answer. The example server has no profile for a
+small outbound DATA frame size, so that case is covered by the `OutputCaps`
+unit tests and not by a manual run.
 
 ### Mutual TLS
 

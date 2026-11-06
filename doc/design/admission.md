@@ -79,7 +79,7 @@ under a flood.
 
 `THandlerPool` (`src/Http2Server.Admission.pas:155`) creates `N` worker threads,
 where `N` is `THttp2ServerFactory.HandlerThreads`
-(`src/Http2Server.Config.pas:354`). Each worker takes one entry and calls
+(`src/Http2Server.Config.pas:302`). Each worker takes one entry and calls
 `IHttp2Handler.Handle` on it. A worker takes no second entry until the first
 handler returns.
 

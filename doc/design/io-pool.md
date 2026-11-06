@@ -85,6 +85,19 @@ timeout and the factory header timeout, so the one callback serves both rules
 (`mormot.net.sock.pas:3495`). The server sets it from the factory value
 `Backlog` before it binds (`THttp2AsyncServer.Create`).
 
+**The connection cap.** mORMot2 refuses a new socket when the read set holds
+more than `MaxConnections` (`mormot.net.async.pas:4419-4427`). The test runs
+before the new socket joins the set, and it is strict, so the server maps a
+factory value of N to N minus one (`THttp2AsyncServer.Create`). A factory
+value of 0 maps to `MaxInt`, which means no cap. A factory value of N then
+allows exactly N open connections.
+
+**The refusal.** A refused socket is closed without a reply
+(`mormot.net.async.pas:4426-4427`). mORMot2 offers no hook at that point, so
+the server counts no refusal and raises no event for it. The gap is
+deliberate: the accept loop logs the refusal and waits before the next
+accept, and no server counter or observer event covers it.
+
 ## The connection core bridge
 
 `THttp2AsyncConnection` owns one `TServerConnectionCore`
@@ -127,6 +140,38 @@ connection (`TAsyncConnections.ConnectionCreate`). It then calls `Recycle` and
 releases the cores, the waker, the events and the send lock in `ReleaseState`, which
 `BeforeDestroy` and `Recycle` both call. After `ReleaseState` the object is in the
 undecided mode, as for a new connection, and the next first read chooses the protocol.
+
+## The socket options
+
+mORMot2 leaves an accepted async socket at the operating system defaults. The
+`TCP_NODELAY` comment (`mormot.net.sock.pas:2101`) and the `SetupConnection`
+call that turns Nagle off and keep-alive on
+(`mormot.net.sock.pas:3669-3682`) belong to the `NewSocket` path, which
+builds listener and client sockets. The async accept path
+(`TNetSocketWrap.Accept` at `mormot.net.sock.pas:3684`) calls neither, so an
+accepted socket starts with Nagle on and keep-alive off.
+
+`ApplySocketOptions` (`src/Http2Server.Async.Socket.pas`) applies the factory
+`TSocketOptions` to each accepted socket from `AfterCreate`, before the first
+read. The chosen no-delay value is always set, on or off. Keep-alive goes on
+with the exact idle time, interval and count when the idle time is above zero,
+and it stays off otherwise. A buffer size above zero sets the send or receive
+buffer, and zero keeps the operating system default. Each option is guarded,
+so the failure of one never closes a good connection.
+
+`ReusePort` adds `acoReusePort` to the server options
+(`THttp2AsyncServer.Create`), which sets `SO_REUSEPORT` before the bind
+(`mormot.net.async.pas:4318`, `mormot.net.sock.pas:3489-3491`).
+
+**The platform notes.** Darwin and Linux both accept `SO_REUSEPORT` and the
+three keep-alive knobs. On Darwin mORMot2 sets `SO_REUSEPORT` on every
+listener (`SetLinger` calls `SetReuseAddrPort`, which sets the option on BSD
+and Darwin in `mormot.net.sock.posix.inc:811-824`), so two listeners share a
+port there even with the option off, and the option decides the sharing on
+Linux. Darwin answers the raw flag bits from `getsockopt` for `TCP_NODELAY`
+(4) and `SO_KEEPALIVE` (8) instead of 1. A buffer size is a hint on some
+systems: the kernel grants at least the asked size, so a read-back passes at
+or above it.
 
 ## The write wake-up
 
@@ -211,13 +256,39 @@ cleared instead and no call (`mormot.net.async.pas:656` declares the virtual
 `IdleEverySecond`, and the walk at `mormot.net.async.pas:3835-3915` skips the
 flagged connections). A busy connection therefore never reaches the idle rule.
 
+Every successful lock of a connection marks it active
+(`TPollAsyncConnection.TryLock` in `mormot.net.async.pas:1708-1716`, read
+2026-11-06). A handler write takes that lock, so a connection with a running
+handler looks active even when the peer reads nothing. A peer that sends PING
+frames but never reads looks active as well. The idle callback cannot see
+such a peer, so the sweep judges the write progress itself.
+
 The server overrides `IdleEverySecond`
-(`THttp2AsyncServer.IdleEverySecond` in `src/Http2Server.Async.pas:832`). The
+(`THttp2AsyncServer.IdleEverySecond` in `src/Http2Server.Async.pas:881`). The
 override calls the inherited walk first and returns at once when
-`MaxConnectionAgeMs` is 0, so a server without the limit pays no sweep cost.
-Otherwise it walks every live connection once per second and runs the age
-decision for its mode: retire, drain, finalise or force-close (see
-[lifecycle](lifecycle.md)).
+`MaxConnectionAgeMs` is 0 and `ServerLimits.WriteTimeoutMs` is 0, so a server
+without either limit pays no sweep cost. Otherwise it walks every live
+connection once per second and runs the age decision for its mode: retire,
+drain, finalise or force-close (see [lifecycle](lifecycle.md)).
+
+The same walk runs the write-stall decision
+(`THttp2AsyncConnection.CheckWriteStall` in
+`src/Http2Server.Async.pas:716`). The pure rule is `WriteStalled` in
+`src/Http2Server.Async.Sweep.pas:60`: the timeout is above 0, the backlog is
+above 0, and the time since the last progress is at least the timeout. The
+last progress moves when the backlog shrinks or when the backlog first
+appears after an empty backlog. A drain that empties the write buffer reports
+through `AfterWrite`, and the sweep compares the backlog with the last sweep,
+so a partial drain counts as progress too. A stalled HTTP/2 connection is
+removed; an HTTP/1.1 connection keeps its idle rule, fed with the write
+timeout in whole seconds.
+
+The sweep takes the mORMot2 tick count (`mormot.core.os.GetTickCount64`,
+the same source as the accept time and the write progress,
+`src/Http2Server.Async.Sweep.pas:82-85`). The SysUtils tick follows the wall
+clock on Darwin, while the accept time and the write progress count uptime,
+so a wall-clock reading misjudges every connection. The earlier SysUtils
+tick retired any age above 0 at once; the mORMot2 tick counts the age correctly.
 
 ## The poller of each platform
 
@@ -255,3 +326,6 @@ measured gap.
 | The async class set, its virtual methods and the thread roles | `third_party/mORMot2/src/net/mormot.net.async.pas` (pinned revision) | 2026-10-07 |
 | The 5000 ms `SSL_accept` deadline and the TLS setup order | `third_party/mORMot2/src/lib/mormot.lib.openssl11.pas:11918-12009`, `:12146-12167` | 2026-10-07 |
 | The `DefaultListenBacklog` global | `third_party/mORMot2/src/net/mormot.net.sock.pas:3495` | 2026-10-07 |
+| The connection cap test and the refusal without a reply | `third_party/mORMot2/src/net/mormot.net.async.pas:4419-4427` | 2026-11-06 |
+| The socket defaults of the accept path | `third_party/mORMot2/src/net/mormot.net.sock.pas:2101`, `:3669-3684` | 2026-11-06 |
+| The keep-alive knobs and `SO_REUSEPORT` on each platform | `third_party/mORMot2/src/net/mormot.net.sock.posix.inc:755-802`, `:811-833` | 2026-11-06 |

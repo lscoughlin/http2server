@@ -49,6 +49,12 @@ type
     /// the share of the connection window one stream may take in one turn
     // - zero lets every active stream take its equal share of the window
     BytesPerTurn: LongWord;
+    /// the greatest size of an outbound DATA frame, in octets; 0 adds no
+    /// bound, so the size is the smaller of the peer size and MaxFrameSize
+    MaxDataFrameSize: LongWord;
+    /// zero every field, so a caller that sets only the fields it uses
+    /// leaves every other limit off
+    class operator Initialize(var AOptions: TOutputDrainOptions);
   end;
 
   /// the drain loop of one connection
@@ -62,8 +68,11 @@ type
     FQueued: TBytes;
     FQueuedCount: Integer;
     FWakePending: Boolean;
+    /// the DATA frames queued since the last take of the count
+    FFramesQueued: Integer;
 
     function PeerFrameSize: LongWord;
+    function DataFrameSize: LongWord;
     procedure QueueBytes(const AData: TBytes);
     procedure QueueFrame(const AFrame: TFrame);
     function ActiveCount(const AStreams: TObjectList<TServerStream>): Integer;
@@ -85,9 +94,19 @@ type
     procedure ApplyPeerFrameSize(const AValue: LongWord);
     /// the frame size the drain will obey, after both limits are compared
     function EffectiveFrameSize: LongWord;
+    /// take and clear the count of DATA frames queued since the last take
+    // - the connection core counts the drained frames in its outbound
+    //   budget, because they entered its queue as octets
+    function TakeQueuedFrames: Integer;
   end;
 
 implementation
+
+class operator TOutputDrainOptions.Initialize(
+  var AOptions: TOutputDrainOptions);
+begin
+  FillChar(AOptions, SizeOf(AOptions), 0);
+end;
 
 { TOutputDrain }
 
@@ -118,6 +137,20 @@ begin
   Result := PeerFrameSize;
 end;
 
+function TOutputDrain.DataFrameSize: LongWord;
+begin
+  Result := PeerFrameSize;
+  if (FOptions.MaxDataFrameSize > 0) and
+     (FOptions.MaxDataFrameSize < Result) then
+    Result := FOptions.MaxDataFrameSize;
+end;
+
+function TOutputDrain.TakeQueuedFrames: Integer;
+begin
+  Result := FFramesQueued;
+  FFramesQueued := 0;
+end;
+
 procedure TOutputDrain.ApplyPeerFrameSize(const AValue: LongWord);
 begin
   FPeerMaxFrameSize := AValue;
@@ -137,6 +170,7 @@ procedure TOutputDrain.QueueFrame(const AFrame: TFrame);
 var
   Header: TBytes;
 begin
+  Inc(FFramesQueued);
   SetLength(Header, FrameHeaderSize);
   AFrame.Header.WriteTo(Header);
   QueueBytes(Header);
@@ -211,7 +245,7 @@ begin
     Budget := StreamRoom;
   while Budget > 0 do
   begin
-    Take := Integer(PeerFrameSize);
+    Take := Integer(DataFrameSize);
     if Int64(Take) > Budget then
       Take := Integer(Budget);
     // the connection window can hold less than the share of this stream. A take

@@ -56,17 +56,23 @@ var
   Limits: THttp11Limits;
   Clock: IMonotonicClock;
   F: THttp2ServerFactory;
+  V: TTlsVersion;
   Problems: TArray<string>;
 begin
   Limits := THttp11Limits.Create;
   Clock := TFacadeClock.Create;
+  V := tvTls12;
   F := THttp2ServerFactory.Create
     .WithHandler(TFacadeHandler.Create)
     .WithClearTextAllowed(True)
     .WithHttp11Limits(Limits)
     .WithClock(Clock)
     .WithQueue(TQueueOptions.Create.WithRefusalMode(rmHttp503))
-    .WithTls(TTlsServerOptions.Create);
+    .WithServerLimits(TServerLimits.Create)
+    .WithSocketOptions(TSocketOptions.Create)
+    .WithTls(TTlsServerOptions.Create
+      .WithMinTlsVersion(V)
+      .WithMaxTlsVersion(tvTls13));
   AssertTrue('SRV-14: the factory validates: ' + F.ProblemText, F.Validate(Problems));
 end;
 

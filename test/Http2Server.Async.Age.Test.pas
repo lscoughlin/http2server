@@ -143,6 +143,8 @@ type
   published
     /// an idle HTTP/2 connection gets GOAWAY(NO_ERROR) and then closes
     procedure TestIdleH2GetsGoAwayThenCloses;
+    /// a request before the age is served with no GOAWAY; the retire comes after
+    procedure TestH2ServesBeforeTheAgeAndRetiresAfter;
     /// a slow handler still completes its stream, then the socket closes
     procedure TestSlowH2CompletesThenCloses;
     /// a handler past the grace time is cut by a forced close
@@ -688,6 +690,39 @@ begin
     AssertEquals('the GOAWAY carries NO_ERROR', 0, LongInt(Code));
     AssertTrue('the socket did not close after the GOAWAY',
       Client.WaitClosed(CloseTimeoutMs));
+  finally
+    Client.Free;
+  end;
+end;
+
+procedure TConnectionAgeTest.TestH2ServesBeforeTheAgeAndRetiresAfter;
+const
+  LongAgeMs = 6000;
+  EarlyWindowMs = 2500;
+var
+  Port: Integer;
+  Client: TAgeH2Client;
+  Body: TBytes;
+  LastId, Code: LongWord;
+begin
+  // the age is far above the sweep period, so the first sweeps must leave
+  // the connection alone: the early request completes with no GOAWAY, and
+  // the retire comes only past the age. A sweep on the wrong clock retires
+  // at once instead, which the early window catches
+  Port := StartAgeServer(TEchoHandler.Create, LongAgeMs, 15000);
+  Client := TAgeH2Client.Create(Port);
+  try
+    Client.SendPrologue;
+    Client.SendGet(1, '/echo');
+    AssertTrue('the early request was not served before the age',
+      Client.WaitForBody(1, BodyTimeoutMs, Body));
+    // the window ends well before the earliest retire: the jitter cuts at
+    // most 10 percent of the age, so no sweep retires before 5.4 s
+    AssertFalse('the server retired the connection before the age',
+      Client.WaitForGoAway(EarlyWindowMs, LastId, Code));
+    AssertTrue('the server sent no GOAWAY after the age',
+      Client.WaitForGoAway(CloseTimeoutMs, LastId, Code));
+    AssertEquals('the GOAWAY carries NO_ERROR', 0, LongInt(Code));
   finally
     Client.Free;
   end;

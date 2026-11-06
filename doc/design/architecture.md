@@ -131,18 +131,20 @@ together with no name clash.
 
 | Unit | Lines | Layer | Responsibility |
 | --- | --- | --- | --- |
-| `Http2Server.pas` | 146 | facade | the public surface, re-exported from the units below |
+| `Http2Server.pas` | 408 | facade | the public surface, re-exported from the units below |
 | `Http2Server.Server.pas` | 182 | server | `THttp2Server`, the start and stop path |
 | `Http2Server.Observer.pas` | 121 | server | the events, the observer and the statistics |
-| `Http2Server.Async.pas` | 887 | IO | the mORMot2 async subclasses and the core bridge |
-| `Http2Server.Async.Options.pas` | 118 | IO | the TLS policy, the core options, the control bucket and the handshake deadline, built from the factory |
+| `Http2Server.Async.pas` | 998 | IO | the mORMot2 async subclasses and the core bridge |
+| `Http2Server.Async.Options.pas` | 463 | IO | the TLS policy, the core options, the control bucket and the handshake deadline, built from the factory |
 | `Http2Server.Async.Counters.pas` | 84 | IO | the connection, reset, trip and handshake counters |
 | `Http2Server.Async.Waker.pas` | 64 | IO | the write waker of one connection |
+| `Http2Server.Async.Sweep.pas` | 154 | IO | the sweep over the live connections: age, drain, GOAWAY and stream count |
+| `Http2Server.Async.Socket.pas` | 128 | IO | the socket options of each accepted connection: no-delay, keep-alive, buffers |
 | `Http2Server.Stream.Meta.pas` | 324 | seam | the base of the server stream: locks, reference count, request head and pending response head |
 | `Http2Server.ClientCert.pas` | 275 | TLS | the identity of a verified client certificate |
 | `Http2Server.Mtls.Types.pas` | 101 | TLS | the client certificate modes and their pure maps |
 | `Http2Server.Tls.Client.pas` | 163 | TLS | the client certificate trust and verify mode of the server context |
-| `Http2Server.Tls.pas` | 176 | TLS | the `INetTls` plug-in of a connection |
+| `Http2Server.Tls.pas` | 209 | TLS | the `INetTls` plug-in of a connection |
 | `Http2Server.Alpn.pas` | 276 | TLS | the `SSL_CTX_set_alpn_select_cb` binding and callback |
 | `Http2Server.Admission.pas` | 709 | admission | the bounded queue and the handler pool |
 | `Http2Server.StreamAdapters.pas` | 226 | admission | the handler-side request and response of one stream |
@@ -182,13 +184,18 @@ together with no name clash.
 | `Http2Server.Ws.Reader.pas` | 265 | codec | the assembly of frames into messages with the size, fragment and UTF-8 checks; the codec holds no socket and no thread |
 | `Http2Server.StreamHost.pas` | 60 | seam | the callbacks that a stream uses to reach its connection |
 | `Http2Server.StreamPool.pas` | 773 | streaming | the streaming pool: ordered task queues, timers and fair scheduling |
-| `Http2Server.Connection.Core.pas` | 703 | connection | the base of the connection core: fields, locks, output queue, write wake-up and stream table |
+| `Http2Server.Connection.Core.pas` | 989 | connection | the base of the connection core: fields, locks, output queue, write wake-up and stream table |
+| `Http2Server.Connection.Flush.pas` | 154 | connection | the flush helpers of the core: pending headers, stream and connection credit, drained output |
+| `Http2Server.OutboundBudget.pas` | 186 | connection | the count of queued outbound frames with the batch release rule |
 | `Http2Server.Connection.pas` | 617 | connection | the connection core: `Feed` and the frame handlers |
 | `Http2Server.HpackConnection.pas` | 229 | connection | the HPACK encoder and decoder of one connection |
-| `Http2Server.Output.pas` | 283 | output | the response path and the drain |
+| `Http2Server.Output.pas` | 318 | output | the response path and the drain |
 | `Http2Server.Stream.pas` | 993 | streams | the stream state, the buffers and the reference count |
 | `Http2Server.Waiter.pas` | 408 | streams | the blocking waiter and the cancel worker pool |
-| `Http2Server.Config.pas` | 687 | configuration | the factory record and the option records |
+| `Http2Server.Config.pas` | 863 | configuration | the factory record and the option records |
+| `Http2Server.Config.Tls.pas` | 214 | configuration | the TLS settings of the listener: `TTlsServerOptions` and its fluent methods |
+| `Http2Server.Config.Limits.pas` | 176 | configuration | the server limits: `TServerLimits` and its fluent methods |
+| `Http2Server.Config.Socket.pas` | 155 | configuration | the socket options of the listener: `TSocketOptions` and its fluent methods |
 | `Http2Server.Limits.pas` | 383 | configuration | the token buckets and the clock |
 | `Http2Server.Seam.pas` | 201 | configuration | the interfaces the handler sees |
 | `Http2Server.Frames.pas` | 886 | protocol | the frames, the settings and the error codes |

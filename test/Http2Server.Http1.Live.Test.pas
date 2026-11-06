@@ -698,9 +698,10 @@ var
   R: TRawResponse;
   Deadline: QWord;
 begin
-  // one handler thread and a short idle period: a client that never reads must
-  // not hold the thread for ever
-  StartServer(LiveFactory(FHandlerRef).WithHandlerThreads(1).WithIdleTimeout(1000));
+  // one handler thread and a short write timeout: a client that never reads
+  // must not hold the thread for ever
+  StartServer(LiveFactory(FHandlerRef).WithHandlerThreads(1).WithIdleTimeout(1000)
+    .WithServerLimits(TServerLimits.Create.WithWriteTimeoutMs(1000)));
   A := TRawHttp.Create(FServer.Port);
   B := TRawHttp.Create(FServer.Port);
   try
@@ -711,7 +712,7 @@ begin
       Sleep(5);
     AssertEquals('the handler began to write', 1, FHandler.HugeStarted);
     B.Send('GET /hello HTTP/1.1' + CRLF + 'Host: a' + CRLF + CRLF);
-    AssertTrue('the second client is served once the idle period closed the first',
+    AssertTrue('the second client is served once the write timeout freed the thread',
       B.ReadResponse(False, 15000, R));
     AssertEquals('status of the second answer: ' + R.Head, 200, R.Status);
     AssertEquals('hello', R.Body);

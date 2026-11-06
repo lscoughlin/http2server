@@ -22,7 +22,7 @@
         </SyntaxOptions>
       </Parsing>
     </CompilerOptions>
-    <Files Count="70">
+    <Files Count="77">
       <Item1>
         <Filename Value="src/Http2Server.pas"/>
         <UnitName Value="Http2Server"/>
@@ -303,6 +303,34 @@
         <Filename Value="src/Http2Server.StreamIdSet.pas"/>
         <UnitName Value="Http2Server.StreamIdSet"/>
       </Item70>
+      <Item71>
+        <Filename Value="src/Http2Server.Config.Tls.pas"/>
+        <UnitName Value="Http2Server.Config.Tls"/>
+      </Item71>
+      <Item72>
+        <Filename Value="src/Http2Server.Connection.Flush.pas"/>
+        <UnitName Value="Http2Server.Connection.Flush"/>
+      </Item72>
+      <Item73>
+        <Filename Value="src/Http2Server.Async.Sweep.pas"/>
+        <UnitName Value="Http2Server.Async.Sweep"/>
+      </Item73>
+      <Item74>
+        <Filename Value="src/Http2Server.Config.Limits.pas"/>
+        <UnitName Value="Http2Server.Config.Limits"/>
+      </Item74>
+      <Item75>
+        <Filename Value="src/Http2Server.Config.Socket.pas"/>
+        <UnitName Value="Http2Server.Config.Socket"/>
+      </Item75>
+      <Item76>
+        <Filename Value="src/Http2Server.OutboundBudget.pas"/>
+        <UnitName Value="Http2Server.OutboundBudget"/>
+      </Item76>
+      <Item77>
+        <Filename Value="src/Http2Server.Async.Socket.pas"/>
+        <UnitName Value="Http2Server.Async.Socket"/>
+      </Item77>
     </Files>
     <RequiredPkgs Count="1">
       <Item1>

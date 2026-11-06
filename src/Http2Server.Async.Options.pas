@@ -24,7 +24,9 @@ interface
 uses
   SysUtils,
   mormot.core.base, mormot.net.sock, mormot.net.async,
-  Http2Server.Config, Http2Server.Connection, Http2Server.Tls,
+  mormot.lib.openssl11,
+  Http2Server.Config, Http2Server.Config.Tls, Http2Server.Connection,
+  Http2Server.Tls,
   Http2Server.Errors, Http2Server.Limits, Http2Server.Observer,
   Http2Server.Async.Counters,
   Http2Server.Http1.Core, Http2Server.Http1.Driver;
@@ -193,6 +195,14 @@ begin
   result.AllowHttp11 := AFactory.Http11Fallback;
   result.IgnoreCertificateErrors := True;
   result.ClientTrust := AFactory.Tls.ClientTrust;
+  case AFactory.Tls.MinTlsVersion of
+    tvTls12: result.MinProtocol := TLS1_2_VERSION;
+    tvTls13: result.MinProtocol := TLS1_3_VERSION;
+  end;
+  case AFactory.Tls.MaxTlsVersion of
+    tvTls12: result.MaxProtocol := TLS1_2_VERSION;
+    tvTls13: result.MaxProtocol := TLS1_3_VERSION;
+  end;
 end;
 
 function BuildConnectionCoreOptions(
@@ -217,6 +227,14 @@ begin
   result.ConnectProtocol := AFactory.WebSocketsEnabled;
   result.MaxOutputBytes := LongWord(AFactory.MaxOutputQueueBytes);
   result.MaxStreams := LongWord(AFactory.MaxStreamsPerConnection);
+  result.MaxOutboundFrames :=
+    LongWord(AFactory.ServerLimits.MaxOutboundFrames);
+  result.MaxOutboundControlFrames :=
+    LongWord(AFactory.ServerLimits.MaxOutboundControlFrames);
+  result.MaxDataFrameSizeOut :=
+    LongWord(AFactory.ServerLimits.MaxDataFrameSizeOut);
+  result.StreamReadTimeoutMs := AFactory.ServerLimits.StreamReadTimeoutMs;
+  result.StreamWriteTimeoutMs := AFactory.ServerLimits.StreamWriteTimeoutMs;
 end;
 
 function BuildH1CoreOptions(const AFactory: THttp2ServerFactory;
@@ -229,7 +247,8 @@ begin
     Result.Scheme := 'http';
   Result.OutboundLimit := AFactory.ChannelQueueLimit;
   Result.MaxRequests := AFactory.MaxStreamsPerConnection;
-  Result.WriteStallMs := AFactory.IdleTimeoutMs;
+  // the write timeout alone bounds a stalled write
+  Result.WriteStallMs := AFactory.ServerLimits.WriteTimeoutMs;
 end;
 
 function BuildConnectionLimits(

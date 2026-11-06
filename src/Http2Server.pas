@@ -38,6 +38,9 @@ uses
   Http2Server.Mtls.Types,
   Http2Server.ClientCert,
   Http2Server.Config,
+  Http2Server.Config.Tls,
+  Http2Server.Config.Limits,
+  Http2Server.Config.Socket,
   Http2Server.Encoding,
   Http2Server.Server,
   Http2Server.Sse.Encoder,
@@ -59,6 +62,9 @@ type
   TTlsServerOptions = Http2Server.Config.TTlsServerOptions;
   TQueueOptions = Http2Server.Config.TQueueOptions;
   TQueueRefusalMode = Http2Server.Config.TQueueRefusalMode;
+  TTlsVersion = Http2Server.Config.Tls.TTlsVersion;
+  TServerLimits = Http2Server.Config.Limits.TServerLimits;
+  TSocketOptions = Http2Server.Config.Socket.TSocketOptions;
   TTokenBucketOptions = Http2Server.Limits.TTokenBucketOptions;
 
   /// mutual TLS: the modes, the principal setting and the client identity
@@ -183,6 +189,10 @@ const
   ccpNone = Http2Server.Mtls.Types.ccpNone;
   ccpSubjectDn = Http2Server.Mtls.Types.ccpSubjectDn;
   ccpCommonName = Http2Server.Mtls.Types.ccpCommonName;
+
+  // the values of TTlsVersion
+  tvTls12 = Http2Server.Config.Tls.tvTls12;
+  tvTls13 = Http2Server.Config.Tls.tvTls13;
 
   // an enum type alias does not carry the enum values, so every value of
   // TServerEventKind appears here as a constant

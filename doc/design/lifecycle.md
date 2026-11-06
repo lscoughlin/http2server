@@ -74,6 +74,12 @@ second.
 `THttp2AsyncConnection.OnLastOperationIdle`
 applies both rules and asks the IO side to remove the connection.
 
+A third timeout, the connection write timeout
+(`ServerLimits.WriteTimeoutMs`, see [configuration](configuration.md)),
+reaches the connection through the once-per-second sweep instead of the idle
+event. The idle event never sees a busy connection, so the sweep judges the
+write progress itself (see [io-pool](io-pool.md)).
+
 ## The connection lifetime limits
 
 Two factory settings bound the life of one connection beyond the idle and
@@ -104,16 +110,24 @@ has left. The exchange that reaches the request cap is served with
 undecided closes at once, because no request has started on it.
 
 The age check runs once per second from the `IdleEverySecond` override
-(`src/Http2Server.Async.pas:832`), which walks every connection. The walk is
+(`src/Http2Server.Async.pas:881`), which walks every connection. The walk is
 needed because the idle rule alone never sees a busy connection (see
-[io-pool](io-pool.md)). The sweep returns at once when the maximum age is 0.
-The age starts at accept, and the time source is the same tick count that the
-header deadline uses.
+[io-pool](io-pool.md)). The sweep returns at once when the maximum age is 0
+and the connection write timeout is 0. The age starts at accept, and the
+time source is the same tick count that the header deadline uses.
+
+The same walk closes a connection whose writes stalled: an HTTP/2 connection
+with queued output that made no progress for `ServerLimits.WriteTimeoutMs`
+is removed, the queued octets are dropped, and `OnClose` cancels the streams
+as it does for every lost connection. An HTTP/1.1 connection keeps its idle
+rule, fed with the write timeout. The stream write timeout differs from this
+rule: it bounds one blocked write call of one handler, while the sweep
+bounds the whole connection (see [connection](connection.md)).
 
 The effective age of one connection is the setting minus a random part of up
 to 10 percent, drawn once per connection at accept (`AgeExpired` in
-`src/Http2Server.Async.Options.pas:63`, with the decision values in
-`TAgeAction` at `src/Http2Server.Async.Options.pas:80`). The effective age is
+`src/Http2Server.Async.Options.pas:65`, with the decision values in
+`TAgeAction` at `src/Http2Server.Async.Options.pas:82`). The effective age is
 never longer than the setting, so the setting stays a hard upper bound.
 
 An upgraded connection is exempt from the maximum age. The sweep never

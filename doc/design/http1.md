@@ -163,7 +163,7 @@ framing refuses them. The refusal is safe, since no request is smuggled.
 
 `TH1CoreOptions.MaxRequests` (`src/Http2Server.Http1.Core.pas:60`) bounds the
 requests of one connection. `BuildH1CoreOptions` sets it from
-`MaxStreamsPerConnection` (`src/Http2Server.Async.Options.pas:231`), so the
+`MaxStreamsPerConnection` (`src/Http2Server.Async.Options.pas:249`), so the
 same factory setting serves both protocols. A value of 0 turns the cap off.
 
 The core counts every admitted request head
@@ -238,6 +238,14 @@ shows that a handler that writes 8 MiB to a client that does not read stays bloc
 and that it finishes when the client reads. Without the second term the handler
 finishes at once.
 
+A handler write that sees no progress for the connection write timeout
+aborts the connection, so a peer that never reads cannot hold a handler thread
+for ever. `BuildH1CoreOptions` sets the bound from
+`ServerLimits.WriteTimeoutMs` (`src/Http2Server.Async.Options.pas:251`), and a
+zero turns the check off. The once-per-second sweep judges the connection with
+the idle rule as well, fed with the write timeout (see
+[io-pool](io-pool.md)).
+
 ## The shared queue
 
 An HTTP/1.1 request enters the same bounded queue as an HTTP/2 stream and runs on
@@ -287,7 +295,7 @@ connection alone.
 - The request body is bounded by `MaxBodySize` and is not streamed past it. HTTP/2
   applies flow control to the unread body; HTTP/1.1 does not (see the section on
   memory).
-- A client that stops reading a response loses its connection after the idle
+- A client that stops reading a response loses its connection after the write
   timeout without progress, so its handler thread is not held for ever. The same
   case on HTTP/2 holds the handler thread until the stream or the connection ends.
 - `Stop` does not wait for a running HTTP/1.1 request. The pool cancels it after the

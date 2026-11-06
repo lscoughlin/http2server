@@ -65,7 +65,9 @@ uses
   Http2Server.Async.Events,
   Http2Server.Async.Options,
   Http2Server.Async.Counters,
-  Http2Server.Async.Waker;
+  Http2Server.Async.Waker,
+  Http2Server.Async.Sweep,
+  Http2Server.Async.Socket;
 
 const
   /// the time a staged close waits for the peer to close first, in seconds
@@ -119,11 +121,9 @@ type
     FAcceptedMs: QWord; // the accept time in milliseconds, for the age sweep
     FJitterPermille: Integer; // the age reduction in permille, drawn at accept
     FRetireDeadlineMs: QWord; // the end of the retire grace, or 0
+    FLastWriteProgressMs: QWord; FLastSweepBacklog: Int64; // the stall state of the sweep
     procedure StartHttp2;
     procedure StartHttp1;
-    /// the age-sweep decision of the server for this connection
-    procedure CheckAge(const ANowMs: QWord;
-      const AMaxAgeMs, AGraceMs: Integer);
     /// the retire notice of a core: raise it on the observer of the server
     procedure RetireNotified(const AEvent: TServerEvent);
     /// the retire notice of the HTTP/1.1 core: raise it without a GOAWAY,
@@ -154,11 +154,17 @@ type
     /// encode the pending headers, drain the stream buffers and queue the
     /// frames for the socket
     function SendPendingOutput: Boolean;
+    /// the age-sweep decision of the server for this connection
+    procedure CheckAge(const ANowMs: QWord;
+      const AMaxAgeMs, AGraceMs: Integer);
+    /// the write-stall decision of the server for this connection
+    procedure CheckWriteStall(const ANowMs: QWord; const ATimeoutMs: Integer);
     /// the connection core (test and observer seam)
     property Core: TServerConnectionCore read FCore;
     /// the write waker of this connection
     property Waker: IWriteWaker read FWaker;
     property H1: TH1Driver read FH1;
+    property LastWriteProgressMs: QWord read FLastWriteProgressMs write FLastWriteProgressMs; // the test seam of the write check
   end;
 
   /// the HTTP/2 async server
@@ -277,7 +283,9 @@ end;
 procedure THttp2AsyncConnection.AfterCreate;
 begin
   FServer := THttp2AsyncServer(fOwner);
+  ApplySocketOptions(fSocket, FServer.Factory.Socket);
   FAcceptedMs := GetTickCount64; FJitterPermille := Random(101);
+  FLastWriteProgressMs := FAcceptedMs; FLastSweepBacklog := 0;
   FHeaderDeadlineSec := HeaderDeadlineSec(GetTickCount64,
     FServer.Factory.HeaderTimeoutMs);
   FIdleSeconds := cardinal(FServer.Factory.IdleTimeoutMs div 1000);
@@ -340,7 +348,7 @@ begin
   FSendRequested := False;
   FClientCert := nil;
   FMode := cmUndecided;
-  FRetireDeadlineMs := 0;
+  FRetireDeadlineMs := 0; FLastWriteProgressMs := 0; FLastSweepBacklog := 0;
   FServer := nil;
 end;
 
@@ -483,7 +491,7 @@ begin
     // the write buffer drained.  The send loop of SendPendingOutput carries
     // the next pull, because fOwner.Write calls this method before it
     // returns, so a pull here would recurse into the same write path
-    result := soContinue;
+    result := soContinue; FLastWriteProgressMs := GetTickCount64;
     if FMode = cmHttp1 then
     begin
       ApplyClosePhase;
@@ -491,6 +499,9 @@ begin
     end;
     if FCore = nil then
       exit;
+    // the write buffer drained further, so the budget releases the batches
+    // the peer received
+    FCore.ReportWritten(FCore.HandedOutTotal - PendingWriteBytes);
     // A GOAWAY trip or a graceful stop closes the connection once the last
     // frame left the socket.  OnRead cannot make that decision after the last
     // stream ends, because the trip already drained it, so the decision runs
@@ -506,7 +517,7 @@ end;
 function THttp2AsyncConnection.SendPendingOutput: Boolean;
 var
   Data: TBytes;
-  Again: Boolean;
+  Again: Boolean; Before, After: Int64;
 begin
   result := False;
   if ((FCore = nil) and (FH1 = nil)) or IsClosed then
@@ -549,6 +560,7 @@ begin
       end;
       while PullOutput(Data) do
       begin
+        Before := PendingWriteBytes;
         // the mORMot2 write path takes the connection write lock, sends at
         // once when it can, and otherwise subscribes for the write event.  A
         // false answer means the lock went to the IO thread, so one retry runs
@@ -564,6 +576,14 @@ begin
             exit;
           end;
         result := True;
+        // a shrunk or new backlog is progress; the sweep measures from here
+        After := PendingWriteBytes;
+        if (After < Before) or ((Before = 0) and (After > 0)) then
+          FLastWriteProgressMs := GetTickCount64;
+        // the batch reached the write path, so the budget releases what the
+        // peer received; the core call takes the connection lock itself
+        if FCore <> nil then
+          FCore.ReportWritten(FCore.HandedOutTotal - PendingWriteBytes);
         // the bytes that mORMot2 holds for the socket count against the cap too
         if (FServer.CoreOptions.MaxOutputBytes > 0) and
            (PendingWriteBytes > Int64(FServer.CoreOptions.MaxOutputBytes)) then
@@ -693,6 +713,29 @@ begin
     fOwner.ConnectionRemove(Handle);
 end;
 
+procedure THttp2AsyncConnection.CheckWriteStall(const ANowMs: QWord;
+  const ATimeoutMs: Integer);
+var
+  Backlog: Int64;
+begin
+  if ATimeoutMs <= 0 then Exit;
+  if FMode = cmHttp1 then
+    case FH1.IdleAction(Cardinal(ANowMs div 1000), fLastOperation,
+      Cardinal(ATimeoutMs div 1000), ANowMs,
+      FServer.Factory.HeaderTimeoutMs) of
+      iaFlush: SendPendingOutput;
+      iaClose: fOwner.ConnectionRemove(Handle);
+    end else begin
+    // AfterWrite misses a partial drain; the sweep compares backlogs instead
+    Backlog := PendingWriteBytes;
+    if (Backlog > 0) and (Backlog < FLastSweepBacklog) then
+      FLastWriteProgressMs := ANowMs;
+    FLastSweepBacklog := Backlog;
+    if WriteStalled(ANowMs, FLastWriteProgressMs, ATimeoutMs, Backlog) then
+      fOwner.ConnectionRemove(Handle);
+  end;
+end;
+
 procedure THttp2AsyncConnection.OnClose;
 begin
   // the socket is gone: cancel the streams, so that a waiting handler and the
@@ -784,9 +827,17 @@ begin
   Options := ASYNC_OPTION_PROD;
   if AFactory.Tls.CertificateFile <> '' then
     include(Options, acoEnableTls);
+  if AFactory.Socket.ReusePort then
+    include(Options, acoReusePort);
   inherited Create(BindAddressText(AFactory.Host, AFactory.Port), nil, nil,
     THttp2AsyncConnection, 'http2', nil, Options, AFactory.IOThreads);
-  MaxConnections := MaxInt;
+  // mORMot2 tests the count before the new socket joins the set, and the
+  // test is strict, so a factory value of N maps to N minus one; 0 means
+  // no cap
+  if AFactory.ServerLimits.MaxConnections <= 0 then
+    MaxConnections := MaxInt
+  else
+    MaxConnections := AFactory.ServerLimits.MaxConnections - 1;
 end;
 
 procedure THttp2AsyncServer.AfterConstruction;
@@ -828,20 +879,11 @@ begin
 end;
 
 procedure THttp2AsyncServer.IdleEverySecond;
-var
-  Instances: TAsyncConnectionDynArray;
-  I: Integer;
 begin
   inherited IdleEverySecond;
-  if FFactory.MaxConnectionAgeMs <= 0 then
-    Exit;
-  // the idle callback misses busy connections. A drained connection closes
-  // on its write completion, never on the idle timer
-  Instances := GetConnectionInstances;
-  for I := 0 to High(Instances) do
-    if Instances[I] <> nil then
-      THttp2AsyncConnection(Instances[I]).CheckAge(GetTickCount64,
-        FFactory.MaxConnectionAgeMs, FFactory.GracefulStopTimeoutMs);
+  if (FFactory.MaxConnectionAgeMs <= 0) and (FFactory.ServerLimits.WriteTimeoutMs <= 0) then Exit;
+  SweepAgedConnections(Self, FFactory.MaxConnectionAgeMs,
+    FFactory.GracefulStopTimeoutMs, FFactory.ServerLimits.WriteTimeoutMs);
 end;
 
 procedure THttp2AsyncServer.ConnectionOpened;
@@ -877,64 +919,22 @@ begin
 end;
 
 procedure THttp2AsyncServer.BeginDrain;
-var
-  Instances: TAsyncConnectionDynArray;
-  I: Integer;
-  Conn: THttp2AsyncConnection;
 begin
   FDraining := True;
-  Instances := GetConnectionInstances;
-  for I := 0 to High(Instances) do
-  begin
-    Conn := THttp2AsyncConnection(Instances[I]);
-    if (Conn <> nil) and (Conn.H1 <> nil) then
-    begin
-      Conn.H1.Core.BeginDrain;
-      Conn.Waker.Signal;
-    end;
-  end;
+  DrainH1Connections(Self);
 end;
 
 procedure THttp2AsyncServer.BroadcastGoAway(
   const AErrorCode: THttp2ErrorCode);
-var
-  Instances: TAsyncConnectionDynArray;
-  I: Integer;
-  Conn: THttp2AsyncConnection;
 begin
-  // GetConnectionInstances copies the live instances and protects each one
-  // from recycling for a short moment, so a short call on the instance is
-  // safe without the main connection lock
-  Instances := GetConnectionInstances;
-  for I := 0 to High(Instances) do
-  begin
-    Conn := THttp2AsyncConnection(Instances[I]);
-    if (Conn = nil) or (Conn.Core = nil) then
-      continue;
-    Conn.Core.GracefulGoAway(Conn.Core.LastProcessedStreamId, AErrorCode);
-    Conn.Waker.Signal;
-  end;
+  GoAwayAllConnections(Self, AErrorCode);
   Notify(seGoAwaySent, 0, lkReset,
     'the server sends GOAWAY on every connection');
 end;
 
 function THttp2AsyncServer.OpenStreamTotal: Integer;
-var
-  Instances: TAsyncConnectionDynArray;
-  I: Integer;
-  Conn: THttp2AsyncConnection;
 begin
-  Result := 0;
-  Instances := GetConnectionInstances;
-  for I := 0 to High(Instances) do
-  begin
-    Conn := THttp2AsyncConnection(Instances[I]);
-    if (Conn <> nil) and (Conn.Core <> nil) then
-      Inc(Result, Conn.Core.OpenStreams)
-    else if (Conn <> nil) and (Conn.H1 <> nil) and Conn.H1.Core.Busy then
-      // a request that runs on an HTTP/1.1 connection counts as one open stream
-      Inc(Result);
-  end;
+  Result := CountOpenStreams(Self);
 end;
 
 procedure THttp2AsyncServer.Notify(const AKind: TServerEventKind;

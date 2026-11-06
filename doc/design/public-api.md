@@ -37,9 +37,9 @@ the uses clause and sees the whole public surface.
 `THttp2ServerFactory` (`src/Http2Server.Config.pas`) holds every setting of a
 server. The record is immutable: each `WithX` method answers a copy with one
 field changed, so a stored factory is safe to reuse and to fork. The defaults
-appear once, in `Create` (`src/Http2Server.Config.pas:541-610`).
+appear once, in `Create` (`src/Http2Server.Config.pas:395-465`).
 
-`Validate` (`src/Http2Server.Config.pas:885`) collects every problem into one
+`Validate` (`src/Http2Server.Config.pas:746`) collects every problem into one
 list, so a caller sees all problems in one call.
 
 ## Build
@@ -135,6 +135,17 @@ off, and `WithHttp11Limits` sets the limits of the parser. `IServerRequest` and
 `IServerResponse` have the same meaning on both protocols, and `Detach` works on
 both. The document [http1](http1.md) lists what a handler can see.
 
+## Server limits, socket options and the TLS range
+
+`WithServerLimits` sets the seven bounds of `TServerLimits`: the connection
+cap, the two stream timeouts, the connection write timeout, the two outbound
+frame caps and the outbound DATA frame bound. `WithSocketOptions` sets the
+socket options of each accepted connection: no-delay, the keep-alive timers,
+the buffer sizes and the reuse-port flag. `WithMinTlsVersion` and
+`WithMaxTlsVersion` set the accepted TLS range on the TLS options record, 1.2
+to 1.3 by default. The document [configuration](configuration.md) holds every
+setting.
+
 ## The facade
 
 The unit `Http2Server` exports every type and constant that a method of the
@@ -142,7 +153,8 @@ factory or a field of an event needs, so a caller names no other server unit. Th
 holds for `THttp11Limits`, `IMonotonicClock`, `TLimitKind` and its values `lk*`, the
 error codes `ec*`, and the exception classes `EHttpTimeout`, `EHttpConnectionError`,
 `EStreamCancelled` and `EStreamReset`. A test unit that uses `Http2Server` alone
-calls `WithHttp11Limits` and `WithClock`.
+calls `WithHttp11Limits`, `WithServerLimits`, `WithSocketOptions` and
+`WithClock`.
 
 The factory has no `WithCancelWorkerThreads` and no `WithAlpnProtocols`: the server
 runs no cancel worker pool, and it offers `h2` and, with the fallback on,
