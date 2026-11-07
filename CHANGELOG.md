@@ -3,7 +3,7 @@
 The notable changes of the library. Each entry names the release that
 holds it. Dates follow the release commits.
 
-## [Unreleased]
+## [0.28.0] - 2026-11-07
 
 ### Added
 
